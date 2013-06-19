@@ -203,6 +203,14 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
     return  new ItaniumCXXABI(CGM, /*IsARM = */ true);
 
   case TargetCXXABI::GenericItanium:
+    if (CGM.getContext().getTargetInfo().getTriple().getArch()
+        == llvm::Triple::le32) {
+      // For PNaCl, use ARM-style method pointers so that PNaCl code
+      // does not assume anything about the alignment of function
+      // pointers.  Using IsARM=true also makes guard variables 32-bit
+      // instead of 64-bit, which saves a little space.
+      return new ItaniumCXXABI(CGM, /*IsARM = */ true);
+    }
     return new ItaniumCXXABI(CGM);
 
   case TargetCXXABI::Microsoft:
