@@ -31,25 +31,27 @@ void test_sqrt(float a0, double a1, long double a2) {
 // CHECK-YES: define void @test_pow
 // CHECK-NO: define void @test_pow
 void test_pow(float a0, double a1, long double a2) {
+  // LOCALMOD: for PNaCl we generate lib calls and not intrinsics, even without
+  // errno. For more details see the LOCALMOD in lib/CodeGen/CGBuiltin.cpp
   // CHECK-YES: call float @powf
-  // CHECK-NO: call float @llvm.pow.f32
+  // CHECK-NO: call float @powf
   float l0 = powf(a0, a0);
 
   // CHECK-YES: call double @pow
-  // CHECK-NO: call double @llvm.pow.f64
+  // CHECK-NO: call double @pow
   double l1 = pow(a1, a1);
 
   // CHECK-YES: call x86_fp80 @powl
-  // CHECK-NO: call x86_fp80 @llvm.pow.f80
+  // CHECK-NO: call x86_fp80 @powl
   long double l2 = powl(a2, a2);
 }
 
 // CHECK-YES: declare float @powf(float, float)
 // CHECK-YES: declare double @pow(double, double)
 // CHECK-YES: declare x86_fp80 @powl(x86_fp80, x86_fp80)
-// CHECK-NO: declare float @llvm.pow.f32(float, float) [[NUW_RO:#[0-9]+]]
-// CHECK-NO: declare double @llvm.pow.f64(double, double) [[NUW_RO]]
-// CHECK-NO: declare x86_fp80 @llvm.pow.f80(x86_fp80, x86_fp80) [[NUW_RO]]
+// CHECK-NO: declare float @powf(float, float)
+// CHECK-NO: declare double @pow(double, double)
+// CHECK-NO: declare x86_fp80 @powl(x86_fp80, x86_fp80)
 
 // CHECK-YES: define void @test_fma
 // CHECK-NO: define void @test_fma
@@ -122,4 +124,3 @@ void test_builtins(double d, float f, long double ld) {
 // CHECK-YES: attributes [[NUW_RN]] = { nounwind readnone }
 
 // CHECK-NO: attributes [[NUW_RN]] = { nounwind readnone{{.*}} }
-// CHECK-NO: attributes [[NUW_RO]] = { nounwind readonly }
