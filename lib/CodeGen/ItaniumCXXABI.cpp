@@ -37,7 +37,8 @@ class ItaniumCXXABI : public CodeGen::CGCXXABI {
 private:
   llvm::IntegerType *PtrDiffTy;
 protected:
-  bool IsARM;
+  bool UseARMMethodPtrABI;
+  bool UseARMGuardVarABI;
 
   // It's a little silly for us to cache this.
   llvm::IntegerType *getPtrDiffTy() {
@@ -50,8 +51,12 @@ protected:
   }
 
 public:
-  ItaniumCXXABI(CodeGen::CodeGenModule &CGM, bool IsARM = false) :
-    CGCXXABI(CGM), PtrDiffTy(0), IsARM(IsARM) { }
+  ItaniumCXXABI(CodeGen::CodeGenModule &CGM,
+                bool UseARMMethodPtrABI = false,
+                bool UseARMGuardVarABI = false) :
+    CGCXXABI(CGM), PtrDiffTy(0),
+    UseARMMethodPtrABI(UseARMMethodPtrABI),
+    UseARMGuardVarABI(UseARMGuardVarABI) { }
 
   bool isZeroInitializable(const MemberPointerType *MPT);
 
@@ -148,7 +153,9 @@ public:
 
 class ARMCXXABI : public ItaniumCXXABI {
 public:
-  ARMCXXABI(CodeGen::CodeGenModule &CGM) : ItaniumCXXABI(CGM, /*ARM*/ true) {}
+  ARMCXXABI(CodeGen::CodeGenModule &CGM) :
+    ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true,
+                  /* UseARMGuardVarABI = */ true) {}
 
   void BuildConstructorSignature(const CXXConstructorDecl *Ctor,
                                  CXXCtorType T,
@@ -200,9 +207,18 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
   // include the other 32-bit ARM oddities: constructor/destructor return values
   // and array cookies.
   case TargetCXXABI::GenericAArch64:
-    return  new ItaniumCXXABI(CGM, /*IsARM = */ true);
+    return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true,
+                             /* UseARMGuardVarABI = */ true);
 
   case TargetCXXABI::GenericItanium:
+    if (CGM.getContext().getTargetInfo().getTriple().getArch()
+        == llvm::Triple::le32) {
+      // For PNaCl, use ARM-style method pointers so that PNaCl code
+      // does not assume anything about the alignment of function
+      // pointers.
+      return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true,
+                               /* UseARMGuardVarABI = */ false);
+    }
     return new ItaniumCXXABI(CGM);
 
   case TargetCXXABI::Microsoft:
@@ -266,7 +282,7 @@ ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(CodeGenFunction &CGF,
 
   // Compute the true adjustment.
   llvm::Value *Adj = RawAdj;
-  if (IsARM)
+  if (UseARMMethodPtrABI)
     Adj = Builder.CreateAShr(Adj, ptrdiff_1, "memptr.adj.shifted");
 
   // Apply the adjustment and cast back to the original struct type
@@ -281,7 +297,7 @@ ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(CodeGenFunction &CGF,
   // If the LSB in the function pointer is 1, the function pointer points to
   // a virtual function.
   llvm::Value *IsVirtual;
-  if (IsARM)
+  if (UseARMMethodPtrABI)
     IsVirtual = Builder.CreateAnd(RawAdj, ptrdiff_1);
   else
     IsVirtual = Builder.CreateAnd(FnAsInt, ptrdiff_1);
@@ -300,7 +316,8 @@ ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(CodeGenFunction &CGF,
 
   // Apply the offset.
   llvm::Value *VTableOffset = FnAsInt;
-  if (!IsARM) VTableOffset = Builder.CreateSub(VTableOffset, ptrdiff_1);
+  if (!UseARMMethodPtrABI)
+    VTableOffset = Builder.CreateSub(VTableOffset, ptrdiff_1);
   VTable = Builder.CreateGEP(VTable, VTableOffset);
 
   // Load the virtual function to call.
@@ -410,7 +427,7 @@ ItaniumCXXABI::EmitMemberPointerConversion(CodeGenFunction &CGF,
   }
 
   // The this-adjustment is left-shifted by 1 on ARM.
-  if (IsARM) {
+  if (UseARMMethodPtrABI) {
     uint64_t offset = cast<llvm::ConstantInt>(adj)->getZExtValue();
     offset <<= 1;
     adj = llvm::ConstantInt::get(adj->getType(), offset);
@@ -458,7 +475,7 @@ ItaniumCXXABI::EmitMemberPointerConversion(const CastExpr *E,
   }
 
   // The this-adjustment is left-shifted by 1 on ARM.
-  if (IsARM) {
+  if (UseARMMethodPtrABI) {
     uint64_t offset = cast<llvm::ConstantInt>(adj)->getZExtValue();
     offset <<= 1;
     adj = llvm::ConstantInt::get(adj->getType(), offset);
@@ -519,7 +536,7 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
       Context.toCharUnitsFromBits(Context.getTargetInfo().getPointerWidth(0));
     uint64_t VTableOffset = (Index * PointerWidth.getQuantity());
 
-    if (IsARM) {
+    if (UseARMMethodPtrABI) {
       // ARM C++ ABI 3.2.1:
       //   This ABI specifies that adj contains twice the this
       //   adjustment, plus 1 if the member function is virtual. The
@@ -553,7 +570,8 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
     llvm::Constant *addr = CGM.GetAddrOfFunction(MD, Ty);
 
     MemPtr[0] = llvm::ConstantExpr::getPtrToInt(addr, ptrdiff_t);
-    MemPtr[1] = llvm::ConstantInt::get(ptrdiff_t, (IsARM ? 2 : 1) *
+    MemPtr[1] = llvm::ConstantInt::get(ptrdiff_t,
+                                       (UseARMMethodPtrABI ? 2 : 1) *
                                        ThisAdjustment.getQuantity());
   }
   
@@ -652,7 +670,7 @@ ItaniumCXXABI::EmitMemberPointerComparison(CodeGenFunction &CGF,
 
   // Null member function pointers on ARM clear the low bit of Adj,
   // so the zero condition has to check that neither low bit is set.
-  if (IsARM) {
+  if (UseARMMethodPtrABI) {
     llvm::Value *One = llvm::ConstantInt::get(LPtr->getType(), 1);
 
     // Compute (l.adj | r.adj) & 1 and test it against zero.
@@ -692,7 +710,7 @@ ItaniumCXXABI::EmitMemberPointerIsNotNull(CodeGenFunction &CGF,
 
   // On ARM, a member function pointer is also non-null if the low bit of 'adj'
   // (the virtual bit) is set.
-  if (IsARM) {
+  if (UseARMMethodPtrABI) {
     llvm::Constant *One = llvm::ConstantInt::get(Ptr->getType(), 1);
     llvm::Value *Adj = Builder.CreateExtractValue(MemPtr, 1, "memptr.adj");
     llvm::Value *VirtualBit = Builder.CreateAnd(Adj, One, "memptr.virtualbit");
@@ -1072,7 +1090,7 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
   } else {
     // Guard variables are 64 bits in the generic ABI and size width on ARM
     // (i.e. 32-bit on AArch32, 64-bit on AArch64).
-    guardTy = (IsARM ? CGF.SizeTy : CGF.Int64Ty);
+    guardTy = (UseARMGuardVarABI ? CGF.SizeTy : CGF.Int64Ty);
   }
   llvm::PointerType *guardPtrTy = guardTy->getPointerTo();
 
@@ -1113,7 +1131,7 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
   //       if (__cxa_guard_acquire(&obj_guard))
   //         ...
   //     }
-  if (IsARM && !useInt8GuardVariable) {
+  if (UseARMGuardVarABI && !useInt8GuardVariable) {
     llvm::Value *V = Builder.CreateLoad(guard);
     llvm::Value *Test1 = llvm::ConstantInt::get(guardTy, 1);
     V = Builder.CreateAnd(V, Test1);
