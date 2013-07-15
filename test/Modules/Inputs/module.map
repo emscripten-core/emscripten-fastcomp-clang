@@ -183,3 +183,29 @@ module cxx_inline_namespace {
 module cxx_linkage_cache {
   header "cxx-linkage-cache.h"
 }
+
+module config {
+  header "config.h"
+  config_macros [exhaustive] WANT_FOO, WANT_BAR
+}
+
+module diag_pragma {
+  header "diag_pragma.h"
+}
+
+module builtin {
+  header "builtin.h"
+  explicit module sub {
+    header "builtin_sub.h"
+  }
+}
+
+module linkage_merge {
+  explicit module foo {
+    header "linkage-merge-foo.h"
+  }
+  explicit module bar {
+    header "linkage-merge-bar.h"
+  }
+
+}

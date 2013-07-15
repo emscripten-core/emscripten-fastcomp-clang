@@ -27,7 +27,9 @@ def ArrayBoundsPointerArithmetic : DiagGroup<"array-bounds-pointer-arithmetic">;
 def Availability : DiagGroup<"availability">;
 def Section : DiagGroup<"section">;
 def AutoImport : DiagGroup<"auto-import">;
-def ConstantConversion : DiagGroup<"constant-conversion">;
+def BitFieldConstantConversion : DiagGroup<"bitfield-constant-conversion">;
+def ConstantConversion :
+  DiagGroup<"constant-conversion", [ BitFieldConstantConversion ] >;
 def LiteralConversion : DiagGroup<"literal-conversion">;
 def StringConversion : DiagGroup<"string-conversion">;
 def SignConversion : DiagGroup<"sign-conversion">;
@@ -47,6 +49,7 @@ def CastAlign : DiagGroup<"cast-align">;
 def : DiagGroup<"cast-qual">;
 def : DiagGroup<"char-align">;
 def Comment : DiagGroup<"comment">;
+def ConfigMacros : DiagGroup<"config-macros">;
 def : DiagGroup<"ctor-dtor-privacy">;
 def GNUDesignator : DiagGroup<"gnu-designator">;
 
@@ -65,7 +68,9 @@ def : DiagGroup<"discard-qual">;
 def : DiagGroup<"div-by-zero">;
 
 def DocumentationHTML : DiagGroup<"documentation-html">;
-def DocumentationPedantic : DiagGroup<"documentation-pedantic">;
+def DocumentationUnknownCommand : DiagGroup<"documentation-unknown-command">;
+def DocumentationPedantic : DiagGroup<"documentation-pedantic",
+                                      [DocumentationUnknownCommand]>;
 def DocumentationDeprecatedSync : DiagGroup<"documentation-deprecated-sync">;
 def Documentation : DiagGroup<"documentation",
                               [DocumentationHTML,
@@ -79,6 +84,11 @@ def ExtraSemi : DiagGroup<"extra-semi", [CXX11ExtraSemi]>;
 def FormatExtraArgs : DiagGroup<"format-extra-args">;
 def FormatZeroLength : DiagGroup<"format-zero-length">;
 
+// Warnings for C++1y code which is not compatible with prior C++ standards.
+def CXXPre1yCompat : DiagGroup<"cxx98-cxx11-compat">;
+def CXXPre1yCompatPedantic : DiagGroup<"cxx98-cxx11-compat-pedantic",
+                                       [CXXPre1yCompat]>;
+
 def CXX98CompatBindToTemporaryCopy :
   DiagGroup<"c++98-compat-bind-to-temporary-copy">;
 def CXX98CompatLocalTypeTemplateArgs :
@@ -89,9 +99,12 @@ def CXX98CompatUnnamedTypeTemplateArgs :
 def CXX98Compat : DiagGroup<"c++98-compat",
                             [CXX98CompatBindToTemporaryCopy,
                              CXX98CompatLocalTypeTemplateArgs,
-                             CXX98CompatUnnamedTypeTemplateArgs]>;
+                             CXX98CompatUnnamedTypeTemplateArgs,
+                             CXXPre1yCompat]>;
 // Warnings for C++11 features which are Extensions in C++98 mode.
-def CXX98CompatPedantic : DiagGroup<"c++98-compat-pedantic", [CXX98Compat]>;
+def CXX98CompatPedantic : DiagGroup<"c++98-compat-pedantic",
+                                    [CXX98Compat,
+                                     CXXPre1yCompatPedantic]>;
 
 def CXX11Narrowing : DiagGroup<"c++11-narrowing">;
 
@@ -109,8 +122,11 @@ def ReservedUserDefinedLiteral :
 
 def CXX11Compat : DiagGroup<"c++11-compat",
                             [CXX11Narrowing,
-                             CXX11CompatReservedUserDefinedLiteral]>;
+                             CXX11CompatReservedUserDefinedLiteral,
+                             CXXPre1yCompat]>;
 def : DiagGroup<"c++0x-compat", [CXX11Compat]>;
+def CXX11CompatPedantic : DiagGroup<"c++11-compat-pedantic",
+                                    [CXXPre1yCompatPedantic]>;
 
 def : DiagGroup<"effc++">;
 def DivZero : DiagGroup<"division-by-zero">;
@@ -121,6 +137,7 @@ def GlobalConstructors : DiagGroup<"global-constructors">;
 def BitwiseOpParentheses: DiagGroup<"bitwise-op-parentheses">;
 def LogicalOpParentheses: DiagGroup<"logical-op-parentheses">;
 def ShiftOpParentheses: DiagGroup<"shift-op-parentheses">;
+def OverloadedShiftOpParentheses: DiagGroup<"overloaded-shift-op-parentheses">;
 def DanglingElse: DiagGroup<"dangling-else">;
 def DanglingField : DiagGroup<"dangling-field">;
 def DistributedObjectModifiers : DiagGroup<"distributed-object-modifiers">;
@@ -158,6 +175,7 @@ def MismatchedParameterTypes : DiagGroup<"mismatched-parameter-types">;
 def MismatchedReturnTypes : DiagGroup<"mismatched-return-types">;
 def MismatchedTags : DiagGroup<"mismatched-tags">;
 def MissingFieldInitializers : DiagGroup<"missing-field-initializers">;
+def ModuleConflict : DiagGroup<"module-conflict">;
 def NullArithmetic : DiagGroup<"null-arithmetic">;
 def NullCharacter : DiagGroup<"null-character">;
 def NullDereference : DiagGroup<"null-dereference">;
@@ -185,6 +203,7 @@ def ObjCMissingSuperCalls : DiagGroup<"objc-missing-super-calls">;
 def ObjCRetainBlockProperty : DiagGroup<"objc-noncopy-retain-block-property">;
 def ObjCReadonlyPropertyHasSetter : DiagGroup<"objc-readonly-with-setter-property">;
 def ObjCRootClass : DiagGroup<"objc-root-class">;
+def DeprecatedObjCIsaUsage : DiagGroup<"deprecated-objc-isa-usage">;
 def Packed : DiagGroup<"packed">;
 def Padded : DiagGroup<"padded">;
 def PointerArith : DiagGroup<"pointer-arith">;
@@ -212,8 +231,10 @@ def : DiagGroup<"stack-protector">;
 def : DiagGroup<"switch-default">;
 def : DiagGroup<"synth">;
 def SizeofArrayArgument : DiagGroup<"sizeof-array-argument">;
+def SizeofArrayDecay : DiagGroup<"sizeof-array-decay">;
 def SizeofPointerMemaccess : DiagGroup<"sizeof-pointer-memaccess">;
 def StaticInInline : DiagGroup<"static-in-inline">;
+def StaticLocalInInline : DiagGroup<"static-local-in-inline">;
 def GNUStaticFloatInit : DiagGroup<"gnu-static-float-init">;
 def StaticFloatInit : DiagGroup<"static-float-init", [GNUStaticFloatInit]>;
 def StringPlusInt : DiagGroup<"string-plus-int">;
@@ -248,7 +269,6 @@ def : DiagGroup<"strict-overflow=5">;
 def : DiagGroup<"strict-overflow">;
 
 def InvalidOffsetof : DiagGroup<"invalid-offsetof">;
-def LambdaExtensions : DiagGroup<"lambda-extensions">;
 def : DiagGroup<"strict-prototypes">;
 def StrictSelector : DiagGroup<"strict-selector-match">;
 def MethodDuplicate : DiagGroup<"duplicate-method-match">;
@@ -264,6 +284,7 @@ def Trigraphs      : DiagGroup<"trigraphs">;
 
 def : DiagGroup<"type-limits">;
 def UndefinedReinterpretCast : DiagGroup<"undefined-reinterpret-cast">;
+def ReinterpretBaseClass : DiagGroup<"reinterpret-base-class">;
 def Unicode  : DiagGroup<"unicode">;
 def UninitializedMaybe : DiagGroup<"conditional-uninitialized">;
 def UninitializedSometimes : DiagGroup<"sometimes-uninitialized">;
@@ -346,6 +367,7 @@ def Parentheses : DiagGroup<"parentheses",
                             [LogicalOpParentheses,
                              BitwiseOpParentheses,
                              ShiftOpParentheses,
+                             OverloadedShiftOpParentheses,
                              ParenthesesOnEquality,
                              DanglingElse]>;
 
@@ -417,6 +439,7 @@ def Most : DiagGroup<"most", [
     ReturnType,
     SelfAssignment,
     SizeofArrayArgument,
+    SizeofArrayDecay,
     StringPlusInt,
     Trigraphs,
     Uninitialized,
@@ -469,6 +492,10 @@ def NonGCC : DiagGroup<"non-gcc",
 // earlier C++ versions.
 def CXX11 : DiagGroup<"c++11-extensions", [CXX11ExtraSemi, CXX11LongLong]>;
 
+// A warning group for warnings about using C++1y features as extensions in
+// earlier C++ versions.
+def CXX1y : DiagGroup<"c++1y-extensions">;
+
 def : DiagGroup<"c++0x-extensions", [CXX11]>;
 def DelegatingCtorCycles :
   DiagGroup<"delegating-ctor-cycles">;
@@ -492,6 +519,8 @@ def ObjCNonUnifiedException : DiagGroup<"objc-nonunified-exceptions">;
 
 def ObjCProtocolMethodImpl : DiagGroup<"objc-protocol-method-implementation">;
 
+def ObjCNoPropertyAutoSynthesis : DiagGroup<"objc-property-synthesis">;
+
 // ObjC API warning groups.
 def ObjCRedundantLiteralUse : DiagGroup<"objc-redundant-literal-use">;
 def ObjCRedundantAPIUse : DiagGroup<"objc-redundant-api-use", [
@@ -512,3 +541,6 @@ def ASMOperandWidths : DiagGroup<"asm-operand-widths">;
 def ASM : DiagGroup<"asm", [
     ASMOperandWidths
   ]>;
+
+// OpenMP warnings.
+def SourceUsesOpenMP : DiagGroup<"source-uses-openmp">;

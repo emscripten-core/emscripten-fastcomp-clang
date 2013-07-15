@@ -958,7 +958,7 @@ static void highlightRange(const CharSourceRange &R,
     // Pick the last non-whitespace column.
     if (EndColNo > map.getSourceLine().size())
       EndColNo = map.getSourceLine().size();
-    while (EndColNo-1 &&
+    while (EndColNo &&
            (map.getSourceLine()[EndColNo-1] == ' ' ||
             map.getSourceLine()[EndColNo-1] == '\t'))
       EndColNo = map.startOfPreviousColumn(EndColNo);
@@ -1095,7 +1095,7 @@ void TextDiagnostic::emitSnippetAndCaret(
   unsigned ColNo = SM.getColumnNumber(FID, FileOffset);
   
   // Arbitrarily stop showing snippets when the line is too long.
-  static const ptrdiff_t MaxLineLengthToPrint = 4096;
+  static const size_t MaxLineLengthToPrint = 4096;
   if (ColNo > MaxLineLengthToPrint)
     return;
 
@@ -1110,7 +1110,7 @@ void TextDiagnostic::emitSnippetAndCaret(
     ++LineEnd;
 
   // Arbitrarily stop showing snippets when the line is too long.
-  if (LineEnd - LineStart > MaxLineLengthToPrint)
+  if (size_t(LineEnd - LineStart) > MaxLineLengthToPrint)
     return;
 
   // Copy the line of code into an std::string for ease of manipulation.

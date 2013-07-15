@@ -97,6 +97,10 @@ public:
   }
 };
 
+/// Does an ARC strong l-value have precise lifetime?
+enum ARCPreciseLifetime_t {
+  ARCImpreciseLifetime, ARCPreciseLifetime
+};
 
 /// LValue - This represents an lvalue references.  Because C/C++ allow
 /// bitfields, this is not a simple LLVM pointer, it may be a pointer plus a
@@ -147,7 +151,16 @@ class LValue {
   // Lvalue is a thread local reference
   bool ThreadLocalRef : 1;
 
+  // Lvalue has ARC imprecise lifetime.  We store this inverted to try
+  // to make the default bitfield pattern all-zeroes.
+  bool ImpreciseLifetime : 1;
+
   Expr *BaseIvarExp;
+
+  /// Used by struct-path-aware TBAA.
+  QualType TBAABaseType;
+  /// Offset relative to the base type.
+  uint64_t TBAAOffset;
 
   /// TBAAInfo - TBAA information to attach to dereferences of this LValue.
   llvm::MDNode *TBAAInfo;
@@ -164,8 +177,13 @@ private:
 
     // Initialize Objective-C flags.
     this->Ivar = this->ObjIsArray = this->NonGC = this->GlobalObjCRef = false;
+    this->ImpreciseLifetime = false;
     this->ThreadLocalRef = false;
     this->BaseIvarExp = 0;
+
+    // Initialize fields for TBAA.
+    this->TBAABaseType = Type;
+    this->TBAAOffset = 0;
     this->TBAAInfo = TBAAInfo;
   }
 
@@ -202,6 +220,13 @@ public:
   bool isThreadLocalRef() const { return ThreadLocalRef; }
   void setThreadLocalRef(bool Value) { ThreadLocalRef = Value;}
 
+  ARCPreciseLifetime_t isARCPreciseLifetime() const {
+    return ARCPreciseLifetime_t(!ImpreciseLifetime);
+  }
+  void setARCPreciseLifetime(ARCPreciseLifetime_t value) {
+    ImpreciseLifetime = (value == ARCImpreciseLifetime);
+  }
+
   bool isObjCWeak() const {
     return Quals.getObjCGCAttr() == Qualifiers::Weak;
   }
@@ -215,6 +240,12 @@ public:
   
   Expr *getBaseIvarExp() const { return BaseIvarExp; }
   void setBaseIvarExp(Expr *V) { BaseIvarExp = V; }
+
+  QualType getTBAABaseType() const { return TBAABaseType; }
+  void setTBAABaseType(QualType T) { TBAABaseType = T; }
+
+  uint64_t getTBAAOffset() const { return TBAAOffset; }
+  void setTBAAOffset(uint64_t O) { TBAAOffset = O; }
 
   llvm::MDNode *getTBAAInfo() const { return TBAAInfo; }
   void setTBAAInfo(llvm::MDNode *N) { TBAAInfo = N; }

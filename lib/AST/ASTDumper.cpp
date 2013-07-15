@@ -749,7 +749,7 @@ void ASTDumper::VisitFunctionDecl(const FunctionDecl *D) {
   dumpName(D);
   dumpType(D->getType());
 
-  StorageClass SC = D->getStorageClassAsWritten();
+  StorageClass SC = D->getStorageClass();
   if (SC != SC_None)
     OS << ' ' << VarDecl::getStorageClassSpecifierString(SC);
   if (D->isInlineSpecified())
@@ -850,11 +850,14 @@ void ASTDumper::VisitFieldDecl(const FieldDecl *D) {
 void ASTDumper::VisitVarDecl(const VarDecl *D) {
   dumpName(D);
   dumpType(D->getType());
-  StorageClass SC = D->getStorageClassAsWritten();
+  StorageClass SC = D->getStorageClass();
   if (SC != SC_None)
     OS << ' ' << VarDecl::getStorageClassSpecifierString(SC);
-  if (D->isThreadSpecified())
-    OS << " __thread";
+  switch (D->getTLSKind()) {
+  case VarDecl::TLS_None: break;
+  case VarDecl::TLS_Static: OS << " tls"; break;
+  case VarDecl::TLS_Dynamic: OS << " tls_dynamic"; break;
+  }
   if (D->isModulePrivate())
     OS << " __module_private__";
   if (D->isNRVOVariable())

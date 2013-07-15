@@ -201,14 +201,6 @@ public:
   // Binding and retrieving values to/from the environment and symbolic store.
   //==---------------------------------------------------------------------==//
 
-  /// \brief Create a new state with the specified CompoundLiteral binding.
-  /// \param CL the compound literal expression (the binding key)
-  /// \param LC the LocationContext of the binding
-  /// \param V the value to bind.
-  ProgramStateRef bindCompoundLiteral(const CompoundLiteralExpr *CL,
-                                      const LocationContext *LC,
-                                      SVal V) const;
-
   /// Create a new state by binding the value 'V' to the statement 'S' in the
   /// state's environment.
   ProgramStateRef BindExpr(const Stmt *S, const LocationContext *LCtx,
@@ -240,12 +232,22 @@ public:
   /// \param IS the set of invalidated symbols.
   /// \param Call if non-null, the invalidated regions represent parameters to
   ///        the call and should be considered directly invalidated.
-  ProgramStateRef invalidateRegions(ArrayRef<const MemRegion *> Regions,
-                                    const Expr *E, unsigned BlockCount,
-                                    const LocationContext *LCtx,
-                                    bool CausesPointerEscape,
-                                    InvalidatedSymbols *IS = 0,
-                                    const CallEvent *Call = 0) const;
+  /// \param ConstRegions the set of regions whose contents are accessible,
+  ///        even though the regions themselves should not be invalidated.
+  ProgramStateRef
+  invalidateRegions(ArrayRef<const MemRegion *> Regions, const Expr *E,
+                    unsigned BlockCount, const LocationContext *LCtx,
+                    bool CausesPointerEscape, InvalidatedSymbols *IS = 0,
+                    const CallEvent *Call = 0,
+                    ArrayRef<const MemRegion *> ConstRegions =
+                      ArrayRef<const MemRegion *>()) const;
+
+  ProgramStateRef
+  invalidateRegions(ArrayRef<SVal> Regions, const Expr *E,
+                    unsigned BlockCount, const LocationContext *LCtx,
+                    bool CausesPointerEscape, InvalidatedSymbols *IS = 0,
+                    const CallEvent *Call = 0,
+                    ArrayRef<SVal> ConstRegions = ArrayRef<SVal>()) const;
 
   /// enterStackFrame - Returns the state for entry to the given stack frame,
   ///  preserving the current state.
@@ -415,14 +417,17 @@ public:
 private:
   friend void ProgramStateRetain(const ProgramState *state);
   friend void ProgramStateRelease(const ProgramState *state);
-  
-  ProgramStateRef 
-  invalidateRegionsImpl(ArrayRef<const MemRegion *> Regions,
+
+  /// \sa invalidateValues()
+  /// \sa invalidateRegions()
+  ProgramStateRef
+  invalidateRegionsImpl(ArrayRef<SVal> Values,
                         const Expr *E, unsigned BlockCount,
                         const LocationContext *LCtx,
                         bool ResultsInSymbolEscape,
                         InvalidatedSymbols &IS,
-                        const CallEvent *Call) const;
+                        const CallEvent *Call,
+                        ArrayRef<SVal> ConstValues) const;
 };
 
 //===----------------------------------------------------------------------===//
@@ -698,7 +703,8 @@ ProgramState::getSValAsScalarOrLoc(const Stmt *S,
                                    const LocationContext *LCtx) const {
   if (const Expr *Ex = dyn_cast<Expr>(S)) {
     QualType T = Ex->getType();
-    if (Ex->isGLValue() || Loc::isLocType(T) || T->isIntegerType())
+    if (Ex->isGLValue() || Loc::isLocType(T) ||
+        T->isIntegralOrEnumerationType())
       return getSVal(S, LCtx);
   }
 

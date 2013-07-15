@@ -26,7 +26,7 @@ struct stuff myglobalstuff;
 
 void f1() {
   int *p = malloc(12);
-  return; // expected-warning{{Memory is never released; potential leak}}
+  return; // expected-warning{{Potential leak of memory pointed to by}}
 }
 
 void f2() {
@@ -54,21 +54,26 @@ void naf1() {
 
 void n2af1() {
   int *p = my_malloc2(12);
-  return; // expected-warning{{Memory is never released; potential leak}}
+  return; // expected-warning{{Potential leak of memory pointed to by}}
 }
 
 void af1() {
   int *p = my_malloc(12);
-  return; // expected-warning{{Memory is never released; potential leak}}
+  return; // expected-warning{{Potential leak of memory pointed to by}}
 }
 
 void af1_b() {
   int *p = my_malloc(12);
-} // expected-warning{{Memory is never released; potential leak}}
+} // expected-warning{{Potential leak of memory pointed to by}}
 
 void af1_c() {
   myglobalpointer = my_malloc(12); // no-warning
 }
+
+void af1_d() {
+  struct stuff mystuff;
+  mystuff.somefield = my_malloc(12);
+} // expected-warning{{Potential leak of memory pointed to by}}
 
 // Test that we can pass out allocated memory via pointer-to-pointer.
 void af1_e(void **pp) {
@@ -234,7 +239,7 @@ char mallocGarbage () {
 // This tests that calloc() buffers need to be freed
 void callocNoFree () {
   char *buf = calloc(2,2);
-  return; // expected-warning{{never released}}
+  return; // expected-warning{{Potential leak of memory pointed to by}}
 }
 
 // These test that calloc() buffers are zeroed by default
@@ -253,7 +258,7 @@ char callocZeroesBad () {
   if (buf[1] != 0) {
     free(buf); // expected-warning{{never executed}}
   }
-  return result; // expected-warning{{never released}}
+  return result; // expected-warning{{Potential leak of memory pointed to by}}
 }
 
 void testMultipleFreeAnnotations() {
@@ -261,15 +266,4 @@ void testMultipleFreeAnnotations() {
   int *q = malloc(12);
   my_freeBoth(p, q);
 }
-
-// ----------------------------------------------------------------------------
-
-// False negatives.
-
-// Pending on removal of the escaping on assignment to struct fields.
-void af1_d() {
-  struct stuff mystuff;
-  mystuff.somefield = my_malloc(12);
-} // missing warning
-
 

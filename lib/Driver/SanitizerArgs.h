@@ -38,7 +38,8 @@ class SanitizerArgs {
     NeedsTsanRt = Thread,
     NeedsMsanRt = Memory,
     NeedsUbsanRt = Undefined | Integer,
-    NotAllowedWithTrap = Vptr
+    NotAllowedWithTrap = Vptr,
+    HasZeroBaseShadow = Thread | Memory
   };
   unsigned Kind;
   std::string BlacklistFile;
@@ -50,7 +51,7 @@ class SanitizerArgs {
   SanitizerArgs() : Kind(0), BlacklistFile(""), MsanTrackOrigins(false),
                     AsanZeroBaseShadow(false), UbsanTrapOnError(false) {}
   /// Parses the sanitizer arguments from an argument list.
-  SanitizerArgs(const Driver &D, const ArgList &Args);
+  SanitizerArgs(const ToolChain &TC, const ArgList &Args);
 
   bool needsAsanRt() const { return Kind & NeedsAsanRt; }
   bool needsTsanRt() const { return Kind & NeedsTsanRt; }
@@ -63,6 +64,9 @@ class SanitizerArgs {
 
   bool sanitizesVptr() const { return Kind & Vptr; }
   bool notAllowedWithTrap() const { return Kind & NotAllowedWithTrap; }
+  bool hasZeroBaseShadow() const {
+    return (Kind & HasZeroBaseShadow) || AsanZeroBaseShadow;
+  }
 
   void addArgs(const ArgList &Args, ArgStringList &CmdArgs) const {
     if (!Kind)
@@ -90,14 +94,20 @@ class SanitizerArgs {
 
  private:
   /// Parse a single value from a -fsanitize= or -fno-sanitize= value list.
-  /// Returns a member of the \c SanitizeKind enumeration, or \c 0 if \p Value
-  /// is not known.
+  /// Returns OR of members of the \c SanitizeKind enumeration, or \c 0
+  /// if \p Value is not known.
   static unsigned parse(const char *Value) {
-    return llvm::StringSwitch<SanitizeKind>(Value)
+    unsigned ParsedKind = llvm::StringSwitch<SanitizeKind>(Value)
 #define SANITIZER(NAME, ID) .Case(NAME, ID)
 #define SANITIZER_GROUP(NAME, ID, ALIAS) .Case(NAME, ID)
 #include "clang/Basic/Sanitizers.def"
       .Default(SanitizeKind());
+    // Assume -fsanitize=address implies -fsanitize=init-order.
+    // FIXME: This should be either specified in Sanitizers.def, or go away when
+    // we get rid of "-fsanitize=init-order" flag at all.
+    if (ParsedKind & Address)
+      ParsedKind |= InitOrder;
+    return ParsedKind;
   }
 
   /// Parse a -fsanitize= or -fno-sanitize= argument's values, diagnosing any

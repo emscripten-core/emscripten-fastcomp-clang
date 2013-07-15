@@ -335,6 +335,7 @@ public:
                           const ToolChain *TC,
                           const char *BoundArch,
                           bool AtTopLevel,
+                          bool MultipleArchs,
                           const char *LinkingOutput,
                           InputInfo &Result) const;
 
@@ -346,11 +347,15 @@ public:
   /// \param JA - The action of interest.
   /// \param BaseInput - The original input file that this action was
   /// triggered by.
+  /// \param BoundArch - The bound architecture. 
   /// \param AtTopLevel - Whether this is a "top-level" action.
+  /// \param MultipleArchs - Whether multiple -arch options were supplied.
   const char *GetNamedOutputPath(Compilation &C,
                                  const JobAction &JA,
                                  const char *BaseInput,
-                                 bool AtTopLevel) const;
+                                 const char *BoundArch,
+                                 bool AtTopLevel,
+                                 bool MultipleArchs) const;
 
   /// GetTemporaryPath - Return the pathname of a temporary file to use 
   /// as part of compilation; the file will have the given prefix and suffix.
@@ -360,8 +365,7 @@ public:
 
   /// ShouldUseClangCompiler - Should the clang compiler be used to
   /// handle this action.
-  bool ShouldUseClangCompiler(const Compilation &C, const JobAction &JA,
-                              const llvm::Triple &ArchName) const;
+  bool ShouldUseClangCompiler(const JobAction &JA) const;
 
   bool IsUsingLTO(const ArgList &Args) const;
 

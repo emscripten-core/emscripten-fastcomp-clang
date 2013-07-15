@@ -76,16 +76,35 @@ bool QualType::isConstant(QualType T, ASTContext &Ctx) {
 unsigned ConstantArrayType::getNumAddressingBits(ASTContext &Context,
                                                  QualType ElementType,
                                                const llvm::APInt &NumElements) {
+  uint64_t ElementSize = Context.getTypeSizeInChars(ElementType).getQuantity();
+
+  // Fast path the common cases so we can avoid the conservative computation
+  // below, which in common cases allocates "large" APSInt values, which are
+  // slow.
+
+  // If the element size is a power of 2, we can directly compute the additional
+  // number of addressing bits beyond those required for the element count.
+  if (llvm::isPowerOf2_64(ElementSize)) {
+    return NumElements.getActiveBits() + llvm::Log2_64(ElementSize);
+  }
+
+  // If both the element count and element size fit in 32-bits, we can do the
+  // computation directly in 64-bits.
+  if ((ElementSize >> 32) == 0 && NumElements.getBitWidth() <= 64 &&
+      (NumElements.getZExtValue() >> 32) == 0) {
+    uint64_t TotalSize = NumElements.getZExtValue() * ElementSize;
+    return 64 - llvm::CountLeadingZeros_64(TotalSize);
+  }
+
+  // Otherwise, use APSInt to handle arbitrary sized values.
   llvm::APSInt SizeExtended(NumElements, true);
   unsigned SizeTypeBits = Context.getTypeSize(Context.getSizeType());
   SizeExtended = SizeExtended.extend(std::max(SizeTypeBits,
                                               SizeExtended.getBitWidth()) * 2);
 
-  uint64_t ElementSize
-    = Context.getTypeSizeInChars(ElementType).getQuantity();
   llvm::APSInt TotalSize(llvm::APInt(SizeExtended.getBitWidth(), ElementSize));
   TotalSize *= SizeExtended;  
-  
+
   return TotalSize.getActiveBits();
 }
 
@@ -1123,16 +1142,20 @@ bool QualType::isTriviallyCopyableType(ASTContext &Context) const {
 
 
 
-bool Type::isLiteralType() const {
+bool Type::isLiteralType(ASTContext &Ctx) const {
   if (isDependentType())
     return false;
 
-  // C++0x [basic.types]p10:
+  // C++1y [basic.types]p10:
+  //   A type is a literal type if it is:
+  //   -- cv void; or
+  if (Ctx.getLangOpts().CPlusPlus1y && isVoidType())
+    return true;
+
+  // C++11 [basic.types]p10:
   //   A type is a literal type if it is:
   //   [...]
-  //   -- an array of literal type.
-  // Extension: variable arrays cannot be literal types, since they're
-  // runtime-sized.
+  //   -- an array of literal type other than an array of runtime bound; or
   if (isVariableArrayType())
     return false;
   const Type *BaseTy = getBaseElementTypeUnsafe();
@@ -1143,7 +1166,7 @@ bool Type::isLiteralType() const {
   if (BaseTy->isIncompleteType())
     return false;
 
-  // C++0x [basic.types]p10:
+  // C++11 [basic.types]p10:
   //   A type is a literal type if it is:
   //    -- a scalar type; or
   // As an extension, Clang treats vector types and complex types as
@@ -2082,6 +2105,11 @@ static CachedProperties computeCachedProperties(const Type *T) {
     assert(T->isInstantiationDependentType());
     return CachedProperties(ExternalLinkage, false);
 
+  case Type::Auto:
+    // Give non-deduced 'auto' types external linkage. We should only see them
+    // here in error recovery.
+    return CachedProperties(ExternalLinkage, false);
+
   case Type::Builtin:
     // C++ [basic.link]p8:
     //   A type is said to have linkage if and only if:
@@ -2183,6 +2211,9 @@ static LinkageInfo computeLinkageInfo(const Type *T) {
   case Type::Builtin:
     return LinkageInfo::external();
 
+  case Type::Auto:
+    return LinkageInfo::external();
+
   case Type::Record:
   case Type::Enum:
     return cast<TagType>(T)->getDecl()->getLinkageAndVisibility();
@@ -2236,6 +2267,14 @@ static LinkageInfo computeLinkageInfo(QualType T) {
   return computeLinkageInfo(T.getTypePtr());
 }
 
+bool Type::isLinkageValid() const {
+  if (!TypeBits.isCacheValid())
+    return true;
+
+  return computeLinkageInfo(getCanonicalTypeInternal()).getLinkage() ==
+    TypeBits.getLinkage();
+}
+
 LinkageInfo Type::getLinkageAndVisibility() const {
   if (!isCanonicalUnqualified())
     return computeLinkageInfo(getCanonicalTypeInternal());
@@ -2243,12 +2282,6 @@ LinkageInfo Type::getLinkageAndVisibility() const {
   LinkageInfo LV = computeLinkageInfo(this);
   assert(LV.getLinkage() == getLinkage());
   return LV;
-}
-
-void Type::ClearLinkageCache() {
-  TypeBits.CacheValid = false;
-  if (QualType(this, 0) != CanonicalType)
-    CanonicalType->TypeBits.CacheValid = false;
 }
 
 Qualifiers::ObjCLifetime Type::getObjCARCImplicitLifetime() const {

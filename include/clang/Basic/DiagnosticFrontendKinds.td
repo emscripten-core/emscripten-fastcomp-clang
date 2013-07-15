@@ -67,6 +67,8 @@ def warn_fe_serialized_diag_failure : Warning<
 
 def err_verify_missing_line : Error<
     "missing or invalid line number following '@' in expected %0">;
+def err_verify_missing_file : Error<
+    "file '%0' could not be located in expected %1">;
 def err_verify_invalid_range : Error<
     "invalid range following '-' in expected %0">;
 def err_verify_missing_start : Error<
@@ -137,5 +139,11 @@ def warn_missing_submodule : Warning<"missing submodule '%0'">,
 def err_module_map_temp_file : Error<
   "unable to write temporary module map file '%0'">, DefaultFatal;
 def err_module_unavailable : Error<"module '%0' requires feature '%1'">;
-
+def warn_module_config_macro_undef : Warning<
+  "%select{definition|#undef}0 of configuration macro '%1' has no effect on "
+  "the import of '%2'; pass '%select{-D%1=...|-U%1}0' on the command line "
+  "to configure the module">,
+  InGroup<ConfigMacros>;
+def note_module_def_undef_here : Note<
+  "macro was %select{defined|#undef'd}0 here">;
 }

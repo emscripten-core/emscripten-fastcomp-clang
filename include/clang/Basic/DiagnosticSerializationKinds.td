@@ -44,7 +44,10 @@ def warn_pch_different_branch : Error<
 def err_pch_with_compiler_errors : Error<
     "PCH file contains compiler errors">;
     
-    
+def warn_module_conflict : Warning<
+    "module '%0' conflicts with already-imported module '%1': %2">, 
+    InGroup<ModuleConflict>;
+
 def err_pch_macro_def_undef : Error<
     "macro '%0' was %select{defined|undef'd}1 in the precompiled header but "
     "%select{undef'd|defined}1 on the command line">;
@@ -55,6 +58,10 @@ def err_pch_undef : Error<
     "%select{command line contains|precompiled header was built with}0 "
     "'-undef' but %select{precompiled header was not built with it|"
     "it is not present on the command line}0">;
+def err_pch_pp_detailed_record : Error<
+    "%select{command line contains|precompiled header was built with}0 "
+    "'-detailed-preprocessing-record' but %select{precompiled header was not "
+    "built with it|it is not present on the command line}0">;
 
 def err_not_a_pch_file : Error<
     "'%0' does not appear to be a precompiled header file">, DefaultFatal;

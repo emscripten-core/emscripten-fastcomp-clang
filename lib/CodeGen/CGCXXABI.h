@@ -54,6 +54,12 @@ protected:
     return CGF.CXXABIThisValue;
   }
 
+  /// Issue a diagnostic about unsupported features in the ABI.
+  void ErrorUnsupportedABI(CodeGenFunction &CGF, StringRef S);
+
+  /// Get a null value for unsupported member pointers.
+  llvm::Constant *GetBogusMemberPointer(QualType T);
+
   // FIXME: Every place that calls getVTT{Decl,Value} is something
   // that needs to be abstracted properly.
   ImplicitParamDecl *&getVTTDecl(CodeGenFunction &CGF) {
@@ -90,6 +96,31 @@ public:
   MangleContext &getMangleContext() {
     return *MangleCtx;
   }
+
+  /// Returns true if the given instance method is one of the
+  /// kinds that the ABI says returns 'this'.
+  virtual bool HasThisReturn(GlobalDecl GD) const { return false; }
+
+  /// Returns true if the given record type should be returned indirectly.
+  virtual bool isReturnTypeIndirect(const CXXRecordDecl *RD) const = 0;
+
+  /// Specify how one should pass an argument of a record type.
+  enum RecordArgABI {
+    /// Pass it using the normal C aggregate rules for the ABI, potentially
+    /// introducing extra copies and passing some or all of it in registers.
+    RAA_Default = 0,
+
+    /// Pass it on the stack using its defined layout.  The argument must be
+    /// evaluated directly into the correct stack position in the arguments area,
+    /// and the call machinery must not move it or introduce extra copies.
+    RAA_DirectInMemory,
+
+    /// Pass it as a pointer to temporary memory.
+    RAA_Indirect
+  };
+
+  /// Returns how an argument of the given record type should be passed.
+  virtual RecordArgABI getRecordArgABI(const CXXRecordDecl *RD) const = 0;
 
   /// Find the LLVM type used to represent the given member pointer
   /// type.
@@ -209,7 +240,8 @@ public:
   /// Emit the ABI-specific prolog for the function.
   virtual void EmitInstanceFunctionProlog(CodeGenFunction &CGF) = 0;
 
-  virtual void EmitConstructorCall(CodeGenFunction &CGF,
+  /// Emit the constructor call. Return the function that is called.
+  virtual llvm::Value *EmitConstructorCall(CodeGenFunction &CGF,
                                    const CXXConstructorDecl *D,
                                    CXXCtorType Type, bool ForVirtualBase,
                                    bool Delegating,
@@ -319,8 +351,27 @@ public:
   ///
   /// \param dtor - a function taking a single pointer argument
   /// \param addr - a pointer to pass to the destructor function.
-  virtual void registerGlobalDtor(CodeGenFunction &CGF, llvm::Constant *dtor,
-                                  llvm::Constant *addr);
+  virtual void registerGlobalDtor(CodeGenFunction &CGF, const VarDecl &D,
+                                  llvm::Constant *dtor, llvm::Constant *addr);
+
+  /*************************** thread_local initialization ********************/
+
+  /// Emits ABI-required functions necessary to initialize thread_local
+  /// variables in this translation unit.
+  ///
+  /// \param Decls The thread_local declarations in this translation unit.
+  /// \param InitFunc If this translation unit contains any non-constant
+  ///        initialization or non-trivial destruction for thread_local
+  ///        variables, a function to perform the initialization. Otherwise, 0.
+  virtual void EmitThreadLocalInitFuncs(
+      llvm::ArrayRef<std::pair<const VarDecl *, llvm::GlobalVariable *> > Decls,
+      llvm::Function *InitFunc);
+
+  /// Emit a reference to a non-local thread_local variable (including
+  /// triggering the initialization of all thread_local variables in its
+  /// translation unit).
+  virtual LValue EmitThreadLocalDeclRefExpr(CodeGenFunction &CGF,
+                                            const DeclRefExpr *DRE);
 };
 
 // Create an instance of a C++ ABI class:

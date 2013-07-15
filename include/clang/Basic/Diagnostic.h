@@ -435,8 +435,8 @@ public:
   ///
   /// If this and IgnoreAllWarnings are both set, then that one wins.
   void setEnableAllWarnings(bool Val) { EnableAllWarnings = Val; }
-  bool getEnableAllWarnngs() const { return EnableAllWarnings; }
-  
+  bool getEnableAllWarnings() const { return EnableAllWarnings; }
+
   /// \brief When set to true, any warnings reported are issued as errors.
   void setWarningsAsErrors(bool Val) { WarningsAsErrors = Val; }
   bool getWarningsAsErrors() const { return WarningsAsErrors; }
@@ -1296,10 +1296,6 @@ public:
   /// warnings and errors.
   virtual void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
                                 const Diagnostic &Info);
-  
-  /// \brief Clone the diagnostic consumer, producing an equivalent consumer
-  /// that can be used in a different context.
-  virtual DiagnosticConsumer *clone(DiagnosticsEngine &Diags) const = 0;
 };
 
 /// \brief A diagnostic client that ignores all diagnostics.
@@ -1309,9 +1305,24 @@ class IgnoringDiagConsumer : public DiagnosticConsumer {
                         const Diagnostic &Info) {
     // Just ignore it.
   }
-  DiagnosticConsumer *clone(DiagnosticsEngine &Diags) const {
-    return new IgnoringDiagConsumer();
-  }
+};
+
+/// \brief Diagnostic consumer that forwards diagnostics along to an
+/// existing, already-initialized diagnostic consumer.
+///
+class ForwardingDiagnosticConsumer : public DiagnosticConsumer {
+  DiagnosticConsumer &Target;
+
+public:
+  ForwardingDiagnosticConsumer(DiagnosticConsumer &Target) : Target(Target) {}
+
+  virtual ~ForwardingDiagnosticConsumer();
+
+  virtual void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
+                                const Diagnostic &Info);
+  virtual void clear();
+
+  virtual bool IncludeInDiagnosticCounts() const;
 };
 
 // Struct used for sending info about how a type should be printed.

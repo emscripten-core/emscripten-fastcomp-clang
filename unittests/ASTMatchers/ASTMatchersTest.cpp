@@ -337,14 +337,22 @@ TEST(DeclarationMatcher, hasDeclContext) {
       "    class D {};"
       "  }"
       "}",
-      recordDecl(hasDeclContext(namedDecl(hasName("M"))))));
+      recordDecl(hasDeclContext(namespaceDecl(hasName("M"))))));
   EXPECT_TRUE(notMatches(
       "namespace N {"
       "  namespace M {"
       "    class D {};"
       "  }"
       "}",
-      recordDecl(hasDeclContext(namedDecl(hasName("N"))))));
+      recordDecl(hasDeclContext(namespaceDecl(hasName("N"))))));
+
+  EXPECT_TRUE(matches("namespace {"
+                      "  namespace M {"
+                      "    class D {};"
+                      "  }"
+                      "}",
+                      recordDecl(hasDeclContext(namespaceDecl(
+                          hasName("M"), hasDeclContext(namespaceDecl()))))));
 }
 
 TEST(ClassTemplate, DoesNotMatchClass) {
@@ -632,8 +640,10 @@ public:
   // Create an object that checks that a node of type \c T was bound to \c Id.
   // Checks that there was exactly one match with the name \c ExpectedName.
   // Note that \c T must be a NamedDecl for this to work.
-  VerifyIdIsBoundTo(llvm::StringRef Id, llvm::StringRef ExpectedName)
-    : Id(Id), ExpectedCount(1), Count(0), ExpectedName(ExpectedName) {}
+  VerifyIdIsBoundTo(llvm::StringRef Id, llvm::StringRef ExpectedName,
+                    int ExpectedCount = 1)
+      : Id(Id), ExpectedCount(ExpectedCount), Count(0),
+        ExpectedName(ExpectedName) {}
 
   ~VerifyIdIsBoundTo() {
     if (ExpectedCount != -1)
@@ -1354,6 +1364,17 @@ TEST(QualType, hasCanonicalType) {
               varDecl(hasType(qualType(hasCanonicalType(referenceType()))))));
 }
 
+TEST(QualType, hasLocalQualifiers) {
+  EXPECT_TRUE(notMatches("typedef const int const_int; const_int i = 1;",
+                         varDecl(hasType(hasLocalQualifiers()))));
+  EXPECT_TRUE(matches("int *const j = nullptr;",
+                      varDecl(hasType(hasLocalQualifiers()))));
+  EXPECT_TRUE(matches("int *volatile k;",
+                      varDecl(hasType(hasLocalQualifiers()))));
+  EXPECT_TRUE(notMatches("int m;",
+                         varDecl(hasType(hasLocalQualifiers()))));
+}
+
 TEST(HasParameter, CallsInnerMatcher) {
   EXPECT_TRUE(matches("class X { void x(int) {} };",
       methodDecl(hasParameter(0, varDecl()))));
@@ -1477,6 +1498,27 @@ TEST(Matcher, MatchesAccessSpecDecls) {
       notMatches("class C { public: int i; };", accessSpecDecl(isPrivate())));
 
   EXPECT_TRUE(notMatches("class C { int i; };", accessSpecDecl()));
+}
+
+TEST(Matcher, MatchesVirtualMethod) {
+  EXPECT_TRUE(matches("class X { virtual int f(); };",
+      methodDecl(isVirtual(), hasName("::X::f"))));
+  EXPECT_TRUE(notMatches("class X { int f(); };",
+      methodDecl(isVirtual())));
+}
+
+TEST(Matcher, MatchesOverridingMethod) {
+  EXPECT_TRUE(matches("class X { virtual int f(); }; "
+                      "class Y : public X { int f(); };",
+       methodDecl(isOverride(), hasName("::Y::f"))));
+  EXPECT_TRUE(notMatches("class X { virtual int f(); }; "
+                        "class Y : public X { int f(); };",
+       methodDecl(isOverride(), hasName("::X::f"))));
+  EXPECT_TRUE(notMatches("class X { int f(); }; "
+                         "class Y : public X { int f(); };",
+       methodDecl(isOverride())));
+  EXPECT_TRUE(notMatches("class X { int f(); int f(int); }; ",
+       methodDecl(isOverride())));
 }
 
 TEST(Matcher, ConstructorCall) {
@@ -3192,6 +3234,20 @@ TEST(HasAncestor, BindsCombinationsWithHasDescendant) {
       new VerifyIdIsBoundTo<CXXRecordDecl>("d", "E")));
 }
 
+TEST(HasAncestor, MatchesClosestAncestor) {
+  EXPECT_TRUE(matchAndVerifyResultTrue(
+      "template <typename T> struct C {"
+      "  void f(int) {"
+      "    struct I { void g(T) { int x; } } i; i.g(42);"
+      "  }"
+      "};"
+      "template struct C<int>;",
+      varDecl(hasName("x"),
+              hasAncestor(functionDecl(hasParameter(
+                  0, varDecl(hasType(asString("int"))))).bind("f"))).bind("v"),
+      new VerifyIdIsBoundTo<FunctionDecl>("f", "g", 2)));
+}
+
 TEST(HasAncestor, MatchesInTemplateInstantiations) {
   EXPECT_TRUE(matches(
       "template <typename T> struct A { struct B { struct C { T t; }; }; }; "
@@ -3254,6 +3310,10 @@ TEST(HasParent, MatchesAllParents) {
                              hasParent(recordDecl(isTemplateInstantiation())))),
                          hasParent(functionDecl(hasParent(recordDecl(
                              unless(isTemplateInstantiation())))))))))));
+  EXPECT_TRUE(
+      notMatches("template <typename T> struct C { static void f() {} };"
+                 "void t() { C<int>::f(); }",
+                 compoundStmt(hasParent(recordDecl()))));
 }
 
 TEST(TypeMatching, MatchesTypes) {
@@ -3356,15 +3416,30 @@ TEST(TypeMatching, MatchesAutoTypes) {
   EXPECT_TRUE(matches("int v[] = { 2, 3 }; void f() { for (int i : v) {} }",
                       autoType()));
 
-  EXPECT_TRUE(matches("auto a = 1;",
-                      autoType(hasDeducedType(isInteger()))));
-  EXPECT_TRUE(notMatches("auto b = 2.0;",
-                         autoType(hasDeducedType(isInteger()))));
+  // FIXME: Matching against the type-as-written can't work here, because the
+  //        type as written was not deduced.
+  //EXPECT_TRUE(matches("auto a = 1;",
+  //                    autoType(hasDeducedType(isInteger()))));
+  //EXPECT_TRUE(notMatches("auto b = 2.0;",
+  //                       autoType(hasDeducedType(isInteger()))));
 }
 
 TEST(TypeMatching, MatchesFunctionTypes) {
   EXPECT_TRUE(matches("int (*f)(int);", functionType()));
   EXPECT_TRUE(matches("void f(int i) {}", functionType()));
+}
+
+TEST(TypeMatching, MatchesParenType) {
+  EXPECT_TRUE(
+      matches("int (*array)[4];", varDecl(hasType(pointsTo(parenType())))));
+  EXPECT_TRUE(notMatches("int *array[4];", varDecl(hasType(parenType()))));
+
+  EXPECT_TRUE(matches(
+      "int (*ptr_to_func)(int);",
+      varDecl(hasType(pointsTo(parenType(innerType(functionType())))))));
+  EXPECT_TRUE(notMatches(
+      "int (*ptr_to_array)[4];",
+      varDecl(hasType(pointsTo(parenType(innerType(functionType())))))));
 }
 
 TEST(TypeMatching, PointerTypes) {

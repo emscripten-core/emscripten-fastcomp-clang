@@ -333,7 +333,6 @@ def OpenCLKernel : Attr {
 def OpenCLImageAccess : Attr {
   let Spellings = [GNU<"opencl_image_access">];
   let Args = [IntArgument<"Access">];
-  let ASTNode = 0;
 }
 
 def Deprecated : InheritableAttr {
@@ -632,6 +631,11 @@ def ReqdWorkGroupSize : InheritableAttr {
               UnsignedArgument<"ZDim">];
 }
 
+def Endian : InheritableAttr {
+  let Spellings = [GNU<"endian">];
+  let Args = [IdentifierArgument<"platform">];
+}
+
 def WorkGroupSizeHint :  InheritableAttr {
   let Spellings = [GNU<"work_group_size_hint">];
   let Args = [UnsignedArgument<"XDim">, 
@@ -924,6 +928,10 @@ def TypeTagForDatatype : InheritableAttr {
 
 // Microsoft-related attributes
 
+def MsProperty : Attr {
+  let Spellings = [Declspec<"property">];
+}
+
 def MsStruct : InheritableAttr {
   let Spellings = [Declspec<"ms_struct">];
 }
@@ -952,16 +960,24 @@ def Ptr64 : InheritableAttr {
   let Spellings = [Keyword<"__ptr64">];
 }
 
-def SingleInheritance : InheritableAttr {
+class MSInheritanceAttr : InheritableAttr;
+
+def SingleInheritance : MSInheritanceAttr {
   let Spellings = [Keyword<"__single_inheritance">];
 }
 
-def MultipleInheritance : InheritableAttr {
+def MultipleInheritance : MSInheritanceAttr {
   let Spellings = [Keyword<"__multiple_inheritance">];
 }
 
-def VirtualInheritance : InheritableAttr {
+def VirtualInheritance : MSInheritanceAttr {
   let Spellings = [Keyword<"__virtual_inheritance">];
+}
+
+// This attribute doesn't have any spellings, but we can apply it implicitly to
+// incomplete types that lack any of the other attributes.
+def UnspecifiedInheritance : MSInheritanceAttr {
+  let Spellings = [];
 }
 
 def Unaligned : IgnoredAttr {

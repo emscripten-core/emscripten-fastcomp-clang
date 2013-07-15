@@ -998,14 +998,12 @@ private:
 namespace llvm {
 /// Implement simplify_type for QualType, so that we can dyn_cast from QualType
 /// to a specific Type class.
-template<> struct simplify_type<const ::clang::QualType> {
+template<> struct simplify_type< ::clang::QualType> {
   typedef const ::clang::Type *SimpleType;
-  static SimpleType getSimplifiedValue(const ::clang::QualType &Val) {
+  static SimpleType getSimplifiedValue(::clang::QualType Val) {
     return Val.getTypePtr();
   }
 };
-template<> struct simplify_type< ::clang::QualType>
-  : public simplify_type<const ::clang::QualType> {};
 
 // Teach SmallPtrSet that QualType is "basically a pointer".
 template<>
@@ -1328,10 +1326,20 @@ protected:
     unsigned AttrKind : 32 - NumTypeBits;
   };
 
+  class AutoTypeBitfields {
+    friend class AutoType;
+
+    unsigned : NumTypeBits;
+
+    /// Was this placeholder type spelled as 'decltype(auto)'?
+    unsigned IsDecltypeAuto : 1;
+  };
+
   union {
     TypeBitfields TypeBits;
     ArrayTypeBitfields ArrayTypeBits;
     AttributedTypeBitfields AttributedTypeBits;
+    AutoTypeBitfields AutoTypeBits;
     BuiltinTypeBitfields BuiltinTypeBits;
     FunctionTypeBitfields FunctionTypeBits;
     ObjCObjectTypeBitfields ObjCObjectTypeBits;
@@ -1445,8 +1453,8 @@ public:
   }
 
   /// isLiteralType - Return true if this is a literal type
-  /// (C++0x [basic.types]p10)
-  bool isLiteralType() const;
+  /// (C++11 [basic.types]p10)
+  bool isLiteralType(ASTContext &Ctx) const;
 
   /// \brief Test if this type is a standard-layout type.
   /// (C++0x [basic.type]p9)
@@ -1611,6 +1619,10 @@ public:
     return TypeBits.InstantiationDependent;
   }
 
+  /// \brief Determine whether this type is an undeduced type, meaning that
+  /// it somehow involves a C++11 'auto' type which has not yet been deduced.
+  bool isUndeducedType() const;
+
   /// \brief Whether this type is a variably-modified type (C99 6.7.5).
   bool isVariablyModifiedType() const { return TypeBits.VariablyModified; }
 
@@ -1774,8 +1786,9 @@ public:
   /// \brief Determine the linkage and visibility of this type.
   LinkageInfo getLinkageAndVisibility() const;
 
-  /// \brief Note that the linkage is no longer known.
-  void ClearLinkageCache();
+  /// \brief True if the computed linkage is valid. Used for consistency
+  /// checking. Should always return true.
+  bool isLinkageValid() const;
 
   const char *getTypeClassName() const;
 
@@ -2862,6 +2875,9 @@ public:
     assert(i < NumArgs && "Invalid argument number!");
     return arg_type_begin()[i];
   }
+  ArrayRef<QualType> getArgTypes() const {
+    return ArrayRef<QualType>(arg_type_begin(), arg_type_end());
+  }
 
   ExtProtoInfo getExtProtoInfo() const {
     ExtProtoInfo EPI;
@@ -3540,41 +3556,48 @@ public:
   }
 };
 
-/// \brief Represents a C++0x auto type.
+/// \brief Represents a C++11 auto or C++1y decltype(auto) type.
 ///
-/// These types are usually a placeholder for a deduced type. However, within
-/// templates and before the initializer is attached, there is no deduced type
-/// and an auto type is type-dependent and canonical.
+/// These types are usually a placeholder for a deduced type. However, before
+/// the initializer is attached, or if the initializer is type-dependent, there
+/// is no deduced type and an auto type is canonical. In the latter case, it is
+/// also a dependent type.
 class AutoType : public Type, public llvm::FoldingSetNode {
-  AutoType(QualType DeducedType)
+  AutoType(QualType DeducedType, bool IsDecltypeAuto, bool IsDependent)
     : Type(Auto, DeducedType.isNull() ? QualType(this, 0) : DeducedType,
-           /*Dependent=*/DeducedType.isNull(),
-           /*InstantiationDependent=*/DeducedType.isNull(),
+           /*Dependent=*/IsDependent, /*InstantiationDependent=*/IsDependent,
            /*VariablyModified=*/false, /*ContainsParameterPack=*/false) {
-    assert((DeducedType.isNull() || !DeducedType->isDependentType()) &&
-           "deduced a dependent type for auto");
+    assert((DeducedType.isNull() || !IsDependent) &&
+           "auto deduced to dependent type");
+    AutoTypeBits.IsDecltypeAuto = IsDecltypeAuto;
   }
 
   friend class ASTContext;  // ASTContext creates these
 
 public:
-  bool isSugared() const { return isDeduced(); }
+  bool isDecltypeAuto() const { return AutoTypeBits.IsDecltypeAuto; }
+
+  bool isSugared() const { return !isCanonicalUnqualified(); }
   QualType desugar() const { return getCanonicalTypeInternal(); }
 
+  /// \brief Get the type deduced for this auto type, or null if it's either
+  /// not been deduced or was deduced to a dependent type.
   QualType getDeducedType() const {
-    return isDeduced() ? getCanonicalTypeInternal() : QualType();
+    return !isCanonicalUnqualified() ? getCanonicalTypeInternal() : QualType();
   }
   bool isDeduced() const {
-    return !isDependentType();
+    return !isCanonicalUnqualified() || isDependentType();
   }
 
   void Profile(llvm::FoldingSetNodeID &ID) {
-    Profile(ID, getDeducedType());
+    Profile(ID, getDeducedType(), isDecltypeAuto(), isDependentType());
   }
 
-  static void Profile(llvm::FoldingSetNodeID &ID,
-                      QualType Deduced) {
+  static void Profile(llvm::FoldingSetNodeID &ID, QualType Deduced,
+                      bool IsDecltypeAuto, bool IsDependent) {
     ID.AddPointer(Deduced.getAsOpaquePtr());
+    ID.AddBoolean(IsDecltypeAuto);
+    ID.AddBoolean(IsDependent);
   }
 
   static bool classof(const Type *T) {
@@ -4624,7 +4647,7 @@ inline QualType QualType::getUnqualifiedType() const {
 
   return QualType(getSplitUnqualifiedTypeImpl(*this).Ty, 0);
 }
-
+  
 inline SplitQualType QualType::getSplitUnqualifiedType() const {
   if (!getTypePtr()->getCanonicalTypeInternal().hasLocalQualifiers())
     return split();
@@ -4656,7 +4679,7 @@ inline void QualType::removeLocalCVRQualifiers(unsigned Mask) {
 inline unsigned QualType::getAddressSpace() const {
   return getQualifiers().getAddressSpace();
 }
-
+  
 /// getObjCGCAttr - Return the gc attribute of this type.
 inline Qualifiers::GC QualType::getObjCGCAttr() const {
   return getQualifiers().getObjCGCAttr();
@@ -5015,6 +5038,11 @@ inline bool Type::isBooleanType() const {
   if (const BuiltinType *BT = dyn_cast<BuiltinType>(CanonicalType))
     return BT->getKind() == BuiltinType::Bool;
   return false;
+}
+
+inline bool Type::isUndeducedType() const {
+  const AutoType *AT = getContainedAutoType();
+  return AT && !AT->isDeduced();
 }
 
 /// \brief Determines whether this is a type for which one can define

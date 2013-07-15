@@ -296,7 +296,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Value *F = CGM.getIntrinsic(Intrinsic::cttz, ArgType);
 
     llvm::Type *ResultType = ConvertType(E->getType());
-    Value *ZeroUndef = Builder.getInt1(Target.isCLZForZeroUndef());
+    Value *ZeroUndef = Builder.getInt1(getTarget().isCLZForZeroUndef());
     Value *Result = Builder.CreateCall2(F, ArgValue, ZeroUndef);
     if (Result->getType() != ResultType)
       Result = Builder.CreateIntCast(Result, ResultType, /*isSigned*/true,
@@ -313,7 +313,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Value *F = CGM.getIntrinsic(Intrinsic::ctlz, ArgType);
 
     llvm::Type *ResultType = ConvertType(E->getType());
-    Value *ZeroUndef = Builder.getInt1(Target.isCLZForZeroUndef());
+    Value *ZeroUndef = Builder.getInt1(getTarget().isCLZForZeroUndef());
     Value *Result = Builder.CreateCall2(F, ArgValue, ZeroUndef);
     if (Result->getType() != ResultType)
       Result = Builder.CreateIntCast(Result, ResultType, /*isSigned*/true,
@@ -1434,7 +1434,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
   const char *Name = getContext().BuiltinInfo.GetName(BuiltinID);
   Intrinsic::ID IntrinsicID = Intrinsic::not_intrinsic;
   if (const char *Prefix =
-      llvm::Triple::getArchTypePrefix(Target.getTriple().getArch()))
+      llvm::Triple::getArchTypePrefix(getTarget().getTriple().getArch()))
     IntrinsicID = Intrinsic::getIntrinsicForGCCBuiltin(Prefix, Name);
 
   if (IntrinsicID != Intrinsic::not_intrinsic) {
@@ -1505,7 +1505,9 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
 
 Value *CodeGenFunction::EmitTargetBuiltinExpr(unsigned BuiltinID,
                                               const CallExpr *E) {
-  switch (Target.getTriple().getArch()) {
+  switch (getTarget().getTriple().getArch()) {
+  case llvm::Triple::aarch64:
+    return EmitAArch64BuiltinExpr(BuiltinID, E);
   case llvm::Triple::arm:
   case llvm::Triple::thumb:
     return EmitARMBuiltinExpr(BuiltinID, E);
@@ -1623,6 +1625,25 @@ CodeGenFunction::EmitPointerWithAlignment(const Expr *Addr) {
     Align = getContext().getTypeAlignInChars(PtTy).getQuantity();
 
   return std::make_pair(EmitScalarExpr(Addr), Align);
+}
+
+Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
+                                               const CallExpr *E) {
+  if (BuiltinID == AArch64::BI__clear_cache) {
+    assert(E->getNumArgs() == 2 &&
+           "Variadic __clear_cache slipped through on AArch64");
+
+    const FunctionDecl *FD = E->getDirectCallee();
+    SmallVector<Value *, 2> Ops;
+    for (unsigned i = 0; i < E->getNumArgs(); i++)
+      Ops.push_back(EmitScalarExpr(E->getArg(i)));
+    llvm::Type *Ty = CGM.getTypes().ConvertType(FD->getType());
+    llvm::FunctionType *FTy = cast<llvm::FunctionType>(Ty);
+    StringRef Name = FD->getName();
+    return EmitNounwindRuntimeCall(CGM.CreateRuntimeFunction(FTy, Name), Ops);
+  }
+
+  return 0;
 }
 
 Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
@@ -1856,7 +1877,7 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
     // Generate target-independent intrinsic; also need to add second argument
     // for whether or not clz of zero is undefined; on ARM it isn't.
     Function *F = CGM.getIntrinsic(Intrinsic::ctlz, Ty);
-    Ops.push_back(Builder.getInt1(Target.isCLZForZeroUndef()));
+    Ops.push_back(Builder.getInt1(getTarget().isCLZForZeroUndef()));
     return EmitNeonCall(F, Ops, "vclz");
   }
   case ARM::BI__builtin_neon_vcnt_v:
@@ -2713,7 +2734,10 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
   }
   case X86::BI__builtin_ia32_rdrand16_step:
   case X86::BI__builtin_ia32_rdrand32_step:
-  case X86::BI__builtin_ia32_rdrand64_step: {
+  case X86::BI__builtin_ia32_rdrand64_step:
+  case X86::BI__builtin_ia32_rdseed16_step:
+  case X86::BI__builtin_ia32_rdseed32_step:
+  case X86::BI__builtin_ia32_rdseed64_step: {
     Intrinsic::ID ID;
     switch (BuiltinID) {
     default: llvm_unreachable("Unsupported intrinsic!");
@@ -2725,6 +2749,15 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
       break;
     case X86::BI__builtin_ia32_rdrand64_step:
       ID = Intrinsic::x86_rdrand_64;
+      break;
+    case X86::BI__builtin_ia32_rdseed16_step:
+      ID = Intrinsic::x86_rdseed_16;
+      break;
+    case X86::BI__builtin_ia32_rdseed32_step:
+      ID = Intrinsic::x86_rdseed_32;
+      break;
+    case X86::BI__builtin_ia32_rdseed64_step:
+      ID = Intrinsic::x86_rdseed_64;
       break;
     }
 

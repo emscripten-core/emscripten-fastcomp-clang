@@ -51,7 +51,7 @@ class CGDebugInfo {
   SourceLocation CurLoc, PrevLoc;
   llvm::DIType VTablePtrType;
   llvm::DIType ClassTy;
-  llvm::DIType ObjTy;
+  llvm::DICompositeType ObjTy;
   llvm::DIType SelTy;
   llvm::DIType OCLImage1dDITy, OCLImage1dArrayDITy, OCLImage1dBufferDITy;
   llvm::DIType OCLImage2dDITy, OCLImage2dArrayDITy;
@@ -119,6 +119,7 @@ class CGDebugInfo {
   llvm::DIType CreateType(const MemberPointerType *Ty, llvm::DIFile F);
   llvm::DIType CreateType(const AtomicType *Ty, llvm::DIFile F);
   llvm::DIType CreateEnumType(const EnumDecl *ED);
+  llvm::DIType CreateSelfType(const QualType &QualTy, llvm::DIType Ty);
   llvm::DIType getTypeOrNull(const QualType);
   llvm::DIType getCompletedTypeOrNull(const QualType);
   llvm::DIType getOrCreateMethodType(const CXXMethodDecl *Method,
@@ -207,7 +208,9 @@ public:
 
   /// EmitLocation - Emit metadata to indicate a change in line/column
   /// information in the source file.
-  void EmitLocation(CGBuilderTy &Builder, SourceLocation Loc);
+  /// \param ForceColumnInfo  Assume DebugColumnInfo option is true.
+  void EmitLocation(CGBuilderTy &Builder, SourceLocation Loc,
+                    bool ForceColumnInfo = false);
 
   /// EmitFunctionStart - Emit a call to llvm.dbg.function.start to indicate
   /// start of a new function.
@@ -246,7 +249,8 @@ public:
   /// llvm.dbg.declare for the block-literal argument to a block
   /// invocation function.
   void EmitDeclareOfBlockLiteralArgVariable(const CGBlockInfo &block,
-                                            llvm::Value *addr,
+                                            llvm::Value *Arg,
+                                            llvm::Value *LocalAddr,
                                             CGBuilderTy &Builder);
 
   /// EmitGlobalVariable - Emit information about a global variable.
@@ -257,6 +261,9 @@ public:
 
   /// EmitGlobalVariable - Emit global variable's debug info.
   void EmitGlobalVariable(const ValueDecl *VD, llvm::Constant *Init);
+
+  /// \brief - Emit C++ using directive.
+  void EmitUsingDirective(const UsingDirectiveDecl &UD);
 
   /// getOrCreateRecordType - Emit record type's standalone debug info. 
   llvm::DIType getOrCreateRecordType(QualType Ty, SourceLocation L);
@@ -277,7 +284,7 @@ private:
                                             uint64_t *OffSet);
 
   /// getContextDescriptor - Get context info for the decl.
-  llvm::DIDescriptor getContextDescriptor(const Decl *Decl);
+  llvm::DIScope getContextDescriptor(const Decl *Decl);
 
   /// createRecordFwdDecl - Create a forward decl for a RecordType in a given
   /// context.
@@ -356,7 +363,8 @@ private:
 
   /// getColumnNumber - Get column number for the location. If location is 
   /// invalid then use current location.
-  unsigned getColumnNumber(SourceLocation Loc);
+  /// \param Force  Assume DebugColumnInfo option is true.
+  unsigned getColumnNumber(SourceLocation Loc, bool Force=false);
 };
 } // namespace CodeGen
 } // namespace clang

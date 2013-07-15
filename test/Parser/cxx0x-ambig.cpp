@@ -38,8 +38,8 @@ namespace bitfield {
     constexpr T() {}
     constexpr T(int) {}
     constexpr T(T, T, T, T) {}
-    constexpr T operator=(T) { return *this; }
-    constexpr operator int() { return 4; }
+    constexpr T operator=(T) const { return *this; }
+    constexpr operator int() const { return 4; }
   };
   constexpr T a, b, c, d;
 
@@ -68,7 +68,7 @@ namespace bitfield {
   };
 
   struct U {
-    constexpr operator T() { return T(); } // expected-note 2{{candidate}}
+    constexpr operator T() const { return T(); } // expected-note 2{{candidate}}
   };
   // This could be a bit-field.
   struct S7 {
@@ -132,4 +132,20 @@ namespace ellipsis {
     void l(int(*...)(T)); // expected-warning {{ISO C++11 requires a parenthesized pack declaration to have a name}}
     void l(int(S<int>::*...)(T)); // expected-warning {{ISO C++11 requires a parenthesized pack declaration to have a name}}
   };
+}
+
+namespace braced_init_list {
+  struct X {
+    void foo() {}
+  };
+
+  void (*pf1)() {};
+  void (X::*pmf1)() {&X::foo};
+  void (X::*pmf2)() = {&X::foo};
+
+  void test() {
+    void (*pf2)() {};
+    void (X::*pmf3)() {&X::foo};
+    void (X::*pmf4)() = {&X::foo};
+  }
 }

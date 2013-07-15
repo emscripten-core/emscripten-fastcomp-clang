@@ -74,7 +74,6 @@ CXXMethodDecl *Sema::startLambdaDefinition(CXXRecordDecl *Class,
                                                 IntroducerRange.getBegin(),
                                                 MethodNameLoc),
                             MethodType->getType(), MethodType,
-                            /*isStatic=*/false,
                             SC_None,
                             /*isInline=*/true,
                             /*isConstExpr=*/false,
@@ -453,8 +452,7 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
     FunctionProtoType::ExtProtoInfo EPI;
     EPI.HasTrailingReturn = true;
     EPI.TypeQuals |= DeclSpec::TQ_const;
-    QualType MethodTy = Context.getFunctionType(Context.DependentTy,
-                                                ArrayRef<QualType>(),
+    QualType MethodTy = Context.getFunctionType(Context.DependentTy, None,
                                                 EPI);
     MethodTyInfo = Context.getTrivialTypeSourceInfo(MethodTy);
     ExplicitParams = false;
@@ -709,7 +707,7 @@ static void addFunctionPointerConversion(Sema &S,
   FunctionProtoType::ExtProtoInfo ExtInfo;
   ExtInfo.TypeQuals = Qualifiers::Const;
   QualType ConvTy =
-    S.Context.getFunctionType(FunctionPtrTy, ArrayRef<QualType>(), ExtInfo);
+    S.Context.getFunctionType(FunctionPtrTy, None, ExtInfo);
   
   SourceLocation Loc = IntroducerRange.getBegin();
   DeclarationName Name
@@ -738,7 +736,7 @@ static void addFunctionPointerConversion(Sema &S,
     = CXXMethodDecl::Create(S.Context, Class, Loc, 
                             DeclarationNameInfo(Name, Loc), FunctionTy, 
                             CallOperator->getTypeSourceInfo(),
-                            /*IsStatic=*/true, SC_Static, /*IsInline=*/true,
+                            SC_Static, /*IsInline=*/true,
                             /*IsConstexpr=*/false, 
                             CallOperator->getBody()->getLocEnd());
   SmallVector<ParmVarDecl *, 4> InvokeParams;
@@ -751,7 +749,6 @@ static void addFunctionPointerConversion(Sema &S,
                                                From->getType(),
                                                From->getTypeSourceInfo(),
                                                From->getStorageClass(),
-                                               From->getStorageClassAsWritten(),
                                                /*DefaultArg=*/0));
   }
   Invoke->setParams(InvokeParams);
@@ -781,8 +778,7 @@ static void addBlockPointerConversion(Sema &S,
   
   FunctionProtoType::ExtProtoInfo ExtInfo;
   ExtInfo.TypeQuals = Qualifiers::Const;
-  QualType ConvTy = S.Context.getFunctionType(BlockPtrTy, ArrayRef<QualType>(),
-                                              ExtInfo);
+  QualType ConvTy = S.Context.getFunctionType(BlockPtrTy, None, ExtInfo);
   
   SourceLocation Loc = IntroducerRange.getBegin();
   DeclarationName Name
@@ -864,6 +860,7 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
       CaptureDefault = LCD_ByCopy;
       break;
 
+    case CapturingScopeInfo::ImpCap_CapturedRegion:
     case CapturingScopeInfo::ImpCap_LambdaByref:
       CaptureDefault = LCD_ByRef;
       break;
@@ -951,6 +948,7 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
   if (!CurContext->isDependentContext()) {
     switch (ExprEvalContexts.back().Context) {
     case Unevaluated:
+    case UnevaluatedAbstract:
       // We don't actually diagnose this case immediately, because we
       // could be within a context where we might find out later that
       // the expression is potentially evaluated (e.g., for typeid).
@@ -1010,7 +1008,6 @@ ExprResult Sema::BuildBlockForLambdaConversion(SourceLocation CurrentLocation,
                                               From->getType(),
                                               From->getTypeSourceInfo(),
                                               From->getStorageClass(),
-                                            From->getStorageClassAsWritten(),
                                               /*DefaultArg=*/0));
   }
   Block->setParams(BlockParams);
@@ -1025,7 +1022,7 @@ ExprResult Sema::BuildBlockForLambdaConversion(SourceLocation CurrentLocation,
   VarDecl *CapVar = VarDecl::Create(Context, Block, ConvLocation,
                                     ConvLocation, 0,
                                     Src->getType(), CapVarTSI,
-                                    SC_None, SC_None);
+                                    SC_None);
   BlockDecl::Capture Capture(/*Variable=*/CapVar, /*ByRef=*/false,
                              /*Nested=*/false, /*Copy=*/Init.take());
   Block->setCaptures(Context, &Capture, &Capture + 1, 

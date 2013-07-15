@@ -129,7 +129,8 @@ typedef internal::Matcher<NestedNameSpecifierLoc> NestedNameSpecifierLocMatcher;
 /// \endcode
 ///
 /// Usable as: Any Matcher
-inline internal::PolymorphicMatcherWithParam0<internal::TrueMatcher> anything() {
+inline internal::PolymorphicMatcherWithParam0<internal::TrueMatcher>
+anything() {
   return internal::PolymorphicMatcherWithParam0<internal::TrueMatcher>();
 }
 
@@ -156,6 +157,17 @@ const internal::VariadicAllOfMatcher<Decl> decl;
 ///   };
 /// \endcode
 const internal::VariadicDynCastAllOfMatcher<Decl, NamedDecl> namedDecl;
+
+/// \brief Matches a declaration of a namespace.
+///
+/// Given
+/// \code
+///   namespace {}
+///   namespace test {}
+/// \endcode
+/// namespaceDecl()
+///   matches "namespace {}" and "namespace test {}"
+const internal::VariadicDynCastAllOfMatcher<Decl, NamespaceDecl> namespaceDecl;
 
 /// \brief Matches C++ class declarations.
 ///
@@ -2514,6 +2526,38 @@ AST_MATCHER_P(CXXMethodDecl, ofClass,
           InnerMatcher.matches(*Parent, Finder, Builder));
 }
 
+/// \brief Matches if the given method declaration is virtual.
+///
+/// Given
+/// \code
+///   class A {
+///    public:
+///     virtual void x();
+///   };
+/// \endcode
+///   matches A::x
+AST_MATCHER(CXXMethodDecl, isVirtual) {
+  return Node.isVirtual();
+}
+
+/// \brief Matches if the given method declaration overrides another method.
+///
+/// Given
+/// \code
+///   class A {
+///    public:
+///     virtual void x();
+///   };
+///   class B : public A {
+///    public:
+///     virtual void x();
+///   };
+/// \endcode
+///   matches B::x
+AST_MATCHER(CXXMethodDecl, isOverride) {
+  return Node.size_overridden_methods() > 0;
+}
+
 /// \brief Matches member expressions that are called with '->' as opposed
 /// to '.'.
 ///
@@ -2564,6 +2608,23 @@ AST_MATCHER(QualType, isInteger) {
 ///   is no top-level const on the parameter type "const int *".
 AST_MATCHER(QualType, isConstQualified) {
   return Node.isConstQualified();
+}
+
+/// \brief Matches QualType nodes that have local CV-qualifiers attached to
+/// the node, not hidden within a typedef.
+///
+/// Given
+/// \code
+///   typedef const int const_int;
+///   const_int i;
+///   int *const j;
+///   int *volatile k;
+///   int m;
+/// \endcode
+/// \c varDecl(hasType(hasLocalQualifiers())) matches only \c j and \c k.
+/// \c i is const-qualified but the qualifier is not local.
+AST_MATCHER(QualType, hasLocalQualifiers) {
+  return Node.hasLocalQualifiers();
 }
 
 /// \brief Matches a member expression where the member is matched by a
@@ -2893,6 +2954,32 @@ AST_TYPE_TRAVERSE_MATCHER(hasDeducedType, getDeducedType);
 /// functionType()
 ///   matches "int (*f)(int)" and the type of "g".
 AST_TYPE_MATCHER(FunctionType, functionType);
+
+/// \brief Matches \c ParenType nodes.
+///
+/// Given
+/// \code
+///   int (*ptr_to_array)[4];
+///   int *array_of_ptrs[4];
+/// \endcode
+///
+/// \c varDecl(hasType(pointsTo(parenType()))) matches \c ptr_to_array but not
+/// \c array_of_ptrs.
+AST_TYPE_MATCHER(ParenType, parenType);
+
+/// \brief Matches \c ParenType nodes where the inner type is a specific type.
+///
+/// Given
+/// \code
+///   int (*ptr_to_array)[4];
+///   int (*ptr_to_func)(int);
+/// \endcode
+///
+/// \c varDecl(hasType(pointsTo(parenType(innerType(functionType()))))) matches
+/// \c ptr_to_func but not \c ptr_to_array.
+///
+/// Usable as: Matcher<ParenType>
+AST_TYPE_TRAVERSE_MATCHER(innerType, getInnerType);
 
 /// \brief Matches block pointer types, i.e. types syntactically represented as
 /// "void (^)(int)".

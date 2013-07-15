@@ -211,7 +211,13 @@ struct ObjCDictionaryElement {
   /// \brief Determines whether this dictionary element is a pack expansion.
   bool isPackExpansion() const { return EllipsisLoc.isValid(); }
 };
+} // end namespace clang
 
+namespace llvm {
+template <> struct isPodLike<clang::ObjCDictionaryElement> : llvm::true_type {};
+}
+
+namespace clang {
 /// ObjCDictionaryLiteral - AST node to represent objective-c dictionary 
 /// literals; as in:  @{@"name" : NSUserName(), @"date" : [NSDate date] };
 class ObjCDictionaryLiteral : public Expr {
@@ -411,9 +417,13 @@ public:
   child_range children() { return child_range(); }
 };
 
-/// ObjCProtocolExpr used for protocol expression in Objective-C.  This is used
-/// as: @protocol(foo), as in:
-///   obj conformsToProtocol:@protocol(foo)]
+/// ObjCProtocolExpr used for protocol expression in Objective-C.
+///
+/// This is used as: \@protocol(foo), as in:
+/// \code
+///   [obj conformsToProtocol:@protocol(foo)]
+/// \endcode
+///
 /// The return type is "Protocol*".
 class ObjCProtocolExpr : public Expr {
   ObjCProtocolDecl *TheProtocol;
@@ -455,18 +465,24 @@ class ObjCIvarRefExpr : public Expr {
   ObjCIvarDecl *D;
   Stmt *Base;
   SourceLocation Loc;
+  /// OpLoc - This is the location of '.' or '->'
+  SourceLocation OpLoc;
+  
   bool IsArrow:1;      // True if this is "X->F", false if this is "X.F".
   bool IsFreeIvar:1;   // True if ivar reference has no base (self assumed).
 
 public:
   ObjCIvarRefExpr(ObjCIvarDecl *d, QualType t,
-                  SourceLocation l, Expr *base,
+                  SourceLocation l, SourceLocation oploc,
+                  Expr *base,
                   bool arrow = false, bool freeIvar = false) :
-    Expr(ObjCIvarRefExprClass, t, VK_LValue, OK_Ordinary,
+    Expr(ObjCIvarRefExprClass, t, VK_LValue,
+         d->isBitField() ? OK_BitField : OK_Ordinary,
          /*TypeDependent=*/false, base->isValueDependent(), 
          base->isInstantiationDependent(),
          base->containsUnexpandedParameterPack()), 
-    D(d), Base(base), Loc(l), IsArrow(arrow), IsFreeIvar(freeIvar) {}
+    D(d), Base(base), Loc(l), OpLoc(oploc),
+    IsArrow(arrow), IsFreeIvar(freeIvar) {}
 
   explicit ObjCIvarRefExpr(EmptyShell Empty)
     : Expr(ObjCIvarRefExprClass, Empty) {}
@@ -491,6 +507,9 @@ public:
     return isFreeIvar() ? Loc : getBase()->getLocStart();
   }
   SourceLocation getLocEnd() const LLVM_READONLY { return Loc; }
+  
+  SourceLocation getOpLoc() const { return OpLoc; }
+  void setOpLoc(SourceLocation L) { OpLoc = L; }
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == ObjCIvarRefExprClass;
@@ -1374,16 +1393,20 @@ class ObjCIsaExpr : public Expr {
 
   /// IsaMemberLoc - This is the location of the 'isa'.
   SourceLocation IsaMemberLoc;
+  
+  /// OpLoc - This is the location of '.' or '->'
+  SourceLocation OpLoc;
 
   /// IsArrow - True if this is "X->F", false if this is "X.F".
   bool IsArrow;
 public:
-  ObjCIsaExpr(Expr *base, bool isarrow, SourceLocation l, QualType ty)
+  ObjCIsaExpr(Expr *base, bool isarrow, SourceLocation l, SourceLocation oploc,
+              QualType ty)
     : Expr(ObjCIsaExprClass, ty, VK_LValue, OK_Ordinary,
            /*TypeDependent=*/false, base->isValueDependent(),
            base->isInstantiationDependent(),
            /*ContainsUnexpandedParameterPack=*/false),
-      Base(base), IsaMemberLoc(l), IsArrow(isarrow) {}
+      Base(base), IsaMemberLoc(l), OpLoc(oploc), IsArrow(isarrow) {}
 
   /// \brief Build an empty expression.
   explicit ObjCIsaExpr(EmptyShell Empty) : Expr(ObjCIsaExprClass, Empty) { }
@@ -1398,10 +1421,18 @@ public:
   /// location of 'F'.
   SourceLocation getIsaMemberLoc() const { return IsaMemberLoc; }
   void setIsaMemberLoc(SourceLocation L) { IsaMemberLoc = L; }
+  
+  SourceLocation getOpLoc() const { return OpLoc; }
+  void setOpLoc(SourceLocation L) { OpLoc = L; }
 
   SourceLocation getLocStart() const LLVM_READONLY {
     return getBase()->getLocStart();
   }
+  
+  SourceLocation getBaseLocEnd() const LLVM_READONLY {
+    return getBase()->getLocEnd();
+  }
+  
   SourceLocation getLocEnd() const LLVM_READONLY { return IsaMemberLoc; }
 
   SourceLocation getExprLoc() const LLVM_READONLY { return IsaMemberLoc; }
