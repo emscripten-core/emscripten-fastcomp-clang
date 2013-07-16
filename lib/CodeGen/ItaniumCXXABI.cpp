@@ -57,6 +57,20 @@ public:
     UseARMMethodPtrABI(UseARMMethodPtrABI),
     UseARMGuardVarABI(UseARMGuardVarABI) { }
 
+  bool isReturnTypeIndirect(const CXXRecordDecl *RD) const {
+    // Structures with either a non-trivial destructor or a non-trivial
+    // copy constructor are always indirect.
+    return !RD->hasTrivialDestructor() || RD->hasNonTrivialCopyConstructor();
+  }
+
+  RecordArgABI getRecordArgABI(const CXXRecordDecl *RD) const {
+    // Structures with either a non-trivial destructor or a non-trivial
+    // copy constructor are always indirect.
+    if (!RD->hasTrivialDestructor() || RD->hasNonTrivialCopyConstructor())
+      return RAA_Indirect;
+    return RAA_Default;
+  }
+
   bool isZeroInitializable(const MemberPointerType *MPT);
 
   llvm::Type *ConvertMemberPointerType(const MemberPointerType *MPT);
@@ -572,8 +586,8 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
     }
     llvm::Constant *addr = CGM.GetAddrOfFunction(MD, Ty);
 
-    MemPtr[0] = llvm::ConstantExpr::getPtrToInt(addr, ptrdiff_t);
-    MemPtr[1] = llvm::ConstantInt::get(ptrdiff_t,
+    MemPtr[0] = llvm::ConstantExpr::getPtrToInt(addr, CGM.PtrDiffTy);
+    MemPtr[1] = llvm::ConstantInt::get(CGM.PtrDiffTy,
                                        (UseARMMethodPtrABI ? 2 : 1) *
                                        ThisAdjustment.getQuantity());
   }
