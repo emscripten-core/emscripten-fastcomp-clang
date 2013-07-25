@@ -2461,7 +2461,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddAllArgs(CmdArgs, options::OPT_fdata_sections);
 
   Args.AddAllArgs(CmdArgs, options::OPT_finstrument_functions);
-
+// @LOCALMOD-BEGIN
+  Args.AddAllArgs(CmdArgs, options::OPT_finstrument_functions_pnacl);
+// @LOCALMOD-END
   if (Arg *A = Args.getLastArg(options::OPT_finstrument_functions_size_EQ)) {
     CmdArgs.push_back("-finstrument-functions-size");
     CmdArgs.push_back(A->getValue());

@@ -486,6 +486,10 @@ def finstrument_functions : Flag<["-"], "finstrument-functions">, Group<f_Group>
   HelpText<"Generate calls to instrument function entry and exit">;
 def finstrument_functions_size_EQ : Joined<["-"], "finstrument-functions-size=">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Set a minimum number of basic blocks for function instrumentation">;
+// @LOCALMOD-BEGIN
+def finstrument_functions_pnacl : Flag<["-"], "finstrument-functions-pnacl">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"If finstrument-functions is also specified, change __cyg_profile_func_x to __pnacl_profile_func_x">;
+// @LOCALMOD-END
 def fkeep_inline_functions : Flag<["-"], "fkeep-inline-functions">, Group<clang_ignored_f_Group>;
 def flat__namespace : Flag<["-"], "flat_namespace">;
 def flax_vector_conversions : Flag<["-"], "flax-vector-conversions">, Group<f_Group>;

@@ -409,6 +409,9 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.InstrumentFunctions = Args.hasArg(OPT_finstrument_functions);
   Opts.InstrumentFunctionsSize =
     Args.getLastArgIntValue(OPT_finstrument_functions_size, 0);
+// @LOCALMOD-BEGIN
+  Opts.InstrumentFunctionsPNaCl = Args.hasArg(OPT_finstrument_functions_pnacl);
+// @LOCALMOD-END
   Opts.InstrumentForProfiling = Args.hasArg(OPT_pg);
   Opts.EmitOpenCLArgMetadata = Args.hasArg(OPT_cl_kernel_arg_info);
   Opts.DebugCompilationDir = Args.getLastArgValue(OPT_fdebug_compilation_dir);

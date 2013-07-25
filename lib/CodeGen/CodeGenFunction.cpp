@@ -229,10 +229,19 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
       llvm::BasicBlock *CurBlock = Builder.GetInsertBlock();
       llvm::BasicBlock *BeginBlock = &CurFn->getEntryBlock();
 
-      Builder.SetInsertPoint(BeginBlock, BeginBlock->begin());
-      EmitFunctionInstrumentation("__cyg_profile_func_enter");
-      Builder.SetInsertPoint(CurBlock);
-      EmitFunctionInstrumentation("__cyg_profile_func_exit");
+// @LOCALMOD-BEGIN
+      if (CGM.getCodeGenOpts().InstrumentFunctionsPNaCl) {
+        Builder.SetInsertPoint(BeginBlock, BeginBlock->begin());
+        EmitFunctionInstrumentation("__pnacl_profile_func_enter");
+        Builder.SetInsertPoint(CurBlock);
+        EmitFunctionInstrumentation("__pnacl_profile_func_exit");
+      } else {
+        Builder.SetInsertPoint(BeginBlock, BeginBlock->begin());
+        EmitFunctionInstrumentation("__cyg_profile_func_enter");
+        Builder.SetInsertPoint(CurBlock);
+        EmitFunctionInstrumentation("__cyg_profile_func_exit");
+      }
+// @LOCALMOD-END
   }
 
   // Emit debug descriptor for function end.
@@ -294,24 +303,45 @@ bool CodeGenFunction::ShouldInstrumentFunction() {
 /// instrumentation function with the current function and the call site, if
 /// function instrumentation is enabled.
 void CodeGenFunction::EmitFunctionInstrumentation(const char *Fn) {
-  // void __cyg_profile_func_{enter,exit} (void *this_fn, void *call_site);
   llvm::PointerType *PointerTy = Int8PtrTy;
-  llvm::Type *ProfileFuncArgs[] = { PointerTy, PointerTy };
-  llvm::FunctionType *FunctionTy =
-    llvm::FunctionType::get(VoidTy, ProfileFuncArgs, false);
 
-  llvm::Constant *F = CGM.CreateRuntimeFunction(FunctionTy, Fn);
-  llvm::CallInst *CallSite = Builder.CreateCall(
-    CGM.getIntrinsic(llvm::Intrinsic::returnaddress),
-    llvm::ConstantInt::get(Int32Ty, 0),
-    "callsite");
+// @LOCALMOD-BEGIN
+  if (CGM.getCodeGenOpts().InstrumentFunctionsPNaCl) {
+    const FunctionDecl *CFD = dyn_cast<FunctionDecl>(CurFuncDecl);
+    if (!CFD)
+      return;
 
-  llvm::Value *args[] = {
-    llvm::ConstantExpr::getBitCast(CurFn, PointerTy),
-    CallSite
-  };
+    llvm::Type *ProfileFuncArgs[] = { PointerTy };
+    llvm::FunctionType *FunctionTy =
+      llvm::FunctionType::get(VoidTy, ProfileFuncArgs, false);
 
-  EmitNounwindRuntimeCall(F, args);
+    std::string NameStr = CFD->getQualifiedNameAsString();
+    llvm::Constant *F = CGM.CreateRuntimeFunction(FunctionTy, Fn);
+    llvm::Constant *FName = CGM.GetAddrOfConstantCString(NameStr, NULL, 16u);
+    llvm::Value *args[] = {
+      llvm::ConstantExpr::getBitCast(FName, PointerTy)
+    };
+
+    EmitNounwindRuntimeCall(F, args);
+  } else {
+    llvm::Type *ProfileFuncArgs[] = { PointerTy, PointerTy };
+    llvm::FunctionType *FunctionTy =
+      llvm::FunctionType::get(VoidTy, ProfileFuncArgs, false);
+
+    llvm::Constant *F = CGM.CreateRuntimeFunction(FunctionTy, Fn);
+    llvm::CallInst *CallSite = Builder.CreateCall(
+      CGM.getIntrinsic(llvm::Intrinsic::returnaddress),
+      llvm::ConstantInt::get(Int32Ty, 0),
+      "callsite");
+
+    llvm::Value *args[] = {
+      llvm::ConstantExpr::getBitCast(CurFn, PointerTy),
+      CallSite
+    };
+
+    EmitNounwindRuntimeCall(F, args);
+  }
+// @LOCALMOD-END
 }
 
 void CodeGenFunction::EmitMCountInstrumentation() {
