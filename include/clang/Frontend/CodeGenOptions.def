@@ -62,6 +62,9 @@ CODEGENOPT(HiddenWeakVTables , 1, 0) ///< Emit weak vtables, RTTI, and thunks wi
                                      ///< hidden visibility.
 CODEGENOPT(InstrumentFunctions , 1, 0) ///< Set when -finstrument-functions is
                                        ///< enabled.
+VALUE_CODEGENOPT(InstrumentFunctionsSize, 32, 0) ///< If set, only functions with
+                                                 ///< at least this many basic
+                                                 ///< blocks are instrumented.
 CODEGENOPT(InstrumentForProfiling , 1, 0) ///< Set when -pg is enabled.
 CODEGENOPT(LessPreciseFPMAD  , 1, 0) ///< Enable less precise MAD instructions to
                                      ///< be generated.

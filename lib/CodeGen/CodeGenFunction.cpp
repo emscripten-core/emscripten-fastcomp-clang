@@ -222,8 +222,18 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
   // Emit function epilog (to return).
   EmitReturnBlock();
 
-  if (ShouldInstrumentFunction())
-    EmitFunctionInstrumentation("__cyg_profile_func_exit");
+  if (ShouldInstrumentFunction()) {
+      // The size of the function isn't known during StartFunction, so in order
+      // to instrument selectively based on function size, we need to wait
+      // until the end and insert both the entry and exit instrumentation
+      llvm::BasicBlock *CurBlock = Builder.GetInsertBlock();
+      llvm::BasicBlock *BeginBlock = &CurFn->getEntryBlock();
+
+      Builder.SetInsertPoint(BeginBlock, BeginBlock->begin());
+      EmitFunctionInstrumentation("__cyg_profile_func_enter");
+      Builder.SetInsertPoint(CurBlock);
+      EmitFunctionInstrumentation("__cyg_profile_func_exit");
+  }
 
   // Emit debug descriptor for function end.
   if (CGDebugInfo *DI = getDebugInfo()) {
@@ -274,7 +284,10 @@ bool CodeGenFunction::ShouldInstrumentFunction() {
     return false;
   if (!CurFuncDecl || CurFuncDecl->hasAttr<NoInstrumentFunctionAttr>())
     return false;
-  return true;
+
+  // If not specified, defaults to 0.
+  int Size = CGM.getCodeGenOpts().InstrumentFunctionsSize;
+  return CurFn->getBasicBlockList().size() >= Size;
 }
 
 /// EmitFunctionInstrumentation - Emit LLVM code to call the specified
@@ -540,9 +553,6 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
     DI->setLocation(StartLoc);
     DI->EmitFunctionStart(GD, FnType, CurFn, Builder);
   }
-
-  if (ShouldInstrumentFunction())
-    EmitFunctionInstrumentation("__cyg_profile_func_enter");
 
   if (CGM.getCodeGenOpts().InstrumentForProfiling)
     EmitMCountInstrumentation();

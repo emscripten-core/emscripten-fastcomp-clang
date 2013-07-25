@@ -2462,6 +2462,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   Args.AddAllArgs(CmdArgs, options::OPT_finstrument_functions);
 
+  if (Arg *A = Args.getLastArg(options::OPT_finstrument_functions_size_EQ)) {
+    CmdArgs.push_back("-finstrument-functions-size");
+    CmdArgs.push_back(A->getValue());
+  }
+
   if (Args.hasArg(options::OPT_ftest_coverage) ||
       Args.hasArg(options::OPT_coverage))
     CmdArgs.push_back("-femit-coverage-notes");

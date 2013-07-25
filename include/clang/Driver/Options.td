@@ -484,6 +484,8 @@ def finline_functions : Flag<["-"], "finline-functions">, Group<clang_ignored_f_
 def finline : Flag<["-"], "finline">, Group<clang_ignored_f_Group>;
 def finstrument_functions : Flag<["-"], "finstrument-functions">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Generate calls to instrument function entry and exit">;
+def finstrument_functions_size_EQ : Joined<["-"], "finstrument-functions-size=">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Set a minimum number of basic blocks for function instrumentation">;
 def fkeep_inline_functions : Flag<["-"], "fkeep-inline-functions">, Group<clang_ignored_f_Group>;
 def flat__namespace : Flag<["-"], "flat_namespace">;
 def flax_vector_conversions : Flag<["-"], "flax-vector-conversions">, Group<f_Group>;
