@@ -936,5 +936,10 @@ BUILTIN(__builtin_subc, "UiUiCUiCUiCUi*", "n")
 BUILTIN(__builtin_subcl, "ULiULiCULiCULiCULi*", "n")
 BUILTIN(__builtin_subcll, "ULLiULLiCULLiCULLiCULLi*", "n")
 
+// @LOCALMOD-BEGIN
+// NaCl builtins.
+BUILTIN(__nacl_atomic_is_lock_free, "bzvCD*", "n")
+// @LOCALMOD-END
+
 #undef BUILTIN
 #undef LIBBUILTIN
