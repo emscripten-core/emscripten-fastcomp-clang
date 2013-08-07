@@ -20,6 +20,7 @@
 #include "clang/Basic/TargetBuiltins.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/InlineAsm.h" // @LOCALMOD
 #include "llvm/IR/Intrinsics.h"
 
 using namespace clang;
@@ -1034,7 +1035,29 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     // any way to safely use it... but in practice, it mostly works
     // to use it with non-atomic loads and stores to get acquire/release
     // semantics.
-    Builder.CreateFence(llvm::SequentiallyConsistent);
+    // @LOCALMOD-START
+    // Targets can ask that ``__sync_synchronize()`` be surrounded with
+    // compiler fences. This should enforce ordering of more than just
+    // atomic memory accesses, though it won't guarantee that all
+    // accesses (e.g. those to non-escaping objects) won't be reordered.
+    llvm::FunctionType *FTy = llvm::FunctionType::get(VoidTy, false);
+    std::string AsmString;  // Empty.
+    std::string Constraints("~{memory}");
+    bool HasSideEffect = true;
+    if (getTargetHooks().addAsmMemoryAroundSyncSynchronize()) {
+      Builder.CreateCall(
+          llvm::InlineAsm::get(FTy, AsmString, Constraints, HasSideEffect))->
+          addAttribute(llvm::AttributeSet::FunctionIndex,
+                       llvm::Attribute::NoUnwind);
+      Builder.CreateFence(llvm::SequentiallyConsistent);
+      Builder.CreateCall(
+          llvm::InlineAsm::get(FTy, AsmString, Constraints, HasSideEffect))->
+          addAttribute(llvm::AttributeSet::FunctionIndex,
+                       llvm::Attribute::NoUnwind);
+    } else {
+      Builder.CreateFence(llvm::SequentiallyConsistent);
+    }
+    // @LOCALMOD-END
     return RValue::get(0);
   }
 

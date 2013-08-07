@@ -437,6 +437,8 @@ class PNaClTargetCodeGenInfo : public TargetCodeGenInfo {
   /// For PNaCl we don't want llvm.pow.* intrinsics to be emitted instead
   /// of library function calls.
   bool emitIntrinsicForPow() const { return false; }
+  bool addAsmMemoryAroundSyncSynchronize() const { return true; } // @LOCALMOD
+  bool asmMemoryIsFence() const { return true; } // @LOCALMOD
 };
 
 void PNaClABIInfo::computeInfo(CGFunctionInfo &FI) const {

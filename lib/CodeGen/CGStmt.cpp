@@ -1701,6 +1701,18 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
   Result->addAttribute(llvm::AttributeSet::FunctionIndex,
                        llvm::Attribute::NoUnwind);
 
+  // @LOCALMOD-START
+  if (getTargetHooks().asmMemoryIsFence() && IA->isAsmMemory()) {
+    // Targets can ask that ``asm("":::"memory")`` be treated like
+    // ``__sync_synchronize()``.
+    Builder.CreateFence(llvm::SequentiallyConsistent);
+    Builder.CreateCall(
+        llvm::InlineAsm::get(FTy, AsmString, Constraints, HasSideEffect))->
+        addAttribute(llvm::AttributeSet::FunctionIndex,
+                     llvm::Attribute::NoUnwind);
+  }
+  // @LOCALMOD-END
+
   // Slap the source location of the inline asm into a !srcloc metadata on the
   // call.  FIXME: Handle metadata for MS-style inline asms.
   if (const GCCAsmStmt *gccAsmStmt = dyn_cast<GCCAsmStmt>(&S))

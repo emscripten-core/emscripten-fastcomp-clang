@@ -171,6 +171,28 @@ namespace clang {
     /// that unprototyped calls to varargs functions still succeed.
     virtual bool isNoProtoCallVariadic(const CodeGen::CallArgList &args,
                                        const FunctionNoProtoType *fnType) const;
+
+    // @LOCALMOD-START
+    /// Determine whether the sequentially consistent fence generated for
+    /// the legacy GCC-style ``__sync_synchronize()`` builtin should be
+    /// surrounded by empty assembly directives which touch all of
+    /// memory. This allows platforms which aim for portability to
+    /// isolate themselves from changes in sequentially consistent
+    /// fence's semantics, since its intent is to represent the
+    /// C11/C++11 memory model which only orders atomic memory accesses.
+    /// This won't guarantee that all accesses (e.g. those to
+    /// non-escaping objects) will not be reordered.
+    virtual bool addAsmMemoryAroundSyncSynchronize() const {
+      return false;
+    }
+
+    /// Determine whether a full sequentially consistent fence should be
+    /// emitted when ``asm("":::"memory")`` is encountered, treating it
+    /// like ``__sync_synchronize()``.
+    virtual bool asmMemoryIsFence() const {
+      return false;
+    }
+    // @LOCALMOD-END
   };
 }
 
