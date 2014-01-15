@@ -10,7 +10,6 @@
 // CHECK-ASAN-LINUX-NOT: "-lc"
 // CHECK-ASAN-LINUX: libclang_rt.asan-i386.a"
 // CHECK-ASAN-LINUX: "-lpthread"
-// CHECK-ASAN-LINUX: "-lrt"
 // CHECK-ASAN-LINUX: "-ldl"
 // CHECK-ASAN-LINUX-NOT: "-export-dynamic"
 // CHECK-ASAN-LINUX: "--dynamic-list={{.*}}libclang_rt.asan-i386.a.syms"
@@ -25,7 +24,6 @@
 // CHECK-ASAN-LINUX-CXX-NOT: "-lc"
 // CHECK-ASAN-LINUX-CXX: "-whole-archive" "{{.*}}libclang_rt.asan-i386.a" "-no-whole-archive"
 // CHECK-ASAN-LINUX-CXX: "-lpthread"
-// CHECK-ASAN-LINUX-CXX: "-lrt"
 // CHECK-ASAN-LINUX-CXX: "-ldl"
 // CHECK-ASAN-LINUX-CXX: "-export-dynamic"
 // CHECK-ASAN-LINUX-CXX-NOT: "--dynamic-list"
@@ -72,7 +70,6 @@
 // CHECK-TSAN-LINUX-CXX-NOT: stdc++
 // CHECK-TSAN-LINUX-CXX: "-whole-archive" "{{.*}}libclang_rt.tsan-x86_64.a" "-no-whole-archive"
 // CHECK-TSAN-LINUX-CXX: "-lpthread"
-// CHECK-TSAN-LINUX-CXX: "-lrt"
 // CHECK-TSAN-LINUX-CXX: "-ldl"
 // CHECK-TSAN-LINUX-CXX-NOT: "-export-dynamic"
 // CHECK-TSAN-LINUX-CXX: "--dynamic-list={{.*}}libclang_rt.tsan-x86_64.a.syms"
@@ -88,7 +85,6 @@
 // CHECK-MSAN-LINUX-CXX-NOT: stdc++
 // CHECK-MSAN-LINUX-CXX: "-whole-archive" "{{.*}}libclang_rt.msan-x86_64.a" "-no-whole-archive"
 // CHECK-MSAN-LINUX-CXX: "-lpthread"
-// CHECK-MSAN-LINUX-CXX: "-lrt"
 // CHECK-MSAN-LINUX-CXX: "-ldl"
 // CHECK-MSAN-LINUX-CXX-NOT: "-export-dynamic"
 // CHECK-MSAN-LINUX-CXX: "--dynamic-list={{.*}}libclang_rt.msan-x86_64.a.syms"

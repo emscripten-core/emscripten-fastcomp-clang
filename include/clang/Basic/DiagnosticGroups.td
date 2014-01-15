@@ -68,9 +68,7 @@ def : DiagGroup<"discard-qual">;
 def : DiagGroup<"div-by-zero">;
 
 def DocumentationHTML : DiagGroup<"documentation-html">;
-def DocumentationUnknownCommand : DiagGroup<"documentation-unknown-command">;
-def DocumentationPedantic : DiagGroup<"documentation-pedantic",
-                                      [DocumentationUnknownCommand]>;
+def DocumentationPedantic : DiagGroup<"documentation-pedantic">;
 def DocumentationDeprecatedSync : DiagGroup<"documentation-deprecated-sync">;
 def Documentation : DiagGroup<"documentation",
                               [DocumentationHTML,
