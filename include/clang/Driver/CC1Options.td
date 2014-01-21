@@ -456,8 +456,6 @@ def fdeprecated_macro : Flag<["-"], "fdeprecated-macro">,
   HelpText<"Defines the __DEPRECATED macro">;
 def fno_deprecated_macro : Flag<["-"], "fno-deprecated-macro">,
   HelpText<"Undefines the __DEPRECATED macro">;
-def finstrument_functions_size : Separate<["-"], "finstrument-functions-size">,
-  HelpText<"Minimum size of functions to instrument">;
 
 //===----------------------------------------------------------------------===//
 // Header Search Options

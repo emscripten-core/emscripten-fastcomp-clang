@@ -222,27 +222,8 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
   // Emit function epilog (to return).
   EmitReturnBlock();
 
-  if (ShouldInstrumentFunction()) {
-      // The size of the function isn't known during StartFunction, so in order
-      // to instrument selectively based on function size, we need to wait
-      // until the end and insert both the entry and exit instrumentation
-      llvm::BasicBlock *CurBlock = Builder.GetInsertBlock();
-      llvm::BasicBlock *BeginBlock = &CurFn->getEntryBlock();
-
-// @LOCALMOD-BEGIN
-      if (CGM.getCodeGenOpts().InstrumentFunctionsPNaCl) {
-        Builder.SetInsertPoint(BeginBlock, BeginBlock->begin());
-        EmitFunctionInstrumentation("__pnacl_profile_func_enter");
-        Builder.SetInsertPoint(CurBlock);
-        EmitFunctionInstrumentation("__pnacl_profile_func_exit");
-      } else {
-        Builder.SetInsertPoint(BeginBlock, BeginBlock->begin());
-        EmitFunctionInstrumentation("__cyg_profile_func_enter");
-        Builder.SetInsertPoint(CurBlock);
-        EmitFunctionInstrumentation("__cyg_profile_func_exit");
-      }
-// @LOCALMOD-END
-  }
+  if (ShouldInstrumentFunction())
+    EmitFunctionInstrumentation("__cyg_profile_func_exit");
 
   // Emit debug descriptor for function end.
   if (CGDebugInfo *DI = getDebugInfo()) {
@@ -293,55 +274,31 @@ bool CodeGenFunction::ShouldInstrumentFunction() {
     return false;
   if (!CurFuncDecl || CurFuncDecl->hasAttr<NoInstrumentFunctionAttr>())
     return false;
-
-  // If not specified, defaults to 0.
-  int Size = CGM.getCodeGenOpts().InstrumentFunctionsSize;
-  return CurFn->getBasicBlockList().size() >= Size;
+  return true;
 }
 
 /// EmitFunctionInstrumentation - Emit LLVM code to call the specified
 /// instrumentation function with the current function and the call site, if
 /// function instrumentation is enabled.
 void CodeGenFunction::EmitFunctionInstrumentation(const char *Fn) {
+  // void __cyg_profile_func_{enter,exit} (void *this_fn, void *call_site);
   llvm::PointerType *PointerTy = Int8PtrTy;
+  llvm::Type *ProfileFuncArgs[] = { PointerTy, PointerTy };
+  llvm::FunctionType *FunctionTy =
+    llvm::FunctionType::get(VoidTy, ProfileFuncArgs, false);
 
-// @LOCALMOD-BEGIN
-  if (CGM.getCodeGenOpts().InstrumentFunctionsPNaCl) {
-    const FunctionDecl *CFD = dyn_cast<FunctionDecl>(CurFuncDecl);
-    if (!CFD)
-      return;
+  llvm::Constant *F = CGM.CreateRuntimeFunction(FunctionTy, Fn);
+  llvm::CallInst *CallSite = Builder.CreateCall(
+    CGM.getIntrinsic(llvm::Intrinsic::returnaddress),
+    llvm::ConstantInt::get(Int32Ty, 0),
+    "callsite");
 
-    llvm::Type *ProfileFuncArgs[] = { PointerTy };
-    llvm::FunctionType *FunctionTy =
-      llvm::FunctionType::get(VoidTy, ProfileFuncArgs, false);
+  llvm::Value *args[] = {
+    llvm::ConstantExpr::getBitCast(CurFn, PointerTy),
+    CallSite
+  };
 
-    std::string NameStr = CFD->getQualifiedNameAsString();
-    llvm::Constant *F = CGM.CreateRuntimeFunction(FunctionTy, Fn);
-    llvm::Constant *FName = CGM.GetAddrOfConstantCString(NameStr, NULL, 16u);
-    llvm::Value *args[] = {
-      llvm::ConstantExpr::getBitCast(FName, PointerTy)
-    };
-
-    EmitNounwindRuntimeCall(F, args);
-  } else {
-    llvm::Type *ProfileFuncArgs[] = { PointerTy, PointerTy };
-    llvm::FunctionType *FunctionTy =
-      llvm::FunctionType::get(VoidTy, ProfileFuncArgs, false);
-
-    llvm::Constant *F = CGM.CreateRuntimeFunction(FunctionTy, Fn);
-    llvm::CallInst *CallSite = Builder.CreateCall(
-      CGM.getIntrinsic(llvm::Intrinsic::returnaddress),
-      llvm::ConstantInt::get(Int32Ty, 0),
-      "callsite");
-
-    llvm::Value *args[] = {
-      llvm::ConstantExpr::getBitCast(CurFn, PointerTy),
-      CallSite
-    };
-
-    EmitNounwindRuntimeCall(F, args);
-  }
-// @LOCALMOD-END
+  EmitNounwindRuntimeCall(F, args);
 }
 
 void CodeGenFunction::EmitMCountInstrumentation() {
@@ -583,6 +540,9 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
     DI->setLocation(StartLoc);
     DI->EmitFunctionStart(GD, FnType, CurFn, Builder);
   }
+
+  if (ShouldInstrumentFunction())
+    EmitFunctionInstrumentation("__cyg_profile_func_enter");
 
   if (CGM.getCodeGenOpts().InstrumentForProfiling)
     EmitMCountInstrumentation();
