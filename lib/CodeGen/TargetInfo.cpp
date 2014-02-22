@@ -411,6 +411,62 @@ ABIArgInfo DefaultABIInfo::classifyReturnType(QualType RetTy) const {
 }
 
 //===----------------------------------------------------------------------===//
+// Emscripten ABI Implementation
+//
+// This is a very simple ABI that relies a lot on DefaultABIInfo.
+//===----------------------------------------------------------------------===//
+
+class EmscriptenABIInfo : public DefaultABIInfo {
+ public:
+  explicit EmscriptenABIInfo(CodeGen::CodeGenTypes &CGT) : DefaultABIInfo(CGT) {}
+
+  ABIArgInfo classifyReturnType(QualType RetTy) const;
+  ABIArgInfo classifyArgumentType(QualType RetTy) const;
+};
+
+class EmscriptenTargetCodeGenInfo : public TargetCodeGenInfo {
+ public:
+  explicit EmscriptenTargetCodeGenInfo(CodeGen::CodeGenTypes &CGT)
+    : TargetCodeGenInfo(new EmscriptenABIInfo(CGT)) {}
+
+  // TODO: Re-evaluate whether these hacks, borrowed from PNaCl, are necessary.
+  bool addAsmMemoryAroundSyncSynchronize() const { return true; }
+  bool asmMemoryIsFence() const { return true; }
+};
+
+/// \brief Classify argument of given type \p Ty.
+ABIArgInfo EmscriptenABIInfo::classifyArgumentType(QualType Ty) const {
+  if (isAggregateTypeForABI(Ty)) {
+    if (CGCXXABI::RecordArgABI RAA = getRecordArgABI(Ty, CGT))
+      return ABIArgInfo::getIndirect(0, RAA == CGCXXABI::RAA_DirectInMemory);
+    return ABIArgInfo::getIndirect(0);
+  }
+
+  // We can handle floating-point values directly.
+  if (Ty->isFloatingType())
+    return ABIArgInfo::getDirect();
+
+  // Otherwise just do the default thing.
+  return DefaultABIInfo::classifyArgumentType(Ty);
+}
+
+ABIArgInfo EmscriptenABIInfo::classifyReturnType(QualType RetTy) const {
+  if (isAggregateTypeForABI(RetTy)) {
+    // As an optimization, lower single-element structs to just return a
+    // regular value.
+    if (const Type *SeltTy = isSingleElementStruct(RetTy, getContext()))
+      return ABIArgInfo::getDirect(CGT.ConvertType(QualType(SeltTy, 0)));
+  }
+
+  // We can handle floating-point values directly.
+  if (RetTy->isFloatingType())
+    return ABIArgInfo::getDirect();
+
+  // Otherwise just do the default thing.
+  return DefaultABIInfo::classifyReturnType(RetTy);
+}
+
+//===----------------------------------------------------------------------===//
 // le32/PNaCl bitcode ABI Implementation
 //
 // This is a simplified version of the x86_32 ABI.  Arguments and return values
@@ -5100,6 +5156,9 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
   switch (Triple.getArch()) {
   default:
     return *(TheTargetCodeGenInfo = new DefaultTargetCodeGenInfo(Types));
+
+  case llvm::Triple::asmjs:
+    return *(TheTargetCodeGenInfo = new EmscriptenTargetCodeGenInfo(Types));
 
   case llvm::Triple::le32:
     return *(TheTargetCodeGenInfo = new PNaClTargetCodeGenInfo(Types));
