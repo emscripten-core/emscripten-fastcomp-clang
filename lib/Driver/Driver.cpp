@@ -1759,6 +1759,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
     case llvm::Triple::Win32:
       TC = new toolchains::Windows(*this, Target, Args);
       break;
+    case llvm::Triple::Emscripten:
+      TC = new toolchains::EmscriptenToolChain(*this, Target, Args);
+      break;
     case llvm::Triple::MinGW32:
       // FIXME: We need a MinGW toolchain. Fallthrough for now.
     default:

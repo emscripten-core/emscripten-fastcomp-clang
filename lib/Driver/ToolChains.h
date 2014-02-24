@@ -577,6 +577,20 @@ public:
   bool isPICDefaultForced() const;
 };
 
+/// EmscriptenToolChain - A tool chain for the Emscripten C/C++ to JS compiler.
+class LLVM_LIBRARY_VISIBILITY EmscriptenToolChain : public ToolChain {
+public:
+  EmscriptenToolChain(const Driver &D, const llvm::Triple& Triple,
+                      const ArgList &Args);
+  ~EmscriptenToolChain();
+
+  bool IsMathErrnoDefault() const;
+  bool IsObjCNonFragileABIDefault() const;
+  bool isPICDefault() const;
+  bool isPIEDefault() const;
+  bool isPICDefaultForced() const;
+};
+
 class LLVM_LIBRARY_VISIBILITY Windows : public ToolChain {
 public:
   Windows(const Driver &D, const llvm::Triple& Triple, const ArgList &Args);
