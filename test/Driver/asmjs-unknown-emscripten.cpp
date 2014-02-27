@@ -45,29 +45,19 @@ int align_vl = __alignof(va_list);
 void __LITTLE_ENDIAN__defined() {}
 #endif
 
-// CHECK: __native_client__defined
-#ifdef __native_client__
-void __native_client__defined() {}
+// CHECK: __asmjs__defined
+#ifdef __asmjs__
+void __asmjs__defined() {}
 #endif
 
-// CHECK: __le32__defined
-#ifdef __le32__
-void __le32__defined() {}
-#endif
-
-// CHECK: __pnacl__defined
-#ifdef __pnacl__
-void __pnacl__defined() {}
+// CHECK: __EMSCRIPTEN__defined
+#ifdef __EMSCRIPTEN__
+void __EMSCRIPTEN__defined() {}
 #endif
 
 // CHECK: unixdefined
 #ifdef unix
 void unixdefined() {}
-#endif
-
-// CHECK: __ELF__defined
-#ifdef __ELF__
-void __ELF__defined() {}
 #endif
 
 // CHECK: _GNU_SOURCEdefined
