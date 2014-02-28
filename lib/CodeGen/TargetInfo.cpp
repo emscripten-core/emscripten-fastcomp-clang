@@ -428,10 +428,6 @@ class EmscriptenTargetCodeGenInfo : public TargetCodeGenInfo {
  public:
   explicit EmscriptenTargetCodeGenInfo(CodeGen::CodeGenTypes &CGT)
     : TargetCodeGenInfo(new EmscriptenABIInfo(CGT)) {}
-
-  // TODO: Re-evaluate whether these hacks, borrowed from PNaCl, are necessary.
-  bool addAsmMemoryAroundSyncSynchronize() const { return true; }
-  bool asmMemoryIsFence() const { return true; }
 };
 
 /// \brief Classify argument of given type \p Ty.
