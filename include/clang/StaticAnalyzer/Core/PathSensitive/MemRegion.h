@@ -1272,6 +1272,11 @@ public:
   const BlockDataRegion *getBlockDataRegion(const BlockTextRegion *bc,
                                             const LocationContext *lc = NULL);
 
+  /// Create a CXXTempObjectRegion for temporaries which are lifetime-extended
+  /// by static references. This differs from getCXXTempObjectRegion in the
+  /// super-region used.
+  const CXXTempObjectRegion *getCXXStaticTempObjectRegion(const Expr *Ex);
+
 private:
   template <typename RegionTy, typename A1>
   RegionTy* getRegion(const A1 a1);
@@ -1304,6 +1309,39 @@ private:
 inline ASTContext &MemRegion::getContext() const {
   return getMemRegionManager()->getContext();
 }
+
+//===----------------------------------------------------------------------===//
+// Means for storing region/symbol handling traits.
+//===----------------------------------------------------------------------===//
+
+/// Information about invalidation for a particular region/symbol.
+class RegionAndSymbolInvalidationTraits {
+  typedef unsigned char StorageTypeForKinds;
+  llvm::DenseMap<const MemRegion *, StorageTypeForKinds> MRTraitsMap;
+  llvm::DenseMap<SymbolRef, StorageTypeForKinds> SymTraitsMap;
+
+  typedef llvm::DenseMap<const MemRegion *, StorageTypeForKinds>::const_iterator
+      const_region_iterator;
+  typedef llvm::DenseMap<SymbolRef, StorageTypeForKinds>::const_iterator
+      const_symbol_iterator;
+
+public:
+  /// \brief Describes different invalidation traits.
+  enum InvalidationKinds {
+    /// Tells that a region's contents is not changed.
+    TK_PreserveContents = 0x1,
+    /// Suppress pointer-escaping of a region.
+    TK_SuppressEscape = 0x2
+
+    // Do not forget to extend StorageTypeForKinds if number of traits exceed 
+    // the number of bits StorageTypeForKinds can store.
+  };
+
+  void setTrait(SymbolRef Sym, InvalidationKinds IK);
+  void setTrait(const MemRegion *MR, InvalidationKinds IK);
+  bool hasTrait(SymbolRef Sym, InvalidationKinds IK);
+  bool hasTrait(const MemRegion *MR, InvalidationKinds IK);
+};
   
 } // end GR namespace
 
