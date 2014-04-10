@@ -269,6 +269,7 @@ public:
     // handled outside of clang. TODO: Handling this within clang may be
     // beneficial.
     this->UserLabelPrefix = "";
+    this->MaxAtomicPromoteWidth = this->MaxAtomicInlineWidth = 32;
   }
 };
 
