@@ -290,10 +290,10 @@ option(CLANG_INCLUDE_TESTS
        "Generate build targets for the Clang unit tests."
        ${LLVM_INCLUDE_TESTS})
 
-# TODO: docs.
-add_subdirectory(test)
-
 if( CLANG_INCLUDE_TESTS )
+  # TODO: docs.
+  add_subdirectory(test) # XXX Emscripten: Backport fix from upstream LLVM 3.4 to actually skip tests if CLANG_INCLUDE_TESTS = OFF
+
   add_subdirectory(unittests)
 endif()
 
