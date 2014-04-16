@@ -269,6 +269,7 @@ public:
     // handled outside of clang. TODO: Handling this within clang may be
     // beneficial.
     this->UserLabelPrefix = "";
+    this->MaxAtomicPromoteWidth = this->MaxAtomicInlineWidth = 32;
   }
 };
 
@@ -5102,8 +5103,11 @@ public:
     // the direction suggested here:
     //   https://bugzilla.mozilla.org/show_bug.cgi?id=904913#c21
     // We can still set the preferred alignment to 16 bytes though.
+    //
+    // Set the natural stack alignment to 16 bytes to accomodate 128-bit
+    // aligned vectors.
     DescriptionString = "e-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-"
-                        "f32:32:32-f64:64:64-p:32:32:32-v128:32:128-n32";
+                        "f32:32:32-f64:64:64-p:32:32:32-v128:32:128-n32-S128";
   }
 
   void getDefaultFeatures(llvm::StringMap<bool> &Features) const {

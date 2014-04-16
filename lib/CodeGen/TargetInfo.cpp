@@ -421,30 +421,32 @@ class EmscriptenABIInfo : public DefaultABIInfo {
   explicit EmscriptenABIInfo(CodeGen::CodeGenTypes &CGT) : DefaultABIInfo(CGT) {}
 
   ABIArgInfo classifyReturnType(QualType RetTy) const;
-  ABIArgInfo classifyArgumentType(QualType RetTy) const;
+  ABIArgInfo classifyArgumentType(QualType Ty) const;
+
+  // DefaultABIInfo's classifyReturnType and classifyArgumentType are
+  // non-virtual, but computeInfo is virtual, so we overload that.
+  virtual void computeInfo(CGFunctionInfo &FI) const {
+    FI.getReturnInfo() = classifyReturnType(FI.getReturnType());
+    for (CGFunctionInfo::arg_iterator it = FI.arg_begin(), ie = FI.arg_end();
+         it != ie; ++it)
+      it->info = classifyArgumentType(it->type);
+  }
 };
 
 class EmscriptenTargetCodeGenInfo : public TargetCodeGenInfo {
  public:
   explicit EmscriptenTargetCodeGenInfo(CodeGen::CodeGenTypes &CGT)
     : TargetCodeGenInfo(new EmscriptenABIInfo(CGT)) {}
-
-  // TODO: Re-evaluate whether these hacks, borrowed from PNaCl, are necessary.
-  bool addAsmMemoryAroundSyncSynchronize() const { return true; }
-  bool asmMemoryIsFence() const { return true; }
 };
 
 /// \brief Classify argument of given type \p Ty.
 ABIArgInfo EmscriptenABIInfo::classifyArgumentType(QualType Ty) const {
   if (isAggregateTypeForABI(Ty)) {
+    unsigned TypeAlign = getContext().getTypeAlignInChars(Ty).getQuantity();
     if (CGCXXABI::RecordArgABI RAA = getRecordArgABI(Ty, CGT))
-      return ABIArgInfo::getIndirect(0, RAA == CGCXXABI::RAA_DirectInMemory);
-    return ABIArgInfo::getIndirect(0);
+      return ABIArgInfo::getIndirect(TypeAlign, RAA == CGCXXABI::RAA_DirectInMemory);
+    return ABIArgInfo::getIndirect(TypeAlign);
   }
-
-  // We can handle floating-point values directly.
-  if (Ty->isFloatingType())
-    return ABIArgInfo::getDirect();
 
   // Otherwise just do the default thing.
   return DefaultABIInfo::classifyArgumentType(Ty);
@@ -457,10 +459,6 @@ ABIArgInfo EmscriptenABIInfo::classifyReturnType(QualType RetTy) const {
     if (const Type *SeltTy = isSingleElementStruct(RetTy, getContext()))
       return ABIArgInfo::getDirect(CGT.ConvertType(QualType(SeltTy, 0)));
   }
-
-  // We can handle floating-point values directly.
-  if (RetTy->isFloatingType())
-    return ABIArgInfo::getDirect();
 
   // Otherwise just do the default thing.
   return DefaultABIInfo::classifyReturnType(RetTy);
