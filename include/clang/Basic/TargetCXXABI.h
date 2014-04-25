@@ -134,6 +134,24 @@ public:
     llvm_unreachable("bad ABI kind");
   }
 
+  /// \brief Are pointers to member functions differently aligned?
+  bool arePointersToMemberFunctionsAligned() const {
+    switch (getKind()) {
+    case Emscripten:
+    case GenericARM:
+    case GenericAArch64:
+      // ARM-style pointers to member functions put the discriminator in the
+      // this adjustment, so they don't require functions to have any special
+      // alignment.
+      return false;
+    case GenericItanium:
+    case iOS:
+    case Microsoft:
+      return true;
+    }
+    llvm_unreachable("bad ABI kind");
+  }
+
   /// \brief Is the default C++ member function calling convention
   /// the same as the default calling convention?
   bool isMemberFunctionCCDefault() const {
