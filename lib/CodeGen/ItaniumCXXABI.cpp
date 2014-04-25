@@ -231,18 +231,23 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
     return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true,
                              /* UseARMGuardVarABI = */ true);
 
+  case TargetCXXABI::Emscripten:
+    // Use ARM-style method pointers so that generated code
+    // does not assume anything about the alignment of function
+    // pointers.
+    return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true,
+                             /* UseARMGuardVarABI = */ false);
+
   case TargetCXXABI::GenericItanium:
-    switch (CGM.getContext().getTargetInfo().getTriple().getArch()) {
-    case llvm::Triple::le32:
-    case llvm::Triple::asmjs:
-      // Use ARM-style method pointers so that generated code
+    if (CGM.getContext().getTargetInfo().getTriple().getArch()
+        == llvm::Triple::le32) {
+      // For PNaCl, use ARM-style method pointers so that PNaCl code
       // does not assume anything about the alignment of function
       // pointers.
       return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true,
                                /* UseARMGuardVarABI = */ false);
-    default:
-      return new ItaniumCXXABI(CGM);
     }
+    return new ItaniumCXXABI(CGM);
 
   case TargetCXXABI::Microsoft:
     llvm_unreachable("Microsoft ABI is not Itanium-based");

@@ -57,6 +57,7 @@ static CGCXXABI &createCXXABI(CodeGenModule &CGM) {
   switch (CGM.getTarget().getCXXABI().getKind()) {
   case TargetCXXABI::GenericAArch64:
   case TargetCXXABI::GenericARM:
+  case TargetCXXABI::Emscripten:
   case TargetCXXABI::iOS:
   case TargetCXXABI::GenericItanium:
     return *CreateItaniumCXXABI(CGM);

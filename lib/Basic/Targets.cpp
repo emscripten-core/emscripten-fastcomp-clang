@@ -270,6 +270,11 @@ public:
     // beneficial.
     this->UserLabelPrefix = "";
     this->MaxAtomicPromoteWidth = this->MaxAtomicInlineWidth = 32;
+
+    // Emscripten uses the Itanium ABI mostly, but it uses ARM-style pointers
+    // to member functions so that it can avoid having to align function
+    // addresses.
+    this->TheCXXABI.set(TargetCXXABI::Emscripten);
   }
 };
 
