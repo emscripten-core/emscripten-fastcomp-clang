@@ -71,6 +71,10 @@ public:
     ///   - guard variables  are smaller.
     GenericAArch64,
 
+    /// Emscripten uses the Itanium C++, with the exception that it uses
+    /// ARM-style pointers to member functions.
+    Emscripten,
+
     /// The Microsoft ABI is the ABI used by Microsoft Visual Studio (and
     /// compatible compilers).
     ///
@@ -104,6 +108,7 @@ public:
     case GenericAArch64:
     case GenericItanium:
     case GenericARM:
+    case Emscripten:
     case iOS:
       return true;
 
@@ -119,9 +124,28 @@ public:
     case GenericAArch64:
     case GenericItanium:
     case GenericARM:
+    case Emscripten:
     case iOS:
       return false;
 
+    case Microsoft:
+      return true;
+    }
+    llvm_unreachable("bad ABI kind");
+  }
+
+  /// \brief Are pointers to member functions differently aligned?
+  bool arePointersToMemberFunctionsAligned() const {
+    switch (getKind()) {
+    case Emscripten:
+    case GenericARM:
+    case GenericAArch64:
+      // ARM-style pointers to member functions put the discriminator in the
+      // this adjustment, so they don't require functions to have any special
+      // alignment.
+      return false;
+    case GenericItanium:
+    case iOS:
     case Microsoft:
       return true;
     }
@@ -187,6 +211,7 @@ public:
 
     case GenericAArch64:
     case GenericItanium:
+    case Emscripten:
     case iOS:   // old iOS compilers did not follow this rule
     case Microsoft:
       return true;
@@ -233,6 +258,7 @@ public:
     case GenericItanium:
     case GenericAArch64:
     case GenericARM:
+    case Emscripten:
     case iOS:
       return UseTailPaddingUnlessPOD03;
 
