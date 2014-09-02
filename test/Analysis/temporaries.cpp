@@ -1,6 +1,6 @@
 // RUN: %clang_cc1 -analyze -analyzer-checker=core,debug.ExprInspection -verify -w -std=c++03 %s
 // RUN: %clang_cc1 -analyze -analyzer-checker=core,debug.ExprInspection -verify -w -std=c++11 %s
-// RUN: %clang_cc1 -analyze -analyzer-checker=core,debug.ExprInspection -verify -w -analyzer-config cfg-temporary-dtors=true %s -DTEMPORARY_DTORS
+// RUN: %clang_cc1 -analyze -analyzer-checker=core,debug.ExprInspection -DTEMPORARY_DTORS -verify -w -analyzer-config cfg-temporary-dtors=true %s 
 
 extern bool clang_analyzer_eval(bool);
 
@@ -111,14 +111,15 @@ namespace compound_literals {
 }
 
 namespace destructors {
-  void testPR16664Crash() {
+  void testPR16664andPR18159Crash() {
     struct Dtor {
       ~Dtor();
     };
     extern bool coin();
     extern bool check(const Dtor &);
 
-    // Don't crash here.
+    // Regression test: we used to assert here when tmp dtors are enabled.
+    // PR16664 and PR18159
     if (coin() && (coin() || coin() || check(Dtor()))) {
       Dtor();
     }
@@ -147,9 +148,6 @@ namespace destructors {
   extern bool check(const NoReturnDtor &);
 
   void testConsistencyIf(int i) {
-    if (i == 5 && (i == 4 || i == 5 || check(NoReturnDtor())))
-      clang_analyzer_eval(true); // expected-warning{{TRUE}}
-
     if (i != 5)
       return;
     if (i == 5 && (i == 4 || check(NoReturnDtor()) || i == 5)) {
@@ -170,8 +168,13 @@ namespace destructors {
     clang_analyzer_eval(true); // no warning, unreachable code
   }
 
+  // Regression test: we used to assert here.
+  // PR16664 and PR18159
   void testConsistencyNested(int i) {
     extern bool compute(bool);
+
+    if (i == 5 && (i == 4 || i == 5 || check(NoReturnDtor())))
+      clang_analyzer_eval(true);  // expected-warning{{TRUE}}
 
     if (i == 5 && (i == 4 || i == 5 || check(NoReturnDtor())))
       clang_analyzer_eval(true);  // expected-warning{{TRUE}}
@@ -183,16 +186,54 @@ namespace destructors {
                 (i == 4 || compute(true) ||
                  compute(i == 5 && (i == 4 || check(NoReturnDtor()))))) ||
         i != 4) {
-      clang_analyzer_eval(true); // expected-warning{{TRUE}}
+      clang_analyzer_eval(true);  // expected-warning{{TRUE}}
     }
 
     if (compute(i == 5 &&
                 (i == 4 || i == 4 ||
                  compute(i == 5 && (i == 4 || check(NoReturnDtor()))))) ||
         i != 4) {
-      clang_analyzer_eval(true); // no warning, unreachable code
+      // FIXME: This shouldn't cause a warning.
+      clang_analyzer_eval(true);  // expected-warning{{TRUE}}
     }
   }
+
+  // PR16664 and PR18159
+  void testConsistencyNestedSimple(bool value) {
+    if (value) {
+      if (!value || check(NoReturnDtor())) {
+        clang_analyzer_eval(true); // no warning, unreachable code
+      }
+    }
+  }
+
+  // PR16664 and PR18159
+  void testConsistencyNestedComplex(bool value) {
+    if (value) {
+      if (!value || !value || check(NoReturnDtor())) {
+        // FIXME: This shouldn't cause a warning.
+        clang_analyzer_eval(true); // expected-warning{{TRUE}}
+      }
+    }
+  }
+
+  // PR16664 and PR18159
+  void testConsistencyNestedWarning(bool value) {
+    if (value) {
+      if (!value || value || check(NoReturnDtor())) {
+        clang_analyzer_eval(true); // expected-warning{{TRUE}}
+      }
+    }
+  }
+
+  void testBinaryOperatorShortcut(bool value) {
+    if (value) {
+      if (false && false && check(NoReturnDtor()) && true) {
+        clang_analyzer_eval(true);
+      }
+    }
+  }
+
 #endif // TEMPORARY_DTORS
 }
 
