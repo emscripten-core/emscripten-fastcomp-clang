@@ -1056,12 +1056,22 @@ Generic_GCC::GCCInstallationDetector::GCCInstallationDetector(
       Prefixes.push_back(D.SysRoot + "/usr");
     }
 
-    // Then look for gcc installed alongside clang.
-    Prefixes.push_back(D.InstalledDir + "/..");
+    // @LOCALMOD-START
+    if (TargetTriple.getOS() == llvm::Triple::NaCl) {
+      if (TargetTriple.getArch() == llvm::Triple::arm)
+        Prefixes.push_back(D.InstalledDir + "/../arm-nacl");
+      else
+        Prefixes.push_back(D.InstalledDir + "/../x86_64-nacl");
+    } else {
+      // Then look for gcc installed alongside clang.
+      Prefixes.push_back(D.InstalledDir + "/..");
 
-    // And finally in /usr.
-    if (D.SysRoot.empty())
-      Prefixes.push_back("/usr");
+      // And finally in /usr.
+      if (D.SysRoot.empty())
+        Prefixes.push_back("/usr");
+    }
+    // @LOCALMOD-END
+
   }
 
   // Loop over the various components which exist and select the best GCC
@@ -1822,6 +1832,134 @@ StringRef Hexagon_TC::GetTargetCPU(const ArgList &Args)
   }
 }
 // End Hexagon
+
+// @LOCALMOD-START
+/// NaCl Toolchain
+NaCl_TC::NaCl_TC(const Driver &D, const llvm::Triple &Triple,
+                 const ArgList &Args)
+  : Linux(D, Triple, Args) {
+
+  // Remove paths added by Linux toolchain. NaCl Toolchain can not use the
+  // default paths, and must instead only use the paths provided
+  // with this toolchain based on architecture.
+  path_list& file_paths = getFilePaths();
+  path_list& prog_paths = getProgramPaths();
+  
+  file_paths.clear();
+  prog_paths.clear();
+
+  // Path for library files (libc.a, ...)
+  std::string FilePath(getDriver().Dir + "/../");
+
+  // Path for tools (clang, ld, etc..)
+  std::string ProgPath(getDriver().Dir + "/../");
+
+  // Path for toolchain libraries (libgcc.a, ...)
+  std::string ToolPath(getDriver().ResourceDir + "/lib/");
+
+  switch(Triple.getArch()) {
+    case llvm::Triple::x86: {
+      FilePath += "x86_64-nacl/lib32";
+      ProgPath += "x86_64-nacl/bin";
+      ToolPath += "i686-nacl";
+      break;
+    }
+    case llvm::Triple::x86_64: {
+      FilePath += "x86_64-nacl/lib";
+      ProgPath += "x86_64-nacl/bin";
+      ToolPath += "x86_64-nacl";
+      break;
+    }
+    case llvm::Triple::arm: {
+      FilePath += "arm-nacl/lib";
+      ProgPath += "arm-nacl/bin";
+      ToolPath += "arm-nacl";
+      break;
+    }
+    default:
+      break;
+  }
+
+  file_paths.push_back(FilePath);
+  file_paths.push_back(ToolPath);
+  prog_paths.push_back(ProgPath);
+
+  // Use provided linker, not system linker
+  Linker = GetProgramPath("ld");
+}
+
+void NaCl_TC::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
+                                        ArgStringList &CC1Args) const {
+  const Driver &D = getDriver();
+  if (DriverArgs.hasArg(options::OPT_nostdinc))
+    return;
+
+  if (!DriverArgs.hasArg(options::OPT_nobuiltininc)) {
+    SmallString<128> P(D.ResourceDir);
+    llvm::sys::path::append(P, "include");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+  }
+
+  if (DriverArgs.hasArg(options::OPT_nostdlibinc))
+    return;
+
+  if (getTriple().getArch() == llvm::Triple::arm) {
+    SmallString<128> P(D.Dir + "/../");
+    llvm::sys::path::append(P, "arm-nacl/include");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+  } else if (getTriple().getArch() == llvm::Triple::x86) {
+    SmallString<128> P(D.Dir + "/../");
+    llvm::sys::path::append(P, "x86_64-nacl/include");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+  } else if (getTriple().getArch() == llvm::Triple::x86_64) {
+    SmallString<128> P(D.Dir + "/../");
+    llvm::sys::path::append(P, "x86_64-nacl/include");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+  }
+}
+
+void NaCl_TC::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
+                                          ArgStringList &CC1Args) const {
+  const Driver &D = getDriver();
+  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
+      DriverArgs.hasArg(options::OPT_nostdincxx))
+    return;
+
+  if (getTriple().getArch() == llvm::Triple::arm) {
+    SmallString<128> P(D.Dir + "/../");
+    llvm::sys::path::append(P, "arm-nacl/include/c++/v1");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+  } else if (getTriple().getArch() == llvm::Triple::x86) {
+    SmallString<128> P(D.Dir + "/../");
+    llvm::sys::path::append(P, "x86_64-nacl/include/c++/v1");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+  } else if (getTriple().getArch() == llvm::Triple::x86_64) {
+    SmallString<128> P(D.Dir + "/../");
+    llvm::sys::path::append(P, "x86_64-nacl/include/c++/v1");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+  }
+}
+
+
+ToolChain::CXXStdlibType NaCl_TC::GetCXXStdlibType(const ArgList &Args) const{
+  if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
+    StringRef Value = A->getValue();
+    if (Value == "libc++")
+      return ToolChain::CST_Libcxx;
+    if (Value == "libstdc++")
+      return ToolChain::CST_Libstdcxx;
+    getDriver().Diag(diag::err_drv_invalid_stdlib_name)
+      << A->getAsString(Args);
+  }
+
+  return ToolChain::CST_Libcxx;
+}
+
+Tool *NaCl_TC::buildLinker() const {
+  return new tools::nacltools::Link(*this);
+}
+// End NaCl
+// @LOCALMOD-END
 
 /// TCEToolChain - A tool chain using the llvm bitcode tools to perform
 /// all subcommands. See http://tce.cs.tut.fi for our peculiar target.

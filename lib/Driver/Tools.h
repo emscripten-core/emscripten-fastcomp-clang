@@ -471,6 +471,27 @@ namespace gnutools {
                               const char *LinkingOutput) const;
   };
 }
+
+// @LOCALMOD-BEGIN
+/// nacltools -- Directly call GNU Binutils' assembler and linker.
+namespace nacltools {
+  class LLVM_LIBRARY_VISIBILITY Link : public Tool  {
+  public:
+    Link(const ToolChain &TC) : Tool("NaCl::Link", "linker", TC) {}
+
+    virtual bool hasIntegratedCPP() const { return false; }
+    virtual bool isLinkJob() const { return true; }
+
+    virtual void ConstructJob(Compilation &C, const JobAction &JA,
+                              const InputInfo &Output,
+                              const InputInfoList &Inputs,
+                              const llvm::opt::ArgList &TCArgs,
+                              const char *LinkingOutput) const;
+  };
+}
+// @LOCALMOD-END
+
+
   /// minix -- Directly call GNU Binutils assembler and linker
 namespace minix {
   class LLVM_LIBRARY_VISIBILITY Assemble : public Tool  {
