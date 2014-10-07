@@ -6651,10 +6651,9 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
       // TODO(dschuff): Remove this explicit -lnacl and make -lc a linker script
       // like arm-nacl-gcc
       CmdArgs.push_back("-lnacl");
-
-      if (Args.hasArg(options::OPT_pthread) ||
-          Args.hasArg(options::OPT_pthreads))
-        CmdArgs.push_back("-lpthread");
+      // libc++ and PPAPI programs always require libpthread, so just always
+      // include it in the group.
+      CmdArgs.push_back("-lpthread");
 
       CmdArgs.push_back("-lgcc");
       CmdArgs.push_back("--as-needed");

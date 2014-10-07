@@ -1918,12 +1918,21 @@ void NaCl_TC::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   }
 }
 
+void NaCl_TC::AddCXXStdlibLibArgs(const ArgList &Args,
+                                    ArgStringList &CmdArgs) const {
+  // Allow and ignore -stdlib=libc++ without warning, but not libstdc++
+  GetCXXStdlibType(Args);
+  CmdArgs.push_back("-lc++");
+}
 void NaCl_TC::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
                                           ArgStringList &CC1Args) const {
   const Driver &D = getDriver();
   if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
       DriverArgs.hasArg(options::OPT_nostdincxx))
     return;
+
+  // Allow and ignore -stdlib=libc++ without warning, but not libstdc++
+  GetCXXStdlibType(DriverArgs);
 
   if (getTriple().getArch() == llvm::Triple::arm) {
     SmallString<128> P(D.Dir + "/../");
@@ -1941,13 +1950,11 @@ void NaCl_TC::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
 }
 
 
-ToolChain::CXXStdlibType NaCl_TC::GetCXXStdlibType(const ArgList &Args) const{
+ToolChain::CXXStdlibType NaCl_TC::GetCXXStdlibType(const ArgList &Args) const {
   if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
     StringRef Value = A->getValue();
     if (Value == "libc++")
       return ToolChain::CST_Libcxx;
-    if (Value == "libstdc++")
-      return ToolChain::CST_Libstdcxx;
     getDriver().Diag(diag::err_drv_invalid_stdlib_name)
       << A->getAsString(Args);
   }

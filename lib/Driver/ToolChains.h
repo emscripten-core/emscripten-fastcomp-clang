@@ -649,6 +649,10 @@ public:
   virtual CXXStdlibType
   GetCXXStdlibType(const llvm::opt::ArgList &Args) const;
 
+  virtual void
+  AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
+                      llvm::opt::ArgStringList &CmdArgs) const;
+
 protected:
   virtual Tool *buildLinker() const;
 };
