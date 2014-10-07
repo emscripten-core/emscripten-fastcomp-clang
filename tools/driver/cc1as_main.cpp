@@ -29,6 +29,7 @@
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCNaCl.h" // @LOCALMOD
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCParser/MCAsmParser.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -361,6 +362,11 @@ static bool ExecuteAssembler(AssemblerInvocation &Opts,
     Str.reset(TheTarget->createMCObjectStreamer(Opts.Triple, Ctx, *MAB, *Out,
                                                 CE, Opts.RelaxAll,
                                                 Opts.NoExecStack));
+    // @LOCALMOD-BEGIN
+    Triple T(Opts.Triple);
+    if (T.isOSNaCl())
+      initializeNaClMCStreamer(*Str.get(), Ctx, T);
+    // @LOCALMOD-END
     Str.get()->InitSections();
   }
 
