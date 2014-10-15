@@ -660,7 +660,7 @@ public:
     if (Triple.getArch() == llvm::Triple::arm) {
       this->DescriptionString = "e-m:e-p:32:32-i64:64-v128:64:128-n32-S128";
     } else if (Triple.getArch() == llvm::Triple::x86) {
-      this->DescriptionString = "e-m:e-p:32:32-i64:64-n8:16:32-S128";
+      this->DescriptionString = "e-m:e-p:32:32-i64:64-f80:32-n8:16:32-S128";
     } else if (Triple.getArch() == llvm::Triple::x86_64) {
       this->DescriptionString = "e-m:e-p:32:32-i64:64-n8:16:32:64-S128";
     } else if (Triple.getArch() == llvm::Triple::mipsel) {
