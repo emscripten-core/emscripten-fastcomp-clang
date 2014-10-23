@@ -1,18 +1,12 @@
-=====================================
-Clang 3.5 (In-Progress) Release Notes
-=====================================
+=======================
+Clang 3.5 Release Notes
+=======================
 
 .. contents::
    :local:
    :depth: 2
 
 Written by the `LLVM Team <http://llvm.org/>`_
-
-.. warning::
-
-   These are in-progress notes for the upcoming Clang 3.5 release. You may
-   prefer the `Clang 3.4 Release Notes
-   <http://llvm.org/releases/3.4/tools/clang/docs/ReleaseNotes.html>`_.
 
 Introduction
 ============
@@ -55,7 +49,16 @@ Major New Features
   would return true when the attribute spelling was known, regardless of whether
   the attribute was available to the specific target. Clang now returns true
   only when the attribute pertains to the current compilation target.
-
+  
+- Clang 3.5 now has parsing and semantic-analysis support for all OpenMP 3.1
+  pragmas (except atomics and ordered). LLVM's OpenMP runtime library,
+  originally developed by Intel, has been modified to work on ARM, PowerPC,
+  as well as X86. Code generation support is minimal at this point and will
+  continue to be developed for 3.6, along with the rest of OpenMP 3.1.
+  Support for OpenMP 4.0 features, such as SIMD and target accelerator
+  directives, is also in progress. Contributors to this work include AMD,
+  Argonne National Lab., IBM, Intel, Texas Instruments, University of Houston
+  and many others.
 
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -66,6 +69,15 @@ about them. The improvements since the 3.4 release include:
 
 - GCC compatibility: Clang displays a warning on unsupported gcc
   optimization flags instead of an error.
+
+- Remarks system: Clang supports `-R` flags for enabling remarks. These are
+  diagnostic messages that provide information about the compilation process,
+  but don't suggest that a problem has been detected. As such, they cannot
+  be upgraded to errors with `-Werror` or `-Rerror`. A `-Reverything` flag
+  is provided (paralleling `-Weverything`) to turn on all remarks.
+
+- New remark `-Rpass`: Clang provides information about decisions made by
+  optimization passes during compilation. See :ref:`opt_rpass`.
 
 - New warning `-Wabsolute-value`: Clang warns about incorrect or useless usage
   of the absolute functions (`abs`, `fabsf`, etc).
@@ -166,47 +178,43 @@ New Pragmas in Clang
 -----------------------
 
 Loop optimization hints can be specified using the new `#pragma clang loop`
-directive just prior to the desired loop. The directive allows vectorization,
-interleaving, and unrolling to be enabled or disabled. Vector width as well
-as interleave and unrolling count can be manually specified.  See language
-extensions for details.
-
-Clang now supports the `#pragma unroll` directive to specify loop unrolling
-optimization hints.  Placed just prior to the desired loop, `#pragma unroll`
-directs the loop unroller to attempt to fully unroll the loop.  The pragma may
-also be specified with a positive integer parameter indicating the desired
-unroll count: `#pragma unroll _value_`.  The unroll count parameter can be
-optionally enclosed in parentheses.
-
-C Language Changes in Clang
----------------------------
-
-...
-
-C11 Feature Support
-^^^^^^^^^^^^^^^^^^^
-
-...
+directive just prior to the desired loop. The directive allows vectorization and
+interleaving to be enabled or disabled. Vector width as well as interleave count
+can be manually specified.  See :ref:`langext-pragma-loop` for details.
 
 C++ Language Changes in Clang
 -----------------------------
 
-- ...
+- Reference parameters and return values from functions are more aggressively
+  assumed to refer to valid objects when optimizing. Clang will attempt to
+  issue a warning by default if it sees null checks being performed on
+  references, and `-fsanitize=null` can be used to detect null references
+  being formed at runtime.
 
-C++11 Feature Support
+C++17 Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
 
-...
+Clang has experimental support for some proposed C++1z (tentatively, C++17)
+features. This support can be enabled using the `-std=c++1z` flag. The
+supported features are:
 
-Objective-C Language Changes in Clang
--------------------------------------
+- `static_assert(expr)` with no message
 
-...
+- `for (identifier : range)` as a synonym for `for (auto &&identifier : range)`
 
-OpenCL C Language Changes in Clang
-----------------------------------
+- `template<template<...> typename>` as a synonym for `template<template<...> class>`
 
-...
+Additionally, trigraphs are not recognized by default in this mode.
+`-ftrigraphs` can be used if you need to parse legacy code that uses trigraphs.
+Note that these features may be changed or removed in future Clang releases
+without notice.
+
+OpenMP C/C++ Language Changes in Clang
+--------------------------------------
+
+- `Status of supported OpenMP constructs 
+  <https://github.com/clang-omp/clang/wiki/Status-of-supported-OpenMP-constructs>`_.
+
 
 Internal API Changes
 --------------------
@@ -215,12 +223,8 @@ These are major API changes that have happened since the 3.4 release of
 Clang. If upgrading an external codebase that uses Clang as a library,
 this section should help get you past the largest hurdles of upgrading.
 
-...
-
-libclang
---------
-
-...
+- Clang uses `std::unique_ptr<T>` in many places where it used to use
+  raw `T *` pointers.
 
 Static Analyzer
 ---------------
@@ -228,7 +232,7 @@ Static Analyzer
 Check for code testing a variable for 0 after using it as a denominator.
 This new checker, alpha.core.TestAfterDivZero, catches issues like this:
 
-.. code:: c
+.. code-block:: c
 
   int sum = ...
   int avg = sum / count; // potential division by zero...
@@ -244,25 +248,6 @@ instead of `report-XXXXXX.html`, scan-build/clang analyzer generate
 (id = i++ for several issues found in the same function/method).
 
 List the function/method name in the index page of scan-build.
-
-...
-
-Core Analysis Improvements
-==========================
-
-- ...
-
-New Issues Found
-================
-
-- ...
-
-Python Binding Changes
-----------------------
-
-The following methods have been added:
-
--  ...
 
 Significant Known Problems
 ==========================
