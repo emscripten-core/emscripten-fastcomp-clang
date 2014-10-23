@@ -714,6 +714,32 @@ public:
   static StringRef GetTargetCPU(const llvm::opt::ArgList &Args);
 };
 
+// @LOCALMOD-START
+class LLVM_LIBRARY_VISIBILITY NaCl_TC : public Linux {
+public:
+  NaCl_TC(const Driver &D, const llvm::Triple &Triple,
+          const llvm::opt::ArgList &Args);
+
+  virtual void
+  AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                            llvm::opt::ArgStringList &CC1Args) const;
+  virtual void
+  AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                               llvm::opt::ArgStringList &CC1Args) const;
+
+  virtual CXXStdlibType
+  GetCXXStdlibType(const llvm::opt::ArgList &Args) const;
+
+  virtual void
+  AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
+                      llvm::opt::ArgStringList &CmdArgs) const;
+
+protected:
+  virtual Tool *buildLinker() const;
+};
+// @LOCALMOD-END
+
+
 /// TCEToolChain - A tool chain using the llvm bitcode tools to perform
 /// all subcommands. See http://tce.cs.tut.fi for our peculiar target.
 class LLVM_LIBRARY_VISIBILITY TCEToolChain : public ToolChain {

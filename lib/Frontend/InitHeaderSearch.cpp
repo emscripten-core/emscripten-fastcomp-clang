@@ -231,6 +231,8 @@ void InitHeaderSearch::AddDefaultCIncludePaths(const llvm::Triple &triple,
     case llvm::Triple::NetBSD:
     case llvm::Triple::OpenBSD:
     case llvm::Triple::Bitrig:
+    case llvm::Triple::NaCl:    // @LOCALMOD
+
       break;
     default:
       // FIXME: temporary hack: hard-coded paths.
@@ -340,7 +342,10 @@ void InitHeaderSearch::AddDefaultCIncludePaths(const llvm::Triple &triple,
     break;
   }
 
-  if ( os != llvm::Triple::RTEMS )
+  // @LOCALMOD-BEGIN
+  // NaCl only uses toolchain provided headers.
+  if ( os != llvm::Triple::RTEMS && os != llvm::Triple::NaCl)
+  // @LOCALMOD-END
     AddPath("/usr/include", ExternCSystem, false);
 }
 

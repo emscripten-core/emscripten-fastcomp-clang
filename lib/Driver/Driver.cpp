@@ -1979,6 +1979,11 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
       else
         TC = new toolchains::Linux(*this, Target, Args);
       break;
+    // @LOCALMOD-START
+    case llvm::Triple::NaCl:
+      TC = new toolchains::NaCl_TC(*this, Target, Args);
+      break;
+    // @LOCALMOD-END
     case llvm::Triple::Solaris:
       TC = new toolchains::Solaris(*this, Target, Args);
       break;
