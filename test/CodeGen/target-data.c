@@ -60,14 +60,14 @@
 
 // RUN: %clang_cc1 -triple i686-nacl -o - -emit-llvm %s | \
 // RUN: FileCheck %s -check-prefix=I686-NACL
-// I686-NACL: target datalayout = "e-m:e-p:32:32-i64:64-n8:16:32-S128"
+// I686-NACL: target datalayout = "e-m:e-p:32:32-i64:64-f80:32-n8:16:32-S128"
 
 // RUN: %clang_cc1 -triple x86_64-nacl -o - -emit-llvm %s | \
 // RUN: FileCheck %s -check-prefix=X86_64-NACL
-// X86_64-NACL: target datalayout = "e-m:e-p:32:32-i64:64-n8:16:32:64-S128"
+// X86_64-NACL: target datalayout = "e-m:e-p:32:32-i64:64-f80:128-n8:16:32:64-S128"
 
-// RUN: %clang_cc1 -triple arm-nacl-gnueabi -o - -emit-llvm %s | \
-// RUN: FileCheck %s -check-prefix=ARM-NACL
+// RUN: %clang_cc1 -triple arm-nacl-gnueabi -o - -emit-llvm %s \
+// RUN:   -target-abi aapcs-linux | FileCheck %s -check-prefix=ARM-NACL
 // ARM-NACL: target datalayout = "e-m:e-p:32:32-i64:64-v128:64:128-n32-S128"
 
 // RUN: %clang_cc1 -triple mipsel-nacl -o - -emit-llvm %s | \

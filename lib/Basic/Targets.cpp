@@ -658,7 +658,8 @@ public:
     // RegParmMax is inherited from the underlying architecture
     this->LongDoubleFormat = &llvm::APFloat::IEEEdouble;
     if (Triple.getArch() == llvm::Triple::arm) {
-      this->DescriptionString = "e-m:e-p:32:32-i64:64-v128:64:128-n32-S128";
+      // @LOCALMOD
+      // Handled in ARM's setABI().
     } else if (Triple.getArch() == llvm::Triple::x86) {
       this->DescriptionString = "e-m:e-p:32:32-i64:64-f80:32-n8:16:32-S128";
     } else if (Triple.getArch() == llvm::Triple::x86_64) {
@@ -3587,7 +3588,12 @@ class ARMTargetInfo : public TargetInfo {
         DescriptionString = BigEndian ?
                               "E-m:o-p:32:32-i64:64-v128:64:128-n32-S64" :
                               "e-m:o-p:32:32-i64:64-v128:64:128-n32-S64";
-      else
+      // @LOCALMOD-BEGIN
+      else if (T.isOSNaCl()) {
+        assert(!BigEndian && "NaCl on ARM does not support big endian");
+        DescriptionString = "e-m:e-p:32:32-i64:64-v128:64:128-n32-S128";
+      } else
+      // @LOCALMOD-END
         DescriptionString = BigEndian ?
                               "E-m:e-p:32:32-i64:64-v128:64:128-n32-S64" :
                               "e-m:e-p:32:32-i64:64-v128:64:128-n32-S64";
