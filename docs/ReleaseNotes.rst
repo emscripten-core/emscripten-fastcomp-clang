@@ -1,6 +1,6 @@
-=======================
-Clang 3.3 Release Notes
-=======================
+=====================================
+Clang 3.4 (In-Progress) Release Notes
+=====================================
 
 .. contents::
    :local:
@@ -8,33 +8,57 @@ Clang 3.3 Release Notes
 
 Written by the `LLVM Team <http://llvm.org/>`_
 
+.. warning::
+
+   These are in-progress notes for the upcoming Clang 3.4 release. You may
+   prefer the `Clang 3.3 Release Notes
+   <http://llvm.org/releases/3.3/tools/clang/docs/ReleaseNotes.html>`_.
+
 Introduction
 ============
 
 This document contains the release notes for the Clang C/C++/Objective-C
-frontend, part of the LLVM Compiler Infrastructure, release 3.3. Here we
-describe the status of Clang in some detail, including major improvements from
-the previous release and new feature work. For the general LLVM release notes,
-see `the LLVM documentation <http://llvm.org/docs/ReleaseNotes.html>`_. All LLVM
-releases may be downloaded from the `LLVM releases web site
-<http://llvm.org/releases/>`_.
+frontend, part of the LLVM Compiler Infrastructure, release 3.4. Here we
+describe the status of Clang in some detail, including major
+improvements from the previous release and new feature work. For the
+general LLVM release notes, see `the LLVM
+documentation <http://llvm.org/docs/ReleaseNotes.html>`_. All LLVM
+releases may be downloaded from the `LLVM releases web
+site <http://llvm.org/releases/>`_.
 
-For more information about Clang or LLVM, including information about the latest
-release, please check out the main please see the `Clang Web Site
-<http://clang.llvm.org>`_ or the `LLVM Web Site <http://llvm.org>`_.
+For more information about Clang or LLVM, including information about
+the latest release, please check out the main please see the `Clang Web
+Site <http://clang.llvm.org>`_ or the `LLVM Web
+Site <http://llvm.org>`_.
 
-Note that if you are reading this file from a Subversion checkout or the main
-Clang web page, this document applies to the *next* release, not the current
-one. To see the release notes for a specific release, please see the `releases
-page <http://llvm.org/releases/>`_.
+Note that if you are reading this file from a Subversion checkout or the
+main Clang web page, this document applies to the *next* release, not
+the current one. To see the release notes for a specific release, please
+see the `releases page <http://llvm.org/releases/>`_.
 
-What's New in Clang 3.3?
+What's New in Clang 3.4?
 ========================
 
 Some of the major new features and improvements to Clang are listed
 here. Generic improvements to Clang as a whole or to its underlying
-infrastructure are described first, followed by language-specific sections with
-improvements to Clang's support for those languages.
+infrastructure are described first, followed by language-specific
+sections with improvements to Clang's support for those languages.
+
+Last release which will build as C++98
+--------------------------------------
+
+This is expected to be the last release of Clang which compiles using a C++98
+toolchain. We expect to start using some C++11 features in Clang starting after
+this release. That said, we are committed to supporting a reasonable set of
+modern C++ toolchains as the host compiler on all of the platforms. This will
+at least include Visual Studio 2012 on Windows, and Clang 3.1 or GCC 4.7.x on
+Mac and Linux. The final set of compilers (and the C++11 features they support)
+is not set in stone, but we wanted users of Clang to have a heads up that the
+next release will involve a substantial change in the host toolchain
+requirements.
+
+Note that this change is part of a change for the entire LLVM project, not just
+Clang.
 
 Major New Features
 ------------------
@@ -44,67 +68,80 @@ Improvements to Clang's diagnostics
 
 Clang's diagnostics are constantly being improved to catch more issues,
 explain them more clearly, and provide more accurate source information
-about them. The improvements since the 3.2 release include:
+about them. The improvements since the 3.3 release include:
 
-Extended Identifiers: Unicode Support and Universal Character Names
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-  ...
 
-Clang 3.3 includes support for *extended identifiers* in C99 and C++.
-This feature allows identifiers to contain certain Unicode characters, as
-specified by the active language standard; these characters can be written
-directly in the source file using the UTF-8 encoding, or referred to using
-*universal character names* (``\u00E0``, ``\U000000E0``).
+New Compiler Flags
+------------------
+
+- Clang no longer special cases -O4 to enable lto. Explicitly pass -flto to
+  enable it.
+- Clang no longer fails on >= -O5. Uses -O3 instead.
+- Command line "clang -O3 -flto a.c -c" and "clang -emit-llvm a.c -c"
+  are no longer equivalent.
+- Clang now errors on unknown -m flags (``-munknown-to-clang``),
+  unknown -f flags (``-funknown-to-clang``) and unknown
+  options (``-what-is-this``).
 
 C Language Changes in Clang
 ---------------------------
 
+- Added new checked arithmetic builtins for security critical applications.
+
+C11 Feature Support
+^^^^^^^^^^^^^^^^^^^
+
+...
+
 C++ Language Changes in Clang
 -----------------------------
 
-- Clang now correctly implements language linkage for functions and variables.
-  This means that, for example, it is now possible to overload static functions
-  declared in an ``extern "C"`` context. For backwards compatibility, an alias
-  with the unmangled name is still emitted if it is the only one and has the
-  ``used`` attribute.
+- Fixed an ABI regression, introduced in Clang 3.2, which affected
+  member offsets for classes inheriting from certain classes with tail padding.
+  See PR16537.
+
+- ...
+
+C++11 Feature Support
+^^^^^^^^^^^^^^^^^^^^^
+
+...
+
+Objective-C Language Changes in Clang
+-------------------------------------
+
+...
+
+OpenCL C Language Changes in Clang
+----------------------------------
+
+- OpenCL C "long" now always has a size of 64 bit, and all OpenCL C
+  types are aligned as specified in the OpenCL C standard. Also,
+  "char" is now always signed.
 
 Internal API Changes
 --------------------
 
-These are major API changes that have happened since the 3.2 release of
+These are major API changes that have happened since the 3.3 release of
 Clang. If upgrading an external codebase that uses Clang as a library,
 this section should help get you past the largest hurdles of upgrading.
 
-Value Casting
-^^^^^^^^^^^^^
+Wide Character Types
+^^^^^^^^^^^^^^^^^^^^
 
-Certain type hierarchies (TypeLoc, CFGElement, ProgramPoint, and SVal) were
-misusing the llvm::cast machinery to perform undefined operations. Their APIs
-have been changed to use two member function templates that return values
-instead of pointers or references - "T castAs" and "Optional<T> getAs" (in the
-case of the TypeLoc hierarchy the latter is "T getAs" and you can use the
-boolean testability of a TypeLoc (or its 'validity') to verify that the cast
-succeeded). Essentially all previous 'cast' usage should be replaced with
-'castAs' and 'dyn_cast' should be replaced with 'getAs'. See r175462 for the
-first example of such a change along with many examples of how code was
-migrated to the new API.
+The ASTContext class now keeps track of two different types for wide character
+types: WCharTy and WideCharTy. WCharTy represents the built-in wchar_t type
+available in C++. WideCharTy is the type used for wide character literals; in
+C++ it is the same as WCharTy, but in C99, where wchar_t is a typedef, it is an
+integer type.
 
-Storage Class
-^^^^^^^^^^^^^
-
-For each variable and function Clang used to keep the storage class as written
-in the source, the linkage and a semantic storage class. This was a bit
-redundant and the semantic storage class has been removed. The method
-getStorageClass now returns what is written in the source code for that decl.
+...
 
 libclang
 --------
 
-The clang_CXCursorSet_contains() function previously incorrectly returned 0
-if it contained a CXCursor, contrary to what the documentation stated.  This
-has been fixed so that the function returns a non-zero value if the set
-contains a cursor.  This is API breaking change, but matches the intended
-original behavior.  Moreover, this also fixes the issue of an invalid CXCursorSet
-appearing to contain any CXCursor.
+...
 
 Static Analyzer
 ---------------
@@ -116,18 +153,19 @@ also in the kinds of issues it can find.
 Core Analysis Improvements
 ==========================
 
-- Support for interprocedural reasoning about constructors and destructors.
-- New false positive suppression mechanisms that reduced the number of false
-  null pointer dereference warnings due to interprocedural analysis.
-- Major performance enhancements to speed up interprocedural analysis
+- ...
 
 New Issues Found
 ================
 
-- New memory error checks such as use-after-free with C++ 'delete'.
-- Detection of mismatched allocators and deallocators (e.g., using 'new' with
-  'free()', 'malloc()' with 'delete').
-- Additional checks for misuses of Apple Foundation framework collection APIs.
+- ...
+
+Python Binding Changes
+----------------------
+
+The following methods have been added:
+
+-  ...
 
 Significant Known Problems
 ==========================
@@ -135,11 +173,13 @@ Significant Known Problems
 Additional Information
 ======================
 
-A wide variety of additional information is available on the `Clang web page
-<http://clang.llvm.org/>`_. The web page contains versions of the API
-documentation which are up-to-date with the Subversion version of the source
-code. You can access versions of these documents specific to this release by
-going into the "``clang/docs/``" directory in the Clang tree.
+A wide variety of additional information is available on the `Clang web
+page <http://clang.llvm.org/>`_. The web page contains versions of the
+API documentation which are up-to-date with the Subversion version of
+the source code. You can access versions of these documents specific to
+this release by going into the "``clang/docs/``" directory in the Clang
+tree.
 
-If you have any questions or comments about Clang, please feel free to contact
-us via the `mailing list <http://lists.cs.uiuc.edu/mailman/listinfo/cfe-dev>`_.
+If you have any questions or comments about Clang, please feel free to
+contact us via the `mailing
+list <http://lists.cs.uiuc.edu/mailman/listinfo/cfe-dev>`_.
