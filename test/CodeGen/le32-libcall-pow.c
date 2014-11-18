@@ -1,9 +1,15 @@
-// RUN: %clang_cc1 -fmath-errno -emit-llvm -o - %s -triple le32-unknown-nacl | FileCheck %s
-// RUN: %clang_cc1 -emit-llvm -o - %s -triple le32-unknown-nacl | FileCheck %s
+// RUN: %clang_cc1 -fno-math-builtin -fmath-errno -emit-llvm -o - %s -triple le32-unknown-nacl | FileCheck %s
+// RUN: %clang_cc1 -fno-math-builtin -emit-llvm -o - %s -triple le32-unknown-nacl | FileCheck %s
 
-// le32 (PNaCl) never generates intrinsics for pow calls, with or without errno
+// le32 (PNaCl) never generates intrinsics for pow calls, with or without
+// errno, when the -fno-math-builtin flag is passed to -cc1. A separate test
+// makes sure this flag is indeed passed for le32.
 
-// CHECK: define void @test_pow
+float powf(float, float);
+double pow(double, double);
+long double powl(long double, long double);
+
+// CHECK-LABEL: define void @test_pow
 void test_pow(float a0, double a1, long double a2) {
   // CHECK: call float @powf
   float l0 = powf(a0, a0);

@@ -16,12 +16,14 @@
 #include "CGCXXABI.h"
 #include "CGDebugInfo.h"
 #include "CodeGenModule.h"
+#include "TargetInfo.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/Basic/OpenCL.h"
 #include "clang/Basic/TargetInfo.h"
+#include "clang/CodeGen/CGFunctionInfo.h"
 #include "clang/Frontend/CodeGenOptions.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Intrinsics.h"
@@ -31,25 +33,23 @@ using namespace clang;
 using namespace CodeGen;
 
 CodeGenFunction::CodeGenFunction(CodeGenModule &cgm, bool suppressNewContext)
-  : CodeGenTypeCache(cgm), CGM(cgm), Target(cgm.getTarget()),
-    Builder(cgm.getModule().getContext()),
-    SanitizePerformTypeCheck(CGM.getSanOpts().Null |
-                             CGM.getSanOpts().Alignment |
-                             CGM.getSanOpts().ObjectSize |
-                             CGM.getSanOpts().Vptr),
-    SanOpts(&CGM.getSanOpts()),
-    AutoreleaseResult(false), BlockInfo(0), BlockPointer(0),
-    LambdaThisCaptureField(0), NormalCleanupDest(0), NextCleanupDestIndex(1),
-    FirstBlockInfo(0), EHResumeBlock(0), ExceptionSlot(0), EHSelectorSlot(0),
-    DebugInfo(0), DisableDebugInfo(false), CalleeWithThisReturn(0),
-    DidCallStackSave(false),
-    IndirectBranch(0), SwitchInsn(0), CaseRangeBlock(0), UnreachableBlock(0),
-    NumReturnExprs(0), NumSimpleReturnExprs(0),
-    CXXABIThisDecl(0), CXXABIThisValue(0), CXXThisValue(0),
-    CXXDefaultInitExprThis(0),
-    CXXStructorImplicitParamDecl(0), CXXStructorImplicitParamValue(0),
-    OutermostConditional(0), CurLexicalScope(0), TerminateLandingPad(0),
-    TerminateHandler(0), TrapBB(0) {
+    : CodeGenTypeCache(cgm), CGM(cgm), Target(cgm.getTarget()),
+      Builder(cgm.getModule().getContext()), CapturedStmtInfo(0),
+      SanitizePerformTypeCheck(CGM.getSanOpts().Null |
+                               CGM.getSanOpts().Alignment |
+                               CGM.getSanOpts().ObjectSize |
+                               CGM.getSanOpts().Vptr),
+      SanOpts(&CGM.getSanOpts()), AutoreleaseResult(false), BlockInfo(0),
+      BlockPointer(0), LambdaThisCaptureField(0), NormalCleanupDest(0),
+      NextCleanupDestIndex(1), FirstBlockInfo(0), EHResumeBlock(0),
+      ExceptionSlot(0), EHSelectorSlot(0), DebugInfo(CGM.getModuleDebugInfo()),
+      DisableDebugInfo(false), DidCallStackSave(false), IndirectBranch(0),
+      SwitchInsn(0), CaseRangeBlock(0), UnreachableBlock(0), NumReturnExprs(0),
+      NumSimpleReturnExprs(0), CXXABIThisDecl(0), CXXABIThisValue(0),
+      CXXThisValue(0), CXXDefaultInitExprThis(0),
+      CXXStructorImplicitParamDecl(0), CXXStructorImplicitParamValue(0),
+      OutermostConditional(0), CurLexicalScope(0), TerminateLandingPad(0),
+      TerminateHandler(0), TrapBB(0) {
   if (!suppressNewContext)
     CGM.getCXXABI().getMangleContext().startNewFunction();
 
@@ -64,6 +64,8 @@ CodeGenFunction::CodeGenFunction(CodeGenModule &cgm, bool suppressNewContext)
 }
 
 CodeGenFunction::~CodeGenFunction() {
+  assert(LifetimeExtendedCleanupStack.empty() && "failed to emit a cleanup");
+
   // If there are any unclaimed block infos, go ahead and destroy them
   // now.  This can happen if IR-gen gets clever and skips evaluating
   // something.
@@ -189,15 +191,23 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
          "mismatched push/pop in break/continue stack!");
 
   bool OnlySimpleReturnStmts = NumSimpleReturnExprs > 0
-    && NumSimpleReturnExprs == NumReturnExprs;
-  // If the function contains only a simple return statement, the
-  // cleanup code may become the first breakpoint in the function. To
-  // be safe, set the debug location for it to the location of the
-  // return statement.  Otherwise point it to end of the function's
-  // lexical scope.
+    && NumSimpleReturnExprs == NumReturnExprs
+    && ReturnBlock.getBlock()->use_empty();
+  // Usually the return expression is evaluated before the cleanup
+  // code.  If the function contains only a simple return statement,
+  // such as a constant, the location before the cleanup code becomes
+  // the last useful breakpoint in the function, because the simple
+  // return expression will be evaluated after the cleanup code. To be
+  // safe, set the debug location for cleanup code to the location of
+  // the return statement.  Otherwise the cleanup code should be at the
+  // end of the function's lexical scope.
+  //
+  // If there are multiple branches to the return block, the branch
+  // instructions will get the location of the return statements and
+  // all will be fine.
   if (CGDebugInfo *DI = getDebugInfo()) {
     if (OnlySimpleReturnStmts)
-       DI->EmitLocation(Builder, LastStopPoint);
+      DI->EmitLocation(Builder, LastStopPoint);
     else
       DI->EmitLocation(Builder, EndLoc);
   }
@@ -208,7 +218,7 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
   // edges will be *really* confused.
   bool EmitRetDbgLoc = true;
   if (EHStack.stable_begin() != PrologueCleanupDepth) {
-    PopCleanupBlocks(PrologueCleanupDepth, EndLoc);
+    PopCleanupBlocks(PrologueCleanupDepth);
 
     // Make sure the line table doesn't jump back into the body for
     // the ret after it's been at EndLoc.
@@ -222,34 +232,15 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
   // Emit function epilog (to return).
   EmitReturnBlock();
 
-  if (ShouldInstrumentFunction()) {
-      // The size of the function isn't known during StartFunction, so in order
-      // to instrument selectively based on function size, we need to wait
-      // until the end and insert both the entry and exit instrumentation
-      llvm::BasicBlock *CurBlock = Builder.GetInsertBlock();
-      llvm::BasicBlock *BeginBlock = &CurFn->getEntryBlock();
-
-// @LOCALMOD-BEGIN
-      if (CGM.getCodeGenOpts().InstrumentFunctionsPNaCl) {
-        Builder.SetInsertPoint(BeginBlock, BeginBlock->begin());
-        EmitFunctionInstrumentation("__pnacl_profile_func_enter");
-        Builder.SetInsertPoint(CurBlock);
-        EmitFunctionInstrumentation("__pnacl_profile_func_exit");
-      } else {
-        Builder.SetInsertPoint(BeginBlock, BeginBlock->begin());
-        EmitFunctionInstrumentation("__cyg_profile_func_enter");
-        Builder.SetInsertPoint(CurBlock);
-        EmitFunctionInstrumentation("__cyg_profile_func_exit");
-      }
-// @LOCALMOD-END
-  }
+  if (ShouldInstrumentFunction())
+    EmitFunctionInstrumentation("__cyg_profile_func_exit");
 
   // Emit debug descriptor for function end.
   if (CGDebugInfo *DI = getDebugInfo()) {
     DI->EmitFunctionEnd(Builder);
   }
 
-  EmitFunctionEpilog(*CurFnInfo, EmitRetDbgLoc);
+  EmitFunctionEpilog(*CurFnInfo, EmitRetDbgLoc, EndLoc);
   EmitEndEHSpec(CurCodeDecl);
 
   assert(EHStack.empty() &&
@@ -293,55 +284,31 @@ bool CodeGenFunction::ShouldInstrumentFunction() {
     return false;
   if (!CurFuncDecl || CurFuncDecl->hasAttr<NoInstrumentFunctionAttr>())
     return false;
-
-  // If not specified, defaults to 0.
-  int Size = CGM.getCodeGenOpts().InstrumentFunctionsSize;
-  return CurFn->getBasicBlockList().size() >= Size;
+  return true;
 }
 
 /// EmitFunctionInstrumentation - Emit LLVM code to call the specified
 /// instrumentation function with the current function and the call site, if
 /// function instrumentation is enabled.
 void CodeGenFunction::EmitFunctionInstrumentation(const char *Fn) {
+  // void __cyg_profile_func_{enter,exit} (void *this_fn, void *call_site);
   llvm::PointerType *PointerTy = Int8PtrTy;
+  llvm::Type *ProfileFuncArgs[] = { PointerTy, PointerTy };
+  llvm::FunctionType *FunctionTy =
+    llvm::FunctionType::get(VoidTy, ProfileFuncArgs, false);
 
-// @LOCALMOD-BEGIN
-  if (CGM.getCodeGenOpts().InstrumentFunctionsPNaCl) {
-    const FunctionDecl *CFD = dyn_cast<FunctionDecl>(CurFuncDecl);
-    if (!CFD)
-      return;
+  llvm::Constant *F = CGM.CreateRuntimeFunction(FunctionTy, Fn);
+  llvm::CallInst *CallSite = Builder.CreateCall(
+    CGM.getIntrinsic(llvm::Intrinsic::returnaddress),
+    llvm::ConstantInt::get(Int32Ty, 0),
+    "callsite");
 
-    llvm::Type *ProfileFuncArgs[] = { PointerTy };
-    llvm::FunctionType *FunctionTy =
-      llvm::FunctionType::get(VoidTy, ProfileFuncArgs, false);
+  llvm::Value *args[] = {
+    llvm::ConstantExpr::getBitCast(CurFn, PointerTy),
+    CallSite
+  };
 
-    std::string NameStr = CFD->getQualifiedNameAsString();
-    llvm::Constant *F = CGM.CreateRuntimeFunction(FunctionTy, Fn);
-    llvm::Constant *FName = CGM.GetAddrOfConstantCString(NameStr, NULL, 16u);
-    llvm::Value *args[] = {
-      llvm::ConstantExpr::getBitCast(FName, PointerTy)
-    };
-
-    EmitNounwindRuntimeCall(F, args);
-  } else {
-    llvm::Type *ProfileFuncArgs[] = { PointerTy, PointerTy };
-    llvm::FunctionType *FunctionTy =
-      llvm::FunctionType::get(VoidTy, ProfileFuncArgs, false);
-
-    llvm::Constant *F = CGM.CreateRuntimeFunction(FunctionTy, Fn);
-    llvm::CallInst *CallSite = Builder.CreateCall(
-      CGM.getIntrinsic(llvm::Intrinsic::returnaddress),
-      llvm::ConstantInt::get(Int32Ty, 0),
-      "callsite");
-
-    llvm::Value *args[] = {
-      llvm::ConstantExpr::getBitCast(CurFn, PointerTy),
-      CallSite
-    };
-
-    EmitNounwindRuntimeCall(F, args);
-  }
-// @LOCALMOD-END
+  EmitNounwindRuntimeCall(F, args);
 }
 
 void CodeGenFunction::EmitMCountInstrumentation() {
@@ -554,6 +521,22 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
       EmitOpenCLKernelMetadata(FD, Fn);
   }
 
+  // If we are checking function types, emit a function type signature as
+  // prefix data.
+  if (getLangOpts().CPlusPlus && SanOpts->Function) {
+    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D)) {
+      if (llvm::Constant *PrefixSig =
+              CGM.getTargetCodeGenInfo().getUBSanFunctionSignature(CGM)) {
+        llvm::Constant *FTRTTIConst =
+            CGM.GetAddrOfRTTIDescriptor(FD->getType(), /*ForEH=*/true);
+        llvm::Constant *PrefixStructElems[] = { PrefixSig, FTRTTIConst };
+        llvm::Constant *PrefixStructConst =
+            llvm::ConstantStruct::getAnon(PrefixStructElems, /*Packed=*/true);
+        Fn->setPrefixData(PrefixStructConst);
+      }
+    }
+  }
+
   llvm::BasicBlock *EntryBB = createBasicBlock("entry", CurFn);
 
   // Create a marker to make it easy to insert allocas into the entryblock
@@ -583,6 +566,9 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
     DI->setLocation(StartLoc);
     DI->EmitFunctionStart(GD, FnType, CurFn, Builder);
   }
+
+  if (ShouldInstrumentFunction())
+    EmitFunctionInstrumentation("__cyg_profile_func_enter");
 
   if (CGM.getCodeGenOpts().InstrumentForProfiling)
     EmitMCountInstrumentation();
@@ -623,7 +609,8 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
       if (LambdaThisCaptureField) {
         // If this lambda captures this, load it.
         LValue ThisLValue = EmitLValueForLambdaField(LambdaThisCaptureField);
-        CXXThisValue = EmitLoadOfLValue(ThisLValue).getScalarVal();
+        CXXThisValue = EmitLoadOfLValue(ThisLValue,
+                                        SourceLocation()).getScalarVal();
       }
     } else {
       // Not in a lambda; just use 'this' from the method.
@@ -656,13 +643,12 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
     DI->EmitLocation(Builder, StartLoc);
 }
 
-void CodeGenFunction::EmitFunctionBody(FunctionArgList &Args) {
-  const FunctionDecl *FD = cast<FunctionDecl>(CurGD.getDecl());
-  assert(FD->getBody());
-  if (const CompoundStmt *S = dyn_cast<CompoundStmt>(FD->getBody()))
+void CodeGenFunction::EmitFunctionBody(FunctionArgList &Args,
+                                       const Stmt *Body) {
+  if (const CompoundStmt *S = dyn_cast<CompoundStmt>(Body))
     EmitCompoundStmtWithoutScope(*S);
   else
-    EmitStmt(FD->getBody());
+    EmitStmt(Body);
 }
 
 /// Tries to mark the given function nounwind based on the
@@ -685,30 +671,42 @@ static void TryMarkNoThrow(llvm::Function *F) {
   F->setDoesNotThrow();
 }
 
+static void EmitSizedDeallocationFunction(CodeGenFunction &CGF,
+                                          const FunctionDecl *UnsizedDealloc) {
+  // This is a weak discardable definition of the sized deallocation function.
+  CGF.CurFn->setLinkage(llvm::Function::LinkOnceAnyLinkage);
+
+  // Call the unsized deallocation function and forward the first argument
+  // unchanged.
+  llvm::Constant *Unsized = CGF.CGM.GetAddrOfFunction(UnsizedDealloc);
+  CGF.Builder.CreateCall(Unsized, &*CGF.CurFn->arg_begin());
+}
+
 void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
                                    const CGFunctionInfo &FnInfo) {
   const FunctionDecl *FD = cast<FunctionDecl>(GD.getDecl());
 
   // Check if we should generate debug info for this function.
-  if (!FD->hasAttr<NoDebugAttr>())
-    maybeInitializeDebugInfo();
+  if (FD->hasAttr<NoDebugAttr>())
+    DebugInfo = NULL; // disable debug info indefinitely for this function
 
   FunctionArgList Args;
   QualType ResTy = FD->getResultType();
 
   CurGD = GD;
-  if (isa<CXXMethodDecl>(FD) && cast<CXXMethodDecl>(FD)->isInstance())
+  const CXXMethodDecl *MD;
+  if ((MD = dyn_cast<CXXMethodDecl>(FD)) && MD->isInstance()) {
+    if (CGM.getCXXABI().HasThisReturn(GD))
+      ResTy = MD->getThisType(getContext());
     CGM.getCXXABI().BuildInstanceFunctionParams(*this, ResTy, Args);
+  }
 
   for (unsigned i = 0, e = FD->getNumParams(); i != e; ++i)
     Args.push_back(FD->getParamDecl(i));
 
   SourceRange BodyRange;
   if (Stmt *Body = FD->getBody()) BodyRange = Body->getSourceRange();
-
-  // CalleeWithThisReturn keeps track of the last callee inside this function
-  // that returns 'this'. Before starting the function, we set it to null.
-  CalleeWithThisReturn = 0;
+  CurEHLocation = BodyRange.getEnd();
 
   // Emit the standard function prologue.
   StartFunction(GD, ResTy, Fn, FnInfo, Args, BodyRange.getBegin());
@@ -729,17 +727,24 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
     EmitLambdaToBlockPointerBody(Args);
   } else if (isa<CXXMethodDecl>(FD) &&
              cast<CXXMethodDecl>(FD)->isLambdaStaticInvoker()) {
-    // The lambda "__invoke" function is special, because it forwards or
+    // The lambda static invoker function is special, because it forwards or
     // clones the body of the function call operator (but is actually static).
     EmitLambdaStaticInvokeFunction(cast<CXXMethodDecl>(FD));
   } else if (FD->isDefaulted() && isa<CXXMethodDecl>(FD) &&
-             cast<CXXMethodDecl>(FD)->isCopyAssignmentOperator()) {
+             (cast<CXXMethodDecl>(FD)->isCopyAssignmentOperator() ||
+              cast<CXXMethodDecl>(FD)->isMoveAssignmentOperator())) {
     // Implicit copy-assignment gets the same special treatment as implicit
     // copy-constructors.
     emitImplicitAssignmentOperatorBody(Args);
-  }
-  else
-    EmitFunctionBody(Args);
+  } else if (Stmt *Body = FD->getBody()) {
+    EmitFunctionBody(Args, Body);
+  } else if (FunctionDecl *UnsizedDealloc =
+                 FD->getCorrespondingUnsizedGlobalDeallocationFunction()) {
+    // Global sized deallocation functions get an implicit weak definition if
+    // they don't have an explicit definition.
+    EmitSizedDeallocationFunction(*this, UnsizedDealloc);
+  } else
+    llvm_unreachable("no definition for emitted function");
 
   // C++11 [stmt.return]p2:
   //   Flowing off the end of a function [...] results in undefined behavior in
@@ -761,9 +766,6 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
 
   // Emit the standard function epilogue.
   FinishFunction(BodyRange.getEnd());
-  // CalleeWithThisReturn keeps track of the last callee inside this function
-  // that returns 'this'. After finishing the function, we set it to null.
-  CalleeWithThisReturn = 0;
 
   // If we haven't marked the function nothrow through other means, do
   // a quick pass now to see if we can.
@@ -985,9 +987,8 @@ void CodeGenFunction::EmitBranchOnBoolExpr(const Expr *Cond,
 
 /// ErrorUnsupported - Print out an error that codegen doesn't support the
 /// specified stmt yet.
-void CodeGenFunction::ErrorUnsupported(const Stmt *S, const char *Type,
-                                       bool OmitOnError) {
-  CGM.ErrorUnsupported(S, Type, OmitOnError);
+void CodeGenFunction::ErrorUnsupported(const Stmt *S, const char *Type) {
+  CGM.ErrorUnsupported(S, Type);
 }
 
 /// emitNonZeroVLAInit - Emit the "zero" initialization of a
@@ -1307,6 +1308,10 @@ void CodeGenFunction::EmitVariablyModifiedType(QualType type) {
     case Type::ObjCObjectPointer:
       llvm_unreachable("type class is never variably-modified!");
 
+    case Type::Decayed:
+      type = cast<DecayedType>(ty)->getPointeeType();
+      break;
+
     case Type::Pointer:
       type = cast<PointerType>(ty)->getPointeeType();
       break;
@@ -1378,6 +1383,7 @@ void CodeGenFunction::EmitVariablyModifiedType(QualType type) {
     case Type::UnaryTransform:
     case Type::Attributed:
     case Type::SubstTemplateTypeParm:
+    case Type::PackExpansion:
       // Keep walking after single level desugaring.
       type = type.getSingleStepDesugaredType(getContext());
       break;
@@ -1487,3 +1493,5 @@ llvm::Value *CodeGenFunction::EmitFieldAnnotations(const FieldDecl *D,
 
   return V;
 }
+
+CodeGenFunction::CGCapturedStmtInfo::~CGCapturedStmtInfo() { }

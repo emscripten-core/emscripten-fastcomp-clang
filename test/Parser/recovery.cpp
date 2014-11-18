@@ -12,7 +12,7 @@ inline namespace Std { // expected-error {{cannot be reopened as inline}}
 int x;
 Std::Important y;
 
-extenr "C" { // expected-error {{did you mean the keyword 'extern'}}
+extenr "C" { // expected-error {{did you mean 'extern'}}
   void f();
 }
 void g() {
@@ -35,11 +35,27 @@ constexpr int foo();
 
 5int m = { l }, n = m; // expected-error {{unqualified-id}}
 
+namespace MissingBrace {
+  struct S { // expected-error {{missing '}' at end of definition of 'MissingBrace::S'}}
+    int f();
+  // };
+
+  namespace N { int g(); } // expected-note {{still within definition of 'MissingBrace::S' here}}
+
+  int k1 = S().h(); // expected-error {{no member named 'h' in 'MissingBrace::S'}}
+  int k2 = S().f() + N::g();
+
+  template<typename T> struct PR17949 { // expected-error {{missing '}' at end of definition of 'MissingBrace::PR17949'}}
+
+  namespace X { // expected-note {{still within definition of 'MissingBrace::PR17949' here}}
+  }
+}
+
 namespace N {
   int
 } // expected-error {{unqualified-id}}
 
-strcut Uuuu { // expected-error {{did you mean the keyword 'struct'}} \
+strcut Uuuu { // expected-error {{did you mean 'struct'}} \
               // expected-note {{'Uuuu' declared here}}
 } *u[3];
 uuuu v; // expected-error {{did you mean 'Uuuu'}}
