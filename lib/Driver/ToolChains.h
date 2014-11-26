@@ -720,22 +720,22 @@ public:
   NaCl_TC(const Driver &D, const llvm::Triple &Triple,
           const llvm::opt::ArgList &Args);
 
-  virtual void
+  void
   AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
-                            llvm::opt::ArgStringList &CC1Args) const;
-  virtual void
+                            llvm::opt::ArgStringList &CC1Args) const override;
+  void
   AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
-                               llvm::opt::ArgStringList &CC1Args) const;
+                               llvm::opt::ArgStringList &CC1Args) const override;
 
-  virtual CXXStdlibType
-  GetCXXStdlibType(const llvm::opt::ArgList &Args) const;
+  CXXStdlibType
+  GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
 
-  virtual void
+  void
   AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
-                      llvm::opt::ArgStringList &CmdArgs) const;
+                      llvm::opt::ArgStringList &CmdArgs) const override;
 
 protected:
-  virtual Tool *buildLinker() const;
+  Tool *buildLinker() const override;
 };
 // @LOCALMOD-END
 

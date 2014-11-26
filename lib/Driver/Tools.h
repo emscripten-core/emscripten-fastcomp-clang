@@ -470,14 +470,14 @@ namespace nacltools {
   public:
     Link(const ToolChain &TC) : Tool("NaCl::Link", "linker", TC) {}
 
-    virtual bool hasIntegratedCPP() const { return false; }
-    virtual bool isLinkJob() const { return true; }
+    bool hasIntegratedCPP() const override { return false; }
+    bool isLinkJob() const override { return true; }
 
-    virtual void ConstructJob(Compilation &C, const JobAction &JA,
+    void ConstructJob(Compilation &C, const JobAction &JA,
                               const InputInfo &Output,
                               const InputInfoList &Inputs,
                               const llvm::opt::ArgList &TCArgs,
-                              const char *LinkingOutput) const;
+                              const char *LinkingOutput) const override;
   };
 }
 // @LOCALMOD-END
