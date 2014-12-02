@@ -7500,14 +7500,17 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
 }
 
 // @LOCALMOD-BEGIN
+// This is almost a duplicate of gnutools::link::ConstructJob with changes that
+// we use static by default, do not yet support sanitizers or LTO, and a few
+// others. Eventually we can probably migrate back to gnutools::link
 void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
                                   const InputInfo &Output,
                                   const InputInfoList &Inputs,
                                   const ArgList &Args,
                                   const char *LinkingOutput) const {
 
-  const toolchains::Linux& ToolChain =
-    static_cast<const toolchains::Linux&>(getToolChain());
+  const toolchains::NaCl_TC& ToolChain =
+    static_cast<const toolchains::NaCl_TC&>(getToolChain());
   const Driver &D = ToolChain.getDriver();
   const bool IsStatic =
     !Args.hasArg(options::OPT_dynamic) &&
@@ -7532,10 +7535,9 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasArg(options::OPT_s))
     CmdArgs.push_back("-s");
 
-  for (std::vector<std::string>::const_iterator i = ToolChain.ExtraOpts.begin(),
-         e = ToolChain.ExtraOpts.end();
-       i != e; ++i)
-    CmdArgs.push_back(i->c_str());
+  // NaCl_TC doesn't have ExtraOpts like Linux; the only relevant flag from
+  // there is --build-id, which we do want.
+  CmdArgs.push_back("--build-id");
 
   if (!IsStatic)
     CmdArgs.push_back("--eh-frame-hdr");
@@ -7578,9 +7580,8 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
 
   const ToolChain::path_list Paths = ToolChain.getFilePaths();
 
-  for (ToolChain::path_list::const_iterator i = Paths.begin(), e = Paths.end();
-       i != e; ++i)
-    CmdArgs.push_back(Args.MakeArgString(StringRef("-L") + *i));
+  for (const auto &Path : Paths)
+    CmdArgs.push_back(Args.MakeArgString(StringRef("-L") + Path));
 
   if (Args.hasArg(options::OPT_Z_Xlinker__no_demangle))
     CmdArgs.push_back("--no-demangle");

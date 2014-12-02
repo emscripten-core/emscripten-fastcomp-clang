@@ -715,7 +715,7 @@ public:
 };
 
 // @LOCALMOD-START
-class LLVM_LIBRARY_VISIBILITY NaCl_TC : public Linux {
+class LLVM_LIBRARY_VISIBILITY NaCl_TC : public Generic_ELF {
 public:
   NaCl_TC(const Driver &D, const llvm::Triple &Triple,
           const llvm::opt::ArgList &Args);
@@ -737,6 +737,7 @@ public:
   bool
   IsIntegratedAssemblerDefault() const override { return false; }
 
+  std::string Linker;
 protected:
   Tool *buildLinker() const override;
 };

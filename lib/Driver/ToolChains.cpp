@@ -1245,22 +1245,12 @@ Generic_GCC::GCCInstallationDetector::init(
       Prefixes.push_back(D.SysRoot + "/usr");
     }
 
-    // @LOCALMOD-START
-    if (TargetTriple.getOS() == llvm::Triple::NaCl) {
-      if (TargetTriple.getArch() == llvm::Triple::arm)
-        Prefixes.push_back(D.InstalledDir + "/../arm-nacl");
-      else
-        Prefixes.push_back(D.InstalledDir + "/../x86_64-nacl");
-    } else {
-      // Then look for gcc installed alongside clang.
-      Prefixes.push_back(D.InstalledDir + "/..");
+    // Then look for gcc installed alongside clang.
+    Prefixes.push_back(D.InstalledDir + "/..");
 
-      // And finally in /usr.
-      if (D.SysRoot.empty())
-        Prefixes.push_back("/usr");
-    }
-    // @LOCALMOD-END
-
+    // And finally in /usr.
+    if (D.SysRoot.empty())
+      Prefixes.push_back("/usr");
   }
 
   // Loop over the various components which exist and select the best GCC
@@ -2187,7 +2177,8 @@ void Generic_ELF::addClangTargetOptions(const ArgList &DriverArgs,
       getTriple().getArch() == llvm::Triple::arm64_be ||
       (getTriple().getOS() == llvm::Triple::Linux &&
        (!V.isOlderThan(4, 7, 0) ||
-        getTriple().getEnvironment() == llvm::Triple::Android));
+        getTriple().getEnvironment() == llvm::Triple::Android)) ||
+      getTriple().getOS() == llvm::Triple::NaCl; // @LOCALMOD
 
   if (DriverArgs.hasFlag(options::OPT_fuse_init_array,
                          options::OPT_fno_use_init_array,
@@ -2410,14 +2401,14 @@ StringRef Hexagon_TC::GetTargetCPU(const ArgList &Args)
 /// NaCl Toolchain
 NaCl_TC::NaCl_TC(const Driver &D, const llvm::Triple &Triple,
                  const ArgList &Args)
-  : Linux(D, Triple, Args) {
+  : Generic_ELF(D, Triple, Args) {
 
-  // Remove paths added by Linux toolchain. NaCl Toolchain can not use the
+  // Remove paths added by Generic_GCC. NaCl Toolchain cannot use the
   // default paths, and must instead only use the paths provided
   // with this toolchain based on architecture.
   path_list& file_paths = getFilePaths();
   path_list& prog_paths = getProgramPaths();
-  
+
   file_paths.clear();
   prog_paths.clear();
 
