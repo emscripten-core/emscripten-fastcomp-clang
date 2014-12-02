@@ -734,6 +734,9 @@ public:
   AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
                       llvm::opt::ArgStringList &CmdArgs) const override;
 
+  bool
+  IsIntegratedAssemblerDefault() const override { return false; }
+
 protected:
   Tool *buildLinker() const override;
 };
