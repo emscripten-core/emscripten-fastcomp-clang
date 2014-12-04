@@ -7577,6 +7577,7 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   Args.AddAllArgs(CmdArgs, options::OPT_L);
+  Args.AddAllArgs(CmdArgs, options::OPT_u);
 
   const ToolChain::path_list Paths = ToolChain.getFilePaths();
 
@@ -7611,6 +7612,8 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-lnacl");
       // libc++ and PPAPI programs always require libpthread, so just always
       // include it in the group.
+      Args.ClaimAllArgs(options::OPT_pthread);
+      Args.ClaimAllArgs(options::OPT_pthreads);
       CmdArgs.push_back("-lpthread");
 
       CmdArgs.push_back("-lgcc");
