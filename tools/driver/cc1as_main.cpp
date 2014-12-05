@@ -381,12 +381,12 @@ static bool ExecuteAssembler(AssemblerInvocation &Opts,
     Str.reset(TheTarget->createMCObjectStreamer(Opts.Triple, Ctx, *MAB, *Out,
                                                 CE, *STI, Opts.RelaxAll,
                                                 Opts.NoExecStack));
+    Str.get()->InitSections();
     // @LOCALMOD-BEGIN
     Triple T(Opts.Triple);
     if (T.isOSNaCl())
       initializeNaClMCStreamer(*Str.get(), Ctx, T);
     // @LOCALMOD-END
-    Str.get()->InitSections();
   }
 
   bool Failed = false;
