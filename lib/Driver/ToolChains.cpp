@@ -2423,30 +2423,29 @@ NaCl_TC::NaCl_TC(const Driver &D, const llvm::Triple &Triple,
 
   switch(Triple.getArch()) {
     case llvm::Triple::x86: {
-      FilePath += "x86_64-nacl/lib32";
-      ProgPath += "x86_64-nacl/bin";
-      ToolPath += "i686-nacl";
+      file_paths.push_back(FilePath + "x86_64-nacl/lib32");
+      file_paths.push_back(FilePath + "x86_64-nacl/usr/lib32");
+      prog_paths.push_back(ProgPath + "x86_64-nacl/bin");
+      file_paths.push_back(ToolPath + "i686-nacl");
       break;
     }
     case llvm::Triple::x86_64: {
-      FilePath += "x86_64-nacl/lib";
-      ProgPath += "x86_64-nacl/bin";
-      ToolPath += "x86_64-nacl";
+      file_paths.push_back(FilePath + "x86_64-nacl/lib");
+      file_paths.push_back(FilePath + "x86_64-nacl/usr/lib");
+      prog_paths.push_back(ProgPath + "x86_64-nacl/bin");
+      file_paths.push_back(ToolPath + "x86_64-nacl");
       break;
     }
     case llvm::Triple::arm: {
-      FilePath += "arm-nacl/lib";
-      ProgPath += "arm-nacl/bin";
-      ToolPath += "arm-nacl";
+      file_paths.push_back(FilePath + "arm-nacl/lib");
+      file_paths.push_back(FilePath + "arm-nacl/usr/lib");
+      prog_paths.push_back(ProgPath + "arm-nacl/bin");
+      file_paths.push_back(ToolPath + "arm-nacl");
       break;
     }
     default:
       break;
   }
-
-  file_paths.push_back(FilePath);
-  file_paths.push_back(ToolPath);
-  prog_paths.push_back(ProgPath);
 
   // Use provided linker, not system linker
   Linker = GetProgramPath("ld");
@@ -2467,19 +2466,22 @@ void NaCl_TC::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   if (DriverArgs.hasArg(options::OPT_nostdlibinc))
     return;
 
+  SmallString<128> P(D.Dir + "/../");
   if (getTriple().getArch() == llvm::Triple::arm) {
-    SmallString<128> P(D.Dir + "/../");
     llvm::sys::path::append(P, "arm-nacl/include");
     addSystemInclude(DriverArgs, CC1Args, P.str());
   } else if (getTriple().getArch() == llvm::Triple::x86) {
-    SmallString<128> P(D.Dir + "/../");
     llvm::sys::path::append(P, "x86_64-nacl/include");
     addSystemInclude(DriverArgs, CC1Args, P.str());
   } else if (getTriple().getArch() == llvm::Triple::x86_64) {
-    SmallString<128> P(D.Dir + "/../");
     llvm::sys::path::append(P, "x86_64-nacl/include");
     addSystemInclude(DriverArgs, CC1Args, P.str());
+  } else {
+    return;
   }
+  llvm::sys::path::remove_filename(P);
+  llvm::sys::path::append(P, "usr/include");
+  addSystemInclude(DriverArgs, CC1Args, P.str());
 }
 
 void NaCl_TC::AddCXXStdlibLibArgs(const ArgList &Args,
