@@ -7607,9 +7607,6 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
       // Always use groups, since it has no effect on dynamic libraries.
       CmdArgs.push_back("--start-group");
       CmdArgs.push_back("-lc");
-      // TODO(dschuff): Remove this explicit -lnacl and make -lc a linker script
-      // like arm-nacl-gcc
-      CmdArgs.push_back("-lnacl");
       // libc++ and PPAPI programs always require libpthread, so just always
       // include it in the group.
       Args.ClaimAllArgs(options::OPT_pthread);
