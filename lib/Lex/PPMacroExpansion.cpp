@@ -49,7 +49,10 @@ void Preprocessor::appendMacroDirective(IdentifierInfo *II, MacroDirective *MD){
   MacroDirective *&StoredMD = Macros[II];
   MD->setPrevious(StoredMD);
   StoredMD = MD;
-  II->setHasMacroDefinition(MD->isDefined());
+  // Setup the identifier as having associated macro history.
+  II->setHasMacroDefinition(true);
+  if (!MD->isDefined())
+    II->setHasMacroDefinition(false);
   bool isImportedMacro = isa<DefMacroDirective>(MD) &&
                          cast<DefMacroDirective>(MD)->isImported();
   if (II->isFromAST() && !isImportedMacro)
@@ -950,15 +953,15 @@ static bool HasFeature(const Preprocessor &PP, const IdentifierInfo *II) {
            .Case("cxx_user_literals", LangOpts.CPlusPlus11)
            .Case("cxx_variadic_templates", LangOpts.CPlusPlus11)
            // C++1y features
-           .Case("cxx_aggregate_nsdmi", LangOpts.CPlusPlus1y)
-           .Case("cxx_binary_literals", LangOpts.CPlusPlus1y)
-           .Case("cxx_contextual_conversions", LangOpts.CPlusPlus1y)
-           .Case("cxx_decltype_auto", LangOpts.CPlusPlus1y)
-           .Case("cxx_generic_lambdas", LangOpts.CPlusPlus1y)
-           .Case("cxx_init_captures", LangOpts.CPlusPlus1y)
-           .Case("cxx_relaxed_constexpr", LangOpts.CPlusPlus1y)
-           .Case("cxx_return_type_deduction", LangOpts.CPlusPlus1y)
-           .Case("cxx_variable_templates", LangOpts.CPlusPlus1y)
+           .Case("cxx_aggregate_nsdmi", LangOpts.CPlusPlus14)
+           .Case("cxx_binary_literals", LangOpts.CPlusPlus14)
+           .Case("cxx_contextual_conversions", LangOpts.CPlusPlus14)
+           .Case("cxx_decltype_auto", LangOpts.CPlusPlus14)
+           .Case("cxx_generic_lambdas", LangOpts.CPlusPlus14)
+           .Case("cxx_init_captures", LangOpts.CPlusPlus14)
+           .Case("cxx_relaxed_constexpr", LangOpts.CPlusPlus14)
+           .Case("cxx_return_type_deduction", LangOpts.CPlusPlus14)
+           .Case("cxx_variable_templates", LangOpts.CPlusPlus14)
            // C++ TSes
            //.Case("cxx_runtime_arrays", LangOpts.CPlusPlusTSArrays)
            //.Case("cxx_concepts", LangOpts.CPlusPlusTSConcepts)
@@ -1050,7 +1053,8 @@ static bool HasExtension(const Preprocessor &PP, const IdentifierInfo *II) {
 /// Returns true if successful.
 static bool EvaluateHasIncludeCommon(Token &Tok,
                                      IdentifierInfo *II, Preprocessor &PP,
-                                     const DirectoryLookup *LookupFrom) {
+                                     const DirectoryLookup *LookupFrom,
+                                     const FileEntry *LookupFromFile) {
   // Save the location of the current token.  If a '(' is later found, use
   // that location.  If not, use the end of this location instead.
   SourceLocation LParenLoc = Tok.getLocation();
@@ -1145,8 +1149,8 @@ static bool EvaluateHasIncludeCommon(Token &Tok,
   // Search include directories.
   const DirectoryLookup *CurDir;
   const FileEntry *File =
-      PP.LookupFile(FilenameLoc, Filename, isAngled, LookupFrom, CurDir,
-                    nullptr, nullptr, nullptr);
+      PP.LookupFile(FilenameLoc, Filename, isAngled, LookupFrom, LookupFromFile,
+                    CurDir, nullptr, nullptr, nullptr);
 
   // Get the result value.  A result of true means the file exists.
   return File != nullptr;
@@ -1156,7 +1160,7 @@ static bool EvaluateHasIncludeCommon(Token &Tok,
 /// Returns true if successful.
 static bool EvaluateHasInclude(Token &Tok, IdentifierInfo *II,
                                Preprocessor &PP) {
-  return EvaluateHasIncludeCommon(Tok, II, PP, nullptr);
+  return EvaluateHasIncludeCommon(Tok, II, PP, nullptr, nullptr);
 }
 
 /// EvaluateHasIncludeNext - Process '__has_include_next("path")' expression.
@@ -1166,10 +1170,19 @@ static bool EvaluateHasIncludeNext(Token &Tok,
   // __has_include_next is like __has_include, except that we start
   // searching after the current found directory.  If we can't do this,
   // issue a diagnostic.
+  // FIXME: Factor out duplication wiht
+  // Preprocessor::HandleIncludeNextDirective.
   const DirectoryLookup *Lookup = PP.GetCurDirLookup();
+  const FileEntry *LookupFromFile = nullptr;
   if (PP.isInPrimaryFile()) {
     Lookup = nullptr;
     PP.Diag(Tok, diag::pp_include_next_in_primary);
+  } else if (PP.getCurrentSubmodule()) {
+    // Start looking up in the directory *after* the one in which the current
+    // file would be found, if any.
+    assert(PP.getCurrentLexer() && "#include_next directive in macro?");
+    LookupFromFile = PP.getCurrentLexer()->getFileEntry();
+    Lookup = nullptr;
   } else if (!Lookup) {
     PP.Diag(Tok, diag::pp_include_next_absolute_path);
   } else {
@@ -1177,7 +1190,7 @@ static bool EvaluateHasIncludeNext(Token &Tok,
     ++Lookup;
   }
 
-  return EvaluateHasIncludeCommon(Tok, II, PP, Lookup);
+  return EvaluateHasIncludeCommon(Tok, II, PP, Lookup, LookupFromFile);
 }
 
 /// \brief Process __building_module(identifier) expression.

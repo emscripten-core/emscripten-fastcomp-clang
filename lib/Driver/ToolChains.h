@@ -7,8 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CLANG_LIB_DRIVER_TOOLCHAINS_H_
-#define CLANG_LIB_DRIVER_TOOLCHAINS_H_
+#ifndef LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_H
+#define LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_H
 
 #include "Tools.h"
 #include "clang/Basic/VersionTuple.h"
@@ -362,7 +362,7 @@ public:
 
   bool isKernelStatic() const override {
     return !isTargetIPhoneOS() || isIPhoneOSVersionLT(6, 0) ||
-           getTriple().getArch() == llvm::Triple::arm64;
+           getTriple().getArch() == llvm::Triple::aarch64;
   }
 
 protected:
@@ -487,7 +487,8 @@ public:
   AddCCKextLibArgs(const llvm::opt::ArgList &Args,
                    llvm::opt::ArgStringList &CmdArgs) const override;
 
-  virtual void addClangWarningOptions(llvm::opt::ArgStringList &CC1Args) const;
+  virtual void addClangWarningOptions(llvm::opt::ArgStringList &CC1Args)
+                                                      const override;
 
   void
   AddLinkARCArgs(const llvm::opt::ArgList &Args,
@@ -504,16 +505,6 @@ public:
 
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                              llvm::opt::ArgStringList &CC1Args) const override;
-};
-
-class LLVM_LIBRARY_VISIBILITY AuroraUX : public Generic_GCC {
-public:
-  AuroraUX(const Driver &D, const llvm::Triple &Triple,
-           const llvm::opt::ArgList &Args);
-
-protected:
-  Tool *buildAssembler() const override;
-  Tool *buildLinker() const override;
 };
 
 class LLVM_LIBRARY_VISIBILITY Solaris : public Generic_GCC {
@@ -543,11 +534,14 @@ public:
   }
 
   virtual bool IsIntegratedAssemblerDefault() const override {
-    if (getTriple().getArch() == llvm::Triple::ppc ||
-        getTriple().getArch() == llvm::Triple::sparc ||
-        getTriple().getArch() == llvm::Triple::sparcv9)
+    switch (getTriple().getArch()) {
+    case llvm::Triple::ppc:
+    case llvm::Triple::sparc:
+    case llvm::Triple::sparcv9:
       return true;
-    return Generic_ELF::IsIntegratedAssemblerDefault();
+    default:
+      return Generic_ELF::IsIntegratedAssemblerDefault();
+    }
   }
 
 protected:
@@ -592,10 +586,12 @@ public:
   AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                                llvm::opt::ArgStringList &CC1Args) const override;
   bool IsIntegratedAssemblerDefault() const override {
-    if (getTriple().getArch() == llvm::Triple::ppc ||
-        getTriple().getArch() == llvm::Triple::ppc64)
+    switch (getTriple().getArch()) {
+    case llvm::Triple::ppc:
       return true;
-    return Generic_ELF::IsIntegratedAssemblerDefault();
+    default:
+      return Generic_ELF::IsIntegratedAssemblerDefault();
+    }
   }
 
   bool UseSjLjExceptions() const override;
@@ -622,9 +618,12 @@ public:
     return true;
   }
   bool IsIntegratedAssemblerDefault() const override {
-    if (getTriple().getArch() == llvm::Triple::ppc)
+    switch (getTriple().getArch()) {
+    case llvm::Triple::ppc:
       return true;
-    return Generic_ELF::IsIntegratedAssemblerDefault();
+    default:
+      return Generic_ELF::IsIntegratedAssemblerDefault();
+    }
   }
 
 protected:

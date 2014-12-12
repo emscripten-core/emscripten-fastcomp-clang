@@ -1067,7 +1067,7 @@ bool Sema::IsOverload(FunctionDecl *New, FunctionDecl *Old,
     // is a redeclaration of OldMethod.
     unsigned OldQuals = OldMethod->getTypeQualifiers();
     unsigned NewQuals = NewMethod->getTypeQualifiers();
-    if (!getLangOpts().CPlusPlus1y && NewMethod->isConstexpr() &&
+    if (!getLangOpts().CPlusPlus14 && NewMethod->isConstexpr() &&
         !isa<CXXConstructorDecl>(NewMethod))
       NewQuals |= Qualifiers::Const;
 
@@ -1451,6 +1451,7 @@ static bool IsStandardConversion(Sema &S, Expr* From, QualType ToType,
       // We were able to resolve the address of the overloaded function,
       // so we can convert to the type of that function.
       FromType = Fn->getType();
+      SCS.setFromType(FromType);
 
       // we can sometimes resolve &foo<int> regardless of ToType, so check
       // if the type matches (identity) or we are converting to bool
@@ -5364,14 +5365,14 @@ ExprResult Sema::PerformContextualImplicitConversion(
     CXXConversionDecl *Conversion;
     FunctionTemplateDecl *ConvTemplate = dyn_cast<FunctionTemplateDecl>(D);
     if (ConvTemplate) {
-      if (getLangOpts().CPlusPlus1y)
+      if (getLangOpts().CPlusPlus14)
         Conversion = cast<CXXConversionDecl>(ConvTemplate->getTemplatedDecl());
       else
         continue; // C++11 does not consider conversion operator templates(?).
     } else
       Conversion = cast<CXXConversionDecl>(D);
 
-    assert((!ConvTemplate || getLangOpts().CPlusPlus1y) &&
+    assert((!ConvTemplate || getLangOpts().CPlusPlus14) &&
            "Conversion operator templates are considered potentially "
            "viable in C++1y");
 
@@ -5384,7 +5385,7 @@ ExprResult Sema::PerformContextualImplicitConversion(
         if (!ConvTemplate)
           ExplicitConversions.addDecl(I.getDecl(), I.getAccess());
       } else {
-        if (!ConvTemplate && getLangOpts().CPlusPlus1y) {
+        if (!ConvTemplate && getLangOpts().CPlusPlus14) {
           if (ToType.isNull())
             ToType = CurToType.getUnqualifiedType();
           else if (HasUniqueTargetType &&
@@ -5396,7 +5397,7 @@ ExprResult Sema::PerformContextualImplicitConversion(
     }
   }
 
-  if (getLangOpts().CPlusPlus1y) {
+  if (getLangOpts().CPlusPlus14) {
     // C++1y [conv]p6:
     // ... An expression e of class type E appearing in such a context
     // is said to be contextually implicitly converted to a specified
@@ -5633,7 +5634,11 @@ Sema::AddOverloadCandidate(FunctionDecl *Function,
   // (CUDA B.1): Check for invalid calls between targets.
   if (getLangOpts().CUDA)
     if (const FunctionDecl *Caller = dyn_cast<FunctionDecl>(CurContext))
-      if (CheckCUDATarget(Caller, Function)) {
+      // Skip the check for callers that are implicit members, because in this
+      // case we may not yet know what the member's target is; the target is
+      // inferred for the member automatically, based on the bases and fields of
+      // the class.
+      if (!Caller->isImplicit() && CheckCUDATarget(Caller, Function)) {
         Candidate.Viable = false;
         Candidate.FailureKind = ovl_fail_bad_target;
         return;
@@ -5674,6 +5679,93 @@ Sema::AddOverloadCandidate(FunctionDecl *Function,
     Candidate.DeductionFailure.Data = FailedAttr;
     return;
   }
+}
+
+ObjCMethodDecl *Sema::SelectBestMethod(Selector Sel, MultiExprArg Args,
+                                       bool IsInstance) {
+  SmallVector<ObjCMethodDecl*, 4> Methods;
+  if (!CollectMultipleMethodsInGlobalPool(Sel, Methods, IsInstance))
+    return nullptr;
+    
+  for (unsigned b = 0, e = Methods.size(); b < e; b++) {
+    bool Match = true;
+    ObjCMethodDecl *Method = Methods[b];
+    unsigned NumNamedArgs = Sel.getNumArgs();
+    // Method might have more arguments than selector indicates. This is due
+    // to addition of c-style arguments in method.
+    if (Method->param_size() > NumNamedArgs)
+      NumNamedArgs = Method->param_size();
+    if (Args.size() < NumNamedArgs)
+      continue;
+            
+    for (unsigned i = 0; i < NumNamedArgs; i++) {
+      // We can't do any type-checking on a type-dependent argument.
+      if (Args[i]->isTypeDependent()) {
+        Match = false;
+        break;
+      }
+        
+      ParmVarDecl *param = Method->parameters()[i];
+      Expr *argExpr = Args[i];
+      assert(argExpr && "SelectBestMethod(): missing expression");
+                
+      // Strip the unbridged-cast placeholder expression off unless it's
+      // a consumed argument.
+      if (argExpr->hasPlaceholderType(BuiltinType::ARCUnbridgedCast) &&
+          !param->hasAttr<CFConsumedAttr>())
+        argExpr = stripARCUnbridgedCast(argExpr);
+                
+      // If the parameter is __unknown_anytype, move on to the next method.
+      if (param->getType() == Context.UnknownAnyTy) {
+        Match = false;
+        break;
+      }
+                
+      ImplicitConversionSequence ConversionState
+        = TryCopyInitialization(*this, argExpr, param->getType(),
+                                /*SuppressUserConversions*/false,
+                                /*InOverloadResolution=*/true,
+                                /*AllowObjCWritebackConversion=*/
+                                getLangOpts().ObjCAutoRefCount,
+                                /*AllowExplicit*/false);
+        if (ConversionState.isBad()) {
+          Match = false;
+          break;
+        }
+    }
+    // Promote additional arguments to variadic methods.
+    if (Match && Method->isVariadic()) {
+      for (unsigned i = NumNamedArgs, e = Args.size(); i < e; ++i) {
+        if (Args[i]->isTypeDependent()) {
+          Match = false;
+          break;
+        }
+        ExprResult Arg = DefaultVariadicArgumentPromotion(Args[i], VariadicMethod,
+                                                          nullptr);
+        if (Arg.isInvalid()) {
+          Match = false;
+          break;
+        }
+      }
+    } else {
+      // Check for extra arguments to non-variadic methods.
+      if (Args.size() != NumNamedArgs)
+        Match = false;
+      else if (Match && NumNamedArgs == 0 && Methods.size() > 1) {
+        // Special case when selectors have no argument. In this case, select
+        // one with the most general result type of 'id'.
+        for (unsigned b = 0, e = Methods.size(); b < e; b++) {
+          QualType ReturnT = Methods[b]->getReturnType();
+          if (ReturnT->isObjCIdType())
+            return Methods[b];
+        }
+      }
+    }
+
+    if (Match)
+      return Method;
+  }
+  return nullptr;
 }
 
 static bool IsNotEnableIfAttr(Attr *A) { return !isa<EnableIfAttr>(A); }
@@ -5731,9 +5823,7 @@ EnableIfAttr *Sema::CheckEnableIf(FunctionDecl *Function, ArrayRef<Expr *> Args,
     APValue Result;
     EnableIfAttr *EIA = cast<EnableIfAttr>(*I);
     if (!EIA->getCond()->EvaluateWithSubstitution(
-            Result, Context, Function,
-            ArrayRef<const Expr*>(ConvertedArgs.data(),
-                                  ConvertedArgs.size())) ||
+            Result, Context, Function, llvm::makeArrayRef(ConvertedArgs)) ||
         !Result.isInt() || !Result.getInt().getBoolValue()) {
       return EIA;
     }
@@ -5890,6 +5980,15 @@ Sema::AddMethodCandidate(CXXMethodDecl *Method, DeclAccessPair FoundDecl,
       return;
     }
   }
+
+  // (CUDA B.1): Check for invalid calls between targets.
+  if (getLangOpts().CUDA)
+    if (const FunctionDecl *Caller = dyn_cast<FunctionDecl>(CurContext))
+      if (CheckCUDATarget(Caller, Method)) {
+        Candidate.Viable = false;
+        Candidate.FailureKind = ovl_fail_bad_target;
+        return;
+      }
 
   // Determine the implicit conversion sequences for each of the
   // arguments.
@@ -6087,7 +6186,7 @@ Sema::AddConversionCandidate(CXXConversionDecl *Conversion,
 
   // If the conversion function has an undeduced return type, trigger its
   // deduction now.
-  if (getLangOpts().CPlusPlus1y && ConvType->isUndeducedType()) {
+  if (getLangOpts().CPlusPlus14 && ConvType->isUndeducedType()) {
     if (DeduceReturnType(Conversion, From->getExprLoc()))
       return;
     ConvType = Conversion->getConversionType().getNonReferenceType();
@@ -6226,7 +6325,7 @@ Sema::AddConversionCandidate(CXXConversionDecl *Conversion,
            "Can only end up with a standard conversion sequence or failure");
   }
 
-  if (EnableIfAttr *FailedAttr = CheckEnableIf(Conversion, ArrayRef<Expr*>())) {
+  if (EnableIfAttr *FailedAttr = CheckEnableIf(Conversion, None)) {
     Candidate.Viable = false;
     Candidate.FailureKind = ovl_fail_enable_if;
     Candidate.DeductionFailure.Data = FailedAttr;
@@ -6379,7 +6478,7 @@ void Sema::AddSurrogateCandidate(CXXConversionDecl *Conversion,
     }
   }
 
-  if (EnableIfAttr *FailedAttr = CheckEnableIf(Conversion, ArrayRef<Expr*>())) {
+  if (EnableIfAttr *FailedAttr = CheckEnableIf(Conversion, None)) {
     Candidate.Viable = false;
     Candidate.FailureKind = ovl_fail_enable_if;
     Candidate.DeductionFailure.Data = FailedAttr;
@@ -9041,7 +9140,47 @@ void DiagnoseBadTarget(Sema &S, OverloadCandidate *Cand) {
   OverloadCandidateKind FnKind = ClassifyOverloadCandidate(S, Callee, FnDesc);
 
   S.Diag(Callee->getLocation(), diag::note_ovl_candidate_bad_target)
-      << (unsigned) FnKind << CalleeTarget << CallerTarget;
+      << (unsigned)FnKind << CalleeTarget << CallerTarget;
+
+  // This could be an implicit constructor for which we could not infer the
+  // target due to a collsion. Diagnose that case.
+  CXXMethodDecl *Meth = dyn_cast<CXXMethodDecl>(Callee);
+  if (Meth != nullptr && Meth->isImplicit()) {
+    CXXRecordDecl *ParentClass = Meth->getParent();
+    Sema::CXXSpecialMember CSM;
+
+    switch (FnKind) {
+    default:
+      return;
+    case oc_implicit_default_constructor:
+      CSM = Sema::CXXDefaultConstructor;
+      break;
+    case oc_implicit_copy_constructor:
+      CSM = Sema::CXXCopyConstructor;
+      break;
+    case oc_implicit_move_constructor:
+      CSM = Sema::CXXMoveConstructor;
+      break;
+    case oc_implicit_copy_assignment:
+      CSM = Sema::CXXCopyAssignment;
+      break;
+    case oc_implicit_move_assignment:
+      CSM = Sema::CXXMoveAssignment;
+      break;
+    };
+
+    bool ConstRHS = false;
+    if (Meth->getNumParams()) {
+      if (const ReferenceType *RT =
+              Meth->getParamDecl(0)->getType()->getAs<ReferenceType>()) {
+        ConstRHS = RT->getPointeeType().isConstQualified();
+      }
+    }
+
+    S.inferCUDATargetForImplicitSpecialMember(ParentClass, CSM, Meth,
+                                              /* ConstRHS */ ConstRHS,
+                                              /* Diagnose */ true);
+  }
 }
 
 void DiagnoseFailedEnableIfAttr(Sema &S, OverloadCandidate *Cand) {
@@ -9782,12 +9921,12 @@ private:
     if (FunctionDecl *FunDecl = dyn_cast<FunctionDecl>(Fn)) {
       if (S.getLangOpts().CUDA)
         if (FunctionDecl *Caller = dyn_cast<FunctionDecl>(S.CurContext))
-          if (S.CheckCUDATarget(Caller, FunDecl))
+          if (!Caller->isImplicit() && S.CheckCUDATarget(Caller, FunDecl))
             return false;
 
       // If any candidate has a placeholder return type, trigger its deduction
       // now.
-      if (S.getLangOpts().CPlusPlus1y &&
+      if (S.getLangOpts().CPlusPlus14 &&
           FunDecl->getReturnType()->isUndeducedType() &&
           S.DeduceReturnType(FunDecl, SourceExpr->getLocStart(), Complain))
         return false;
@@ -10092,7 +10231,7 @@ Sema::ResolveSingleFunctionTemplateSpecialization(OverloadExpr *ovl,
     if (FoundResult) *FoundResult = I.getPair();    
   }
 
-  if (Matched && getLangOpts().CPlusPlus1y &&
+  if (Matched && getLangOpts().CPlusPlus14 &&
       Matched->getReturnType()->isUndeducedType() &&
       DeduceReturnType(Matched, ovl->getExprLoc(), Complain))
     return nullptr;
@@ -10945,10 +11084,13 @@ Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
   // Add operator candidates that are member functions.
   AddMemberOperatorCandidates(Op, OpLoc, Args, CandidateSet);
 
-  // Add candidates from ADL.
-  AddArgumentDependentLookupCandidates(OpName, OpLoc, Args,
-                                       /*ExplicitTemplateArgs*/ nullptr,
-                                       CandidateSet);
+  // Add candidates from ADL. Per [over.match.oper]p2, this lookup is not
+  // performed for an assignment operator (nor for operator[] nor operator->,
+  // which don't get here).
+  if (Opc != BO_Assign)
+    AddArgumentDependentLookupCandidates(OpName, OpLoc, Args,
+                                         /*ExplicitTemplateArgs*/ nullptr,
+                                         CandidateSet);
 
   // Add builtin operator candidates.
   AddBuiltinOperatorCandidates(Op, OpLoc, Args, CandidateSet);
@@ -11352,6 +11494,10 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
         << (qualsString.find(' ') == std::string::npos ? 1 : 2);
     }
 
+    if (resultType->isMemberPointerType())
+      if (Context.getTargetInfo().getCXXABI().isMicrosoft())
+        RequireCompleteType(LParenLoc, resultType, 0);
+
     CXXMemberCallExpr *call
       = new (Context) CXXMemberCallExpr(Context, MemExprE, Args,
                                         resultType, valueKind, RParenLoc);
@@ -11504,6 +11650,18 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
   CXXMemberCallExpr *TheCall =
     new (Context) CXXMemberCallExpr(Context, MemExprE, Args,
                                     ResultType, VK, RParenLoc);
+
+  // (CUDA B.1): Check for invalid calls between targets.
+  if (getLangOpts().CUDA) {
+    if (const FunctionDecl *Caller = dyn_cast<FunctionDecl>(CurContext)) {
+      if (CheckCUDATarget(Caller, Method)) {
+        Diag(MemExpr->getMemberLoc(), diag::err_ref_bad_target)
+            << IdentifyCUDATarget(Method) << Method->getIdentifier()
+            << IdentifyCUDATarget(Caller);
+        return ExprError();
+      }
+    }
+  }
 
   // Check for a valid return type.
   if (CheckCallReturnType(Method->getReturnType(), MemExpr->getMemberLoc(),

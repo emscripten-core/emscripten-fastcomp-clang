@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Frontend/SerializedDiagnosticPrinter.h"
+#include "clang/Frontend/SerializedDiagnostics.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/FileManager.h"
@@ -96,10 +97,9 @@ class SDiagsWriter : public DiagnosticConsumer {
     : LangOpts(nullptr), OriginalInstance(false), State(State) {}
 
 public:
-  SDiagsWriter(raw_ostream *os, DiagnosticOptions *diags)
-    : LangOpts(nullptr), OriginalInstance(true),
-      State(new SharedState(os, diags))
-  {
+  SDiagsWriter(std::unique_ptr<raw_ostream> os, DiagnosticOptions *diags)
+      : LangOpts(nullptr), OriginalInstance(true),
+        State(new SharedState(std::move(os), diags)) {
     EmitPreamble();
   }
 
@@ -173,9 +173,6 @@ private:
   void AddCharSourceRangeToRecord(CharSourceRange R, RecordDataImpl &Record,
                                   const SourceManager &SM);
 
-  /// \brief The version of the diagnostics file.
-  enum { Version = 2 };
-
   /// \brief Language options, which can differ from one clone of this client
   /// to another.
   const LangOptions *LangOpts;
@@ -187,8 +184,9 @@ private:
   /// \brief State that is shared among the various clones of this diagnostic
   /// consumer.
   struct SharedState : RefCountedBase<SharedState> {
-    SharedState(raw_ostream *os, DiagnosticOptions *diags)
-      : DiagOpts(diags), Stream(Buffer), OS(os), EmittedAnyDiagBlocks(false) { }
+    SharedState(std::unique_ptr<raw_ostream> os, DiagnosticOptions *diags)
+        : DiagOpts(diags), Stream(Buffer), OS(std::move(os)),
+          EmittedAnyDiagBlocks(false) {}
 
     /// \brief Diagnostic options.
     IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts;
@@ -236,8 +234,9 @@ private:
 
 namespace clang {
 namespace serialized_diags {
-DiagnosticConsumer *create(raw_ostream *OS, DiagnosticOptions *diags) {
-  return new SDiagsWriter(OS, diags);
+std::unique_ptr<DiagnosticConsumer> create(std::unique_ptr<raw_ostream> OS,
+                                           DiagnosticOptions *diags) {
+  return llvm::make_unique<SDiagsWriter>(std::move(OS), diags);
 }
 } // end namespace serialized_diags
 } // end namespace clang
@@ -465,17 +464,15 @@ void SDiagsWriter::EmitMetaBlock() {
   Stream.EnterSubblock(BLOCK_META, 3);
   Record.clear();
   Record.push_back(RECORD_VERSION);
-  Record.push_back(Version);
+  Record.push_back(VersionNumber);
   Stream.EmitRecordWithAbbrev(Abbrevs.get(RECORD_VERSION), Record);  
   Stream.ExitBlock();
 }
 
 unsigned SDiagsWriter::getEmitCategory(unsigned int category) {
-  if (State->Categories.count(category))
+  if (!State->Categories.insert(category).second)
     return category;
-  
-  State->Categories.insert(category);
-  
+
   // We use a local version of 'Record' so that we can be generating
   // another record when we lazily generate one for the category entry.
   RecordData Record;

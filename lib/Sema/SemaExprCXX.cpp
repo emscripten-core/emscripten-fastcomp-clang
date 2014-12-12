@@ -67,6 +67,7 @@ ParsedType Sema::getInheritingConstructorName(CXXScopeSpec &SS,
     break;
 
   case NestedNameSpecifier::Global:
+  case NestedNameSpecifier::Super:
   case NestedNameSpecifier::Namespace:
   case NestedNameSpecifier::NamespaceAlias:
     llvm_unreachable("Nested name specifier is not a type for inheriting ctor");
@@ -354,6 +355,7 @@ bool Sema::checkLiteralOperatorId(const CXXScopeSpec &SS,
     return true;
 
   case NestedNameSpecifier::Global:
+  case NestedNameSpecifier::Super:
   case NestedNameSpecifier::Namespace:
   case NestedNameSpecifier::NamespaceAlias:
     return false;
@@ -1083,7 +1085,7 @@ Sema::ActOnCXXNew(SourceLocation StartLoc, bool UseGlobal,
       DeclaratorChunk::ArrayTypeInfo &Array = D.getTypeObject(I).Arr;
       if (Expr *NumElts = (Expr *)Array.NumElts) {
         if (!NumElts->isTypeDependent() && !NumElts->isValueDependent()) {
-          if (getLangOpts().CPlusPlus1y) {
+          if (getLangOpts().CPlusPlus14) {
 	    // C++1y [expr.new]p6: Every constant-expression in a noptr-new-declarator
 	    //   shall be a converted constant expression (5.19) of type std::size_t
 	    //   and shall evaluate to a strictly positive value.
@@ -1257,7 +1259,7 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
   //   std::size_t.
   if (ArraySize && !ArraySize->isTypeDependent()) {
     ExprResult ConvertedSize;
-    if (getLangOpts().CPlusPlus1y) {
+    if (getLangOpts().CPlusPlus14) {
       assert(Context.getTargetInfo().getIntWidth() && "Builtin type of size 0?");
 
       ConvertedSize = PerformImplicitConversion(ArraySize, Context.getSizeType(),
@@ -2072,19 +2074,18 @@ void Sema::DeclareGlobalAllocationFunction(DeclarationName Name,
     if (!getLangOpts().CPlusPlus11) {
       BadAllocType = Context.getTypeDeclType(getStdBadAlloc());
       assert(StdBadAlloc && "Must have std::bad_alloc declared");
-      EPI.ExceptionSpecType = EST_Dynamic;
-      EPI.NumExceptions = 1;
-      EPI.Exceptions = &BadAllocType;
+      EPI.ExceptionSpec.Type = EST_Dynamic;
+      EPI.ExceptionSpec.Exceptions = llvm::makeArrayRef(BadAllocType);
     }
   } else {
-    EPI.ExceptionSpecType = getLangOpts().CPlusPlus11 ?
-                                EST_BasicNoexcept : EST_DynamicNone;
+    EPI.ExceptionSpec =
+        getLangOpts().CPlusPlus11 ? EST_BasicNoexcept : EST_DynamicNone;
   }
 
   QualType Params[] = { Param1, Param2 };
 
   QualType FnType = Context.getFunctionType(
-      Return, ArrayRef<QualType>(Params, NumParams), EPI);
+      Return, llvm::makeArrayRef(Params, NumParams), EPI);
   FunctionDecl *Alloc =
     FunctionDecl::Create(Context, GlobalCtx, SourceLocation(),
                          SourceLocation(), Name,
@@ -2102,7 +2103,7 @@ void Sema::DeclareGlobalAllocationFunction(DeclarationName Name,
                                         SC_None, nullptr);
     ParamDecls[I]->setImplicit();
   }
-  Alloc->setParams(ArrayRef<ParmVarDecl*>(ParamDecls, NumParams));
+  Alloc->setParams(llvm::makeArrayRef(ParamDecls, NumParams));
 
   Context.getTranslationUnitDecl()->addDecl(Alloc);
   IdResolver.tryAddTopLevelDecl(Alloc, Name);
@@ -2899,6 +2900,14 @@ Sema::PerformImplicitConversion(Expr *From, QualType ToType,
       return ExprError();
     if (CheckExceptionSpecCompatibility(From, ToType))
       return ExprError();
+
+    // We may not have been able to figure out what this member pointer resolved
+    // to up until this exact point.  Attempt to lock-in it's inheritance model.
+    QualType FromType = From->getType();
+    if (FromType->isMemberPointerType())
+      if (Context.getTargetInfo().getCXXABI().isMicrosoft())
+        RequireCompleteType(From->getExprLoc(), FromType, 0);
+
     From = ImpCastExprToType(From, ToType, Kind, VK_RValue, &BasePath, CCK)
              .get();
     break;
@@ -3642,12 +3651,13 @@ static bool evaluateTypeTrait(Sema &S, TypeTrait Kind, SourceLocation KWLoc,
       if (T->isObjectType() || T->isFunctionType())
         T = S.Context.getRValueReferenceType(T);
       OpaqueArgExprs.push_back(
-        OpaqueValueExpr(Args[I]->getTypeLoc().getLocStart(), 
+        OpaqueValueExpr(Args[I]->getTypeLoc().getLocStart(),
                         T.getNonLValueExprType(S.Context),
                         Expr::getValueKindForType(T)));
-      ArgExprs.push_back(&OpaqueArgExprs.back());
     }
-    
+    for (Expr &E : OpaqueArgExprs)
+      ArgExprs.push_back(&E);
+
     // Perform the initialization in an unevaluated context within a SFINAE 
     // trap at translation unit scope.
     EnterExpressionEvaluationContext Unevaluated(S, Sema::Unevaluated);
@@ -4993,9 +5003,8 @@ Expr *Sema::MaybeCreateExprWithCleanups(Expr *SubExpr) {
   if (!ExprNeedsCleanups)
     return SubExpr;
 
-  ArrayRef<ExprWithCleanups::CleanupObject> Cleanups
-    = llvm::makeArrayRef(ExprCleanupObjects.begin() + FirstCleanup,
-                         ExprCleanupObjects.size() - FirstCleanup);
+  auto Cleanups = llvm::makeArrayRef(ExprCleanupObjects.begin() + FirstCleanup,
+                                     ExprCleanupObjects.size() - FirstCleanup);
 
   Expr *E = ExprWithCleanups::Create(Context, SubExpr, Cleanups);
   DiscardCleanupsInEvaluationContext();

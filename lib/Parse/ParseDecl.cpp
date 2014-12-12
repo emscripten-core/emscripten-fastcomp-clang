@@ -627,6 +627,10 @@ void Parser::ParseOpenCLQualifiers(ParsedAttributes &Attrs) {
                AttributeList::AS_Keyword);
 }
 
+static bool VersionNumberSeparator(const char Separator) {
+  return (Separator == '.' || Separator == '_');
+}
+
 /// \brief Parse a version number.
 ///
 /// version:
@@ -684,7 +688,9 @@ VersionTuple Parser::ParseVersionTuple(SourceRange &Range) {
     return VersionTuple(Major);
   }
 
-  if (ThisTokBegin[AfterMajor] != '.' || (AfterMajor + 1 == ActualLength)) {
+  const char AfterMajorSeparator = ThisTokBegin[AfterMajor];
+  if (!VersionNumberSeparator(AfterMajorSeparator)
+      || (AfterMajor + 1 == ActualLength)) {
     Diag(Tok, diag::err_expected_version);
     SkipUntil(tok::comma, tok::r_paren,
               StopAtSemi | StopBeforeMatch | StopAtCodeCompletion);
@@ -708,16 +714,21 @@ VersionTuple Parser::ParseVersionTuple(SourceRange &Range) {
       return VersionTuple();
     }
 
-    return VersionTuple(Major, Minor);
+    return VersionTuple(Major, Minor, (AfterMajorSeparator == '_'));
   }
 
-  // If what follows is not a '.', we have a problem.
-  if (ThisTokBegin[AfterMinor] != '.') {
+  const char AfterMinorSeparator = ThisTokBegin[AfterMinor];
+  // If what follows is not a '.' or '_', we have a problem.
+  if (!VersionNumberSeparator(AfterMinorSeparator)) {
     Diag(Tok, diag::err_expected_version);
     SkipUntil(tok::comma, tok::r_paren,
               StopAtSemi | StopBeforeMatch | StopAtCodeCompletion);
     return VersionTuple();
   }
+  
+  // Warn if separators, be it '.' or '_', do not match.
+  if (AfterMajorSeparator != AfterMinorSeparator)
+    Diag(Tok, diag::warn_expected_consistent_version_separator);
 
   // Parse the subminor version.
   unsigned AfterSubminor = AfterMinor + 1;
@@ -734,7 +745,7 @@ VersionTuple Parser::ParseVersionTuple(SourceRange &Range) {
     return VersionTuple();
   }
   ConsumeToken();
-  return VersionTuple(Major, Minor, Subminor);
+  return VersionTuple(Major, Minor, Subminor, (AfterMajorSeparator == '_'));
 }
 
 /// \brief Parse the contents of the "availability" attribute.
@@ -2449,8 +2460,11 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
                                         DeclSpecContext DSContext,
                                         LateParsedAttrList *LateAttrs) {
   if (DS.getSourceRange().isInvalid()) {
+    // Start the range at the current token but make the end of the range
+    // invalid.  This will make the entire range invalid unless we successfully
+    // consume a token.
     DS.SetRangeStart(Tok.getLocation());
-    DS.SetRangeEnd(Tok.getLocation());
+    DS.SetRangeEnd(SourceLocation());
   }
 
   bool EnteringContext = (DSContext == DSC_class || DSContext == DSC_top_level);
@@ -2728,6 +2742,7 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       goto DoneWithDeclSpec;
 
       // typedef-name
+    case tok::kw___super:
     case tok::kw_decltype:
     case tok::identifier: {
       // This identifier can only be a typedef name if we haven't already seen
@@ -3232,14 +3247,15 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
 ///         declarator[opt] ':' constant-expression
 /// [GNU]   declarator[opt] ':' constant-expression attributes[opt]
 ///
-void Parser::
-ParseStructDeclaration(ParsingDeclSpec &DS, FieldCallback &Fields) {
+void Parser::ParseStructDeclaration(
+    ParsingDeclSpec &DS,
+    llvm::function_ref<void(ParsingFieldDeclarator &)> FieldsCallback) {
 
   if (Tok.is(tok::kw___extension__)) {
     // __extension__ silences extension warnings in the subexpression.
     ExtensionRAIIObject O(Diags);  // Use RAII to do this.
     ConsumeToken();
-    return ParseStructDeclaration(DS, Fields);
+    return ParseStructDeclaration(DS, FieldsCallback);
   }
 
   // Parse the common specifier-qualifiers-list piece.
@@ -3271,7 +3287,8 @@ ParseStructDeclaration(ParsingDeclSpec &DS, FieldCallback &Fields) {
       // Don't parse FOO:BAR as if it were a typo for FOO::BAR.
       ColonProtectionRAIIObject X(*this);
       ParseDeclarator(DeclaratorInfo.D);
-    }
+    } else
+      DeclaratorInfo.D.SetIdentifier(nullptr, Tok.getLocation());
 
     if (TryConsumeToken(tok::colon)) {
       ExprResult Res(ParseConstantExpression());
@@ -3285,7 +3302,7 @@ ParseStructDeclaration(ParsingDeclSpec &DS, FieldCallback &Fields) {
     MaybeParseGNUAttributes(DeclaratorInfo.D);
 
     // We're done with this declarator;  invoke the callback.
-    Fields.invoke(DeclaratorInfo);
+    FieldsCallback(DeclaratorInfo);
 
     // If we don't have a comma, it is either the end of the list (a ';')
     // or an error, bail out.
@@ -3349,28 +3366,19 @@ void Parser::ParseStructUnionBody(SourceLocation RecordLoc,
     }
 
     if (!Tok.is(tok::at)) {
-      struct CFieldCallback : FieldCallback {
-        Parser &P;
-        Decl *TagDecl;
-        SmallVectorImpl<Decl *> &FieldDecls;
-
-        CFieldCallback(Parser &P, Decl *TagDecl,
-                       SmallVectorImpl<Decl *> &FieldDecls) :
-          P(P), TagDecl(TagDecl), FieldDecls(FieldDecls) {}
-
-        void invoke(ParsingFieldDeclarator &FD) override {
-          // Install the declarator into the current TagDecl.
-          Decl *Field = P.Actions.ActOnField(P.getCurScope(), TagDecl,
-                              FD.D.getDeclSpec().getSourceRange().getBegin(),
-                                                 FD.D, FD.BitfieldSize);
-          FieldDecls.push_back(Field);
-          FD.complete(Field);
-        }
-      } Callback(*this, TagDecl, FieldDecls);
+      auto CFieldCallback = [&](ParsingFieldDeclarator &FD) {
+        // Install the declarator into the current TagDecl.
+        Decl *Field =
+            Actions.ActOnField(getCurScope(), TagDecl,
+                               FD.D.getDeclSpec().getSourceRange().getBegin(),
+                               FD.D, FD.BitfieldSize);
+        FieldDecls.push_back(Field);
+        FD.complete(Field);
+      };
 
       // Parse all the comma separated declarators.
       ParsingDeclSpec DS(*this);
-      ParseStructDeclaration(DS, Callback);
+      ParseStructDeclaration(DS, CFieldCallback);
     } else { // Handle @defs
       ConsumeToken();
       if (!Tok.isObjCAtKeyword(tok::objc_defs)) {
@@ -4373,20 +4381,18 @@ bool Parser::isConstructorDeclarator(bool IsUnqualified) {
 ///          type-qualifier-list: [C99 6.7.5]
 ///            type-qualifier
 /// [vendor]   attributes
-///              [ only if VendorAttributesAllowed=true ]
+///              [ only if AttrReqs & AR_VendorAttributesParsed ]
 ///            type-qualifier-list type-qualifier
 /// [vendor]   type-qualifier-list attributes
-///              [ only if VendorAttributesAllowed=true ]
+///              [ only if AttrReqs & AR_VendorAttributesParsed ]
 /// [C++0x]    attribute-specifier[opt] is allowed before cv-qualifier-seq
-///              [ only if CXX11AttributesAllowed=true ]
-/// Note: vendor can be GNU, MS, etc.
-///
-void Parser::ParseTypeQualifierListOpt(DeclSpec &DS,
-                                       bool VendorAttributesAllowed,
-                                       bool CXX11AttributesAllowed,
+///              [ only if AttReqs & AR_CXX11AttributesParsed ]
+/// Note: vendor can be GNU, MS, etc and can be explicitly controlled via
+/// AttrRequirements bitmask values.
+void Parser::ParseTypeQualifierListOpt(DeclSpec &DS, unsigned AttrReqs,
                                        bool AtomicAllowed,
                                        bool IdentifierRequired) {
-  if (getLangOpts().CPlusPlus11 && CXX11AttributesAllowed &&
+  if (getLangOpts().CPlusPlus11 && (AttrReqs & AR_CXX11AttributesParsed) &&
       isCXX11AttributeSpecifier()) {
     ParsedAttributesWithRange attrs(AttrFactory);
     ParseCXX11Attributes(attrs);
@@ -4439,7 +4445,7 @@ void Parser::ParseTypeQualifierListOpt(DeclSpec &DS,
     case tok::kw___uptr:
       // GNU libc headers in C mode use '__uptr' as an identifer which conflicts
       // with the MS modifier keyword.
-      if (VendorAttributesAllowed && !getLangOpts().CPlusPlus &&
+      if ((AttrReqs & AR_DeclspecAttributesParsed) && !getLangOpts().CPlusPlus &&
           IdentifierRequired && DS.isEmpty() && NextToken().is(tok::semi)) {
         if (TryKeywordIdentFallback(false))
           continue;
@@ -4453,19 +4459,26 @@ void Parser::ParseTypeQualifierListOpt(DeclSpec &DS,
     case tok::kw___fastcall:
     case tok::kw___thiscall:
     case tok::kw___unaligned:
-      if (VendorAttributesAllowed) {
+      if (AttrReqs & AR_DeclspecAttributesParsed) {
         ParseMicrosoftTypeAttributes(DS.getAttributes());
         continue;
       }
       goto DoneWithTypeQuals;
     case tok::kw___pascal:
-      if (VendorAttributesAllowed) {
+      if (AttrReqs & AR_VendorAttributesParsed) {
         ParseBorlandTypeAttributes(DS.getAttributes());
         continue;
       }
       goto DoneWithTypeQuals;
     case tok::kw___attribute:
-      if (VendorAttributesAllowed) {
+      if (AttrReqs & AR_GNUAttributesParsedAndRejected)
+        // When GNU attributes are expressly forbidden, diagnose their usage.
+        Diag(Tok, diag::err_attributes_not_allowed);
+
+      // Parse the attributes even if they are rejected to ensure that error
+      // recovery is graceful.
+      if (AttrReqs & AR_GNUAttributesParsed ||
+          AttrReqs & AR_GNUAttributesParsedAndRejected) {
         ParseGNUAttributes(DS.getAttributes());
         continue; // do *not* consume the next token!
       }
@@ -4601,8 +4614,13 @@ void Parser::ParseDeclaratorInternal(Declarator &D,
     // Is a pointer.
     DeclSpec DS(AttrFactory);
 
-    // FIXME: GNU attributes are not allowed here in a new-type-id.
-    ParseTypeQualifierListOpt(DS, true, true, true, !D.mayOmitIdentifier());
+    // GNU attributes are not allowed here in a new-type-id, but Declspec and
+    // C++11 attributes are allowed.
+    unsigned Reqs = AR_CXX11AttributesParsed | AR_DeclspecAttributesParsed |
+                            ((D.getContext() != Declarator::CXXNewContext)
+                                 ? AR_GNUAttributesParsed
+                                 : AR_GNUAttributesParsedAndRejected);
+    ParseTypeQualifierListOpt(DS, Reqs, true, !D.mayOmitIdentifier());
     D.ExtendWithDeclSpec(DS);
 
     // Recursively parse the declarator.
@@ -5102,6 +5120,7 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
   SourceLocation RefQualifierLoc;
   SourceLocation ConstQualifierLoc;
   SourceLocation VolatileQualifierLoc;
+  SourceLocation RestrictQualifierLoc;
   ExceptionSpecificationType ESpecType = EST_None;
   SourceRange ESpecRange;
   SmallVector<ParsedType, 2> DynamicExceptions;
@@ -5149,13 +5168,13 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
       // with the virt-specifier-seq and pure-specifier in the same way.
 
       // Parse cv-qualifier-seq[opt].
-      ParseTypeQualifierListOpt(DS, /*VendorAttributesAllowed*/ false,
-                                /*CXX11AttributesAllowed*/ false,
+      ParseTypeQualifierListOpt(DS, AR_NoAttributesParsed,
                                 /*AtomicAllowed*/ false);
       if (!DS.getSourceRange().getEnd().isInvalid()) {
         EndLoc = DS.getSourceRange().getEnd();
         ConstQualifierLoc = DS.getConstSpecLoc();
         VolatileQualifierLoc = DS.getVolatileSpecLoc();
+        RestrictQualifierLoc = DS.getRestrictSpecLoc();
       }
 
       // Parse ref-qualifier[opt].
@@ -5188,7 +5207,7 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
                                dyn_cast<CXXRecordDecl>(Actions.CurContext),
                                DS.getTypeQualifiers() |
                                (D.getDeclSpec().isConstexprSpecified() &&
-                                !getLangOpts().CPlusPlus1y
+                                !getLangOpts().CPlusPlus14
                                   ? Qualifiers::Const : 0),
                                IsCXX11MemberFunction);
 
@@ -5228,6 +5247,7 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
                                              RefQualifierIsLValueRef,
                                              RefQualifierLoc, ConstQualifierLoc,
                                              VolatileQualifierLoc,
+                                             RestrictQualifierLoc,
                                              /*MutableLoc=*/SourceLocation(),
                                              ESpecType, ESpecRange.getBegin(),
                                              DynamicExceptions.data(),
@@ -5414,10 +5434,18 @@ void Parser::ParseParameterDeclarationClause(
       // Otherwise, we have something.  Add it and let semantic analysis try
       // to grok it and add the result to the ParamInfo we are building.
 
+      // Last chance to recover from a misplaced ellipsis in an attempted
+      // parameter pack declaration.
+      if (Tok.is(tok::ellipsis) &&
+          (NextToken().isNot(tok::r_paren) ||
+           (!ParmDeclarator.getEllipsisLoc().isValid() &&
+            !Actions.isUnexpandedParameterPackPermitted())) &&
+          Actions.containsUnexpandedParameterPacks(ParmDeclarator))
+        DiagnoseMisplacedEllipsisInDeclarator(ConsumeToken(), ParmDeclarator);
+
       // Inform the actions module about the parameter declarator, so it gets
       // added to the current scope.
-      Decl *Param = Actions.ActOnParamDeclarator(getCurScope(), 
-                                                       ParmDeclarator);
+      Decl *Param = Actions.ActOnParamDeclarator(getCurScope(), ParmDeclarator);
       // Parse the default argument, if any. We parse the default
       // arguments in all dialects; the semantic analysis in
       // ActOnParamDefaultArgument will reject the default argument in
@@ -5480,12 +5508,34 @@ void Parser::ParseParameterDeclarationClause(
                                           Param, DefArgToks));
     }
 
-    if (TryConsumeToken(tok::ellipsis, EllipsisLoc) &&
-        !getLangOpts().CPlusPlus) {
-      // We have ellipsis without a preceding ',', which is ill-formed
-      // in C. Complain and provide the fix.
-      Diag(EllipsisLoc, diag::err_missing_comma_before_ellipsis)
+    if (TryConsumeToken(tok::ellipsis, EllipsisLoc)) {
+      if (!getLangOpts().CPlusPlus) {
+        // We have ellipsis without a preceding ',', which is ill-formed
+        // in C. Complain and provide the fix.
+        Diag(EllipsisLoc, diag::err_missing_comma_before_ellipsis)
+            << FixItHint::CreateInsertion(EllipsisLoc, ", ");
+      } else if (ParmDeclarator.getEllipsisLoc().isValid() ||
+                 Actions.containsUnexpandedParameterPacks(ParmDeclarator)) {
+        // It looks like this was supposed to be a parameter pack. Warn and
+        // point out where the ellipsis should have gone.
+        SourceLocation ParmEllipsis = ParmDeclarator.getEllipsisLoc();
+        Diag(EllipsisLoc, diag::warn_misplaced_ellipsis_vararg)
+          << ParmEllipsis.isValid() << ParmEllipsis;
+        if (ParmEllipsis.isValid()) {
+          Diag(ParmEllipsis,
+               diag::note_misplaced_ellipsis_vararg_existing_ellipsis);
+        } else {
+          Diag(ParmDeclarator.getIdentifierLoc(),
+               diag::note_misplaced_ellipsis_vararg_add_ellipsis)
+            << FixItHint::CreateInsertion(ParmDeclarator.getIdentifierLoc(),
+                                          "...")
+            << !ParmDeclarator.hasName();
+        }
+        Diag(EllipsisLoc, diag::note_misplaced_ellipsis_vararg_add_comma)
           << FixItHint::CreateInsertion(EllipsisLoc, ", ");
+      }
+
+      // We can't have any more parameters after an ellipsis.
       break;
     }
 
@@ -5546,7 +5596,7 @@ void Parser::ParseBracketDeclarator(Declarator &D) {
   // If there is a type-qualifier-list, read it now.
   // Type qualifiers in an array subscript are a C99 feature.
   DeclSpec DS(AttrFactory);
-  ParseTypeQualifierListOpt(DS, false /*no attributes*/);
+  ParseTypeQualifierListOpt(DS, AR_CXX11AttributesParsed);
 
   // If we haven't already read 'static', check to see if there is one after the
   // type-qualifier-list.
@@ -5583,6 +5633,11 @@ void Parser::ParseBracketDeclarator(Declarator &D) {
       EnterExpressionEvaluationContext Unevaluated(Actions,
                                                    Sema::ConstantEvaluated);
       NumElements = ParseAssignmentExpression();
+    }
+  } else {
+    if (StaticLoc.isValid()) {
+      Diag(StaticLoc, diag::err_unspecified_size_with_static);
+      StaticLoc = SourceLocation();  // Drop the static.
     }
   }
 

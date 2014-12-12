@@ -2,10 +2,6 @@
 Modules
 =======
 
-.. warning::
-   The functionality described on this page is supported for C and
-   Objective-C. C++ support is experimental.
-
 .. contents::
    :local:
 
@@ -104,7 +100,7 @@ Many programming languages have a module or package system, and because of the v
 
 Using Modules
 =============
-To enable modules, pass the command-line flag ``-fmodules`` [#]_. This will make any modules-enabled software libraries available as modules as well as introducing any modules-specific syntax. Additional `command-line parameters`_ are described in a separate section later.
+To enable modules, pass the command-line flag ``-fmodules``. This will make any modules-enabled software libraries available as modules as well as introducing any modules-specific syntax. Additional `command-line parameters`_ are described in a separate section later.
 
 Objective-C Import declaration
 ------------------------------
@@ -114,7 +110,7 @@ Objective-C provides syntax for importing a module via an *@import declaration*,
 
   @import std;
 
-The @import declaration above imports the entire contents of the ``std`` module (which would contain, e.g., the entire C or C++ standard library) and make its API available within the current translation unit. To import only part of a module, one may use dot syntax to specific a particular submodule, e.g.,
+The ``@import`` declaration above imports the entire contents of the ``std`` module (which would contain, e.g., the entire C or C++ standard library) and make its API available within the current translation unit. To import only part of a module, one may use dot syntax to specific a particular submodule, e.g.,
 
 .. parsed-literal::
 
@@ -140,6 +136,19 @@ will be automatically mapped to an import of the module ``std.io``. Even with sp
 
   The automatic mapping of ``#include`` to ``import`` also solves an implementation problem: importing a module with a definition of some entity (say, a ``struct Point``) and then parsing a header containing another definition of ``struct Point`` would cause a redefinition error, even if it is the same ``struct Point``. By mapping ``#include`` to ``import``, the compiler can guarantee that it always sees just the already-parsed definition from the module.
 
+While building a module, ``#include_next`` is also supported, with one caveat.
+The usual behavior of ``#include_next`` is to search for the specified filename
+in the list of include paths, starting from the path *after* the one
+in which the current file was found.
+Because files listed in module maps are not found through include paths, a
+different strategy is used for ``#include_next`` directives in such files: the
+list of include paths is searched for the specified header name, to find the
+first include path that would refer to the current file. ``#include_next`` is
+interpreted as if the current file had been found in that path.
+If this search finds a file named by a module map, the ``#include_next``
+directive is translated into an import, just like for a ``#include``
+directive.``
+
 Module maps
 -----------
 The crucial link between modules and headers is described by a *module map*, which describes how a collection of existing headers maps on to the (logical) structure of a module. For example, one could imagine a module ``std`` covering the C standard library. Each of the C standard library headers (``<stdio.h>``, ``<stdlib.h>``, ``<math.h>``, etc.) would contribute to the ``std`` module, by placing their respective APIs into the corresponding submodule (``std.io``, ``std.lib``, ``std.math``, etc.). Having a list of the headers that are part of the ``std`` module allows the compiler to build the ``std`` module as a standalone entity, and having the mapping from header names to (sub)modules allows the automatic translation of ``#include`` directives to module imports.
@@ -163,13 +172,10 @@ Modules maintain references to each of the headers that were part of the module 
 Command-line parameters
 -----------------------
 ``-fmodules``
-  Enable the modules feature (EXPERIMENTAL).
-
-``-fcxx-modules``
-  Enable the modules feature for C++ (EXPERIMENTAL and VERY BROKEN).
+  Enable the modules feature.
 
 ``-fmodule-maps``
-  Enable interpretation of module maps (EXPERIMENTAL). This option is implied by ``-fmodules``.
+  Enable interpretation of module maps. This option is implied by ``-fmodules``.
 
 ``-fmodules-cache-path=<directory>``
   Specify the path to the modules cache. If not provided, Clang will select a system-appropriate default.
@@ -208,13 +214,15 @@ Modules are modeled as if each submodule were a separate translation unit, and a
 
 .. note::
 
-  This behavior is currently only approximated when building a module. Entities within a submodule that has already been built are visible when building later submodules in that module. This can lead to fragile modules that depend on the build order used for the submodules of the module, and should not be relied upon.
+  This behavior is currently only approximated when building a module with submodules. Entities within a submodule that has already been built are visible when building later submodules in that module. This can lead to fragile modules that depend on the build order used for the submodules of the module, and should not be relied upon. This behavior is subject to change.
 
 As an example, in C, this implies that if two structs are defined in different submodules with the same name, those two types are distinct types (but may be *compatible* types if their definitions match. In C++, two structs defined with the same name in different submodules are the *same* type, and must be equivalent under C++'s One Definition Rule.
 
 .. note::
 
   Clang currently only performs minimal checking for violations of the One Definition Rule.
+
+If any submodule of a module is imported into any part of a program, the entire top-level module is considered to be part of the program. As a consequence of this, Clang may diagnose conflicts between an entity declared in an unimported submodule and an entity declared in the current translation unit, and Clang may inline or devirtualize based on knowledge from unimported submodules.
 
 Macros
 ------
@@ -237,6 +245,10 @@ The ``#undef`` overrides the ``#define``, and a source file that imports both mo
 
 Module Map Language
 ===================
+
+.. warning::
+
+  The module map language is not currently guaranteed to be stable between major revisions of Clang.
 
 The module map language describes the mapping from header files to the
 logical structure of modules. To enable support for using a library as
@@ -824,19 +836,16 @@ To detect and help address some of these problems, the ``clang-tools-extra`` rep
 
 Future Directions
 =================
-Modules is an experimental feature, and there is much work left to do to make it both real and useful. Here are a few ideas:
+Modules support is under active development, and there are many opportunities remaining to improve it. Here are a few ideas:
 
 **Detect unused module imports**
   Unlike with ``#include`` directives, it should be fairly simple to track whether a directly-imported module has ever been used. By doing so, Clang can emit ``unused import`` or ``unused #include`` diagnostics, including Fix-Its to remove the useless imports/includes.
 
 **Fix-Its for missing imports**
-  It's fairly common for one to make use of some API while writing code, only to get a compiler error about "unknown type" or "no function named" because the corresponding header has not been included. Clang should detect such cases and auto-import the required module (with a Fix-It!).
+  It's fairly common for one to make use of some API while writing code, only to get a compiler error about "unknown type" or "no function named" because the corresponding header has not been included. Clang can detect such cases and auto-import the required module, but should provide a Fix-It to add the import.
 
 **Improve modularize**
   The modularize tool is both extremely important (for deployment) and extremely crude. It needs better UI, better detection of problems (especially for C++), and perhaps an assistant mode to help write module maps for you.
-
-**C++ Support**
-  Modules clearly has to work for C++, or we'll never get to use it for the Clang code base.
 
 Where To Learn More About Modules
 =================================
@@ -858,8 +867,6 @@ PCHInternals_
   Information about the serialized AST format used for precompiled headers and modules. The actual implementation is in the ``clangSerialization`` library.
 
 .. [#] Automatic linking against the libraries of modules requires specific linker support, which is not widely available.
-
-.. [#] Modules are only available in C and Objective-C; a separate flag ``-fcxx-modules`` enables modules support for C++, which is even more experimental and broken.
 
 .. [#] There are certain anti-patterns that occur in headers, particularly system headers, that cause problems for modules. The section `Modularizing a Platform`_ describes some of them.
 

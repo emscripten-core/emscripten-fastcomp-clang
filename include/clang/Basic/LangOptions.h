@@ -12,8 +12,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_LANGOPTIONS_H
-#define LLVM_CLANG_LANGOPTIONS_H
+#ifndef LLVM_CLANG_BASIC_LANGOPTIONS_H
+#define LLVM_CLANG_BASIC_LANGOPTIONS_H
 
 #include "clang/Basic/CommentOptions.h"
 #include "clang/Basic/LLVM.h"
@@ -26,6 +26,13 @@ namespace clang {
 struct SanitizerOptions {
 #define SANITIZER(NAME, ID) unsigned ID : 1;
 #include "clang/Basic/Sanitizers.def"
+  /// \brief Controls how agressive is asan field padding (0: none, 1: least
+  /// aggressive, 2: more aggressive).
+  unsigned SanitizeAddressFieldPadding : 2;
+
+  /// \brief Path to blacklist file specifying which objects
+  /// (files, functions, variables) should not be instrumented.
+  std::string BlacklistFile;
 
   /// \brief Cached set of sanitizer options with all sanitizers disabled.
   static const SanitizerOptions Disabled;
@@ -87,6 +94,11 @@ public:
 
   /// \brief The name of the current module.
   std::string CurrentModule;
+
+  /// \brief The name of the module that the translation unit is an
+  /// implementation of. Prevents semantic imports, but does not otherwise
+  /// treat this as the CurrentModule.
+  std::string ImplementationOfModule;
 
   /// \brief Options for parsing comments.
   CommentOptions CommentOpts;

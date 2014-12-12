@@ -13,8 +13,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_FORMAT_FORMAT_TOKEN_H
-#define LLVM_CLANG_FORMAT_FORMAT_TOKEN_H
+#ifndef LLVM_CLANG_LIB_FORMAT_FORMATTOKEN_H
+#define LLVM_CLANG_LIB_FORMAT_FORMATTOKEN_H
 
 #include "clang/Basic/OperatorPrecedence.h"
 #include "clang/Format/Format.h"
@@ -46,6 +46,7 @@ enum TokenType {
   TT_ImplicitStringLiteral,
   TT_InheritanceColon,
   TT_InlineASMColon,
+  TT_JavaAnnotation,
   TT_LambdaLSquare,
   TT_LineComment,
   TT_ObjCBlockLBrace,
@@ -325,7 +326,8 @@ struct FormatToken {
   /// \brief Returns \c true if this is a "." or "->" accessing a member.
   bool isMemberAccess() const {
     return isOneOf(tok::arrow, tok::period, tok::arrowstar) &&
-           Type != TT_DesignatedInitializerPeriod;
+           Type != TT_DesignatedInitializerPeriod &&
+           Type != TT_TrailingReturnArrow;
   }
 
   bool isUnaryOperator() const {
@@ -350,7 +352,28 @@ struct FormatToken {
   }
 
   bool isTrailingComment() const {
-    return is(tok::comment) && (!Next || Next->NewlinesBefore > 0);
+    return is(tok::comment) &&
+           (Type == TT_LineComment || !Next || Next->NewlinesBefore > 0);
+  }
+
+  /// \brief Returns \c true if this is a keyword that can be used
+  /// like a function call (e.g. sizeof, typeid, ...).
+  bool isFunctionLikeKeyword() const {
+    switch (Tok.getKind()) {
+    case tok::kw_throw:
+    case tok::kw_typeid:
+    case tok::kw_return:
+    case tok::kw_sizeof:
+    case tok::kw_alignof:
+    case tok::kw_alignas:
+    case tok::kw_decltype:
+    case tok::kw_noexcept:
+    case tok::kw_static_assert:
+    case tok::kw___attribute:
+      return true;
+    default:
+      return false;
+    }
   }
 
   prec::Level getPrecedence() const {
@@ -502,4 +525,4 @@ private:
 } // namespace format
 } // namespace clang
 
-#endif // LLVM_CLANG_FORMAT_FORMAT_TOKEN_H
+#endif

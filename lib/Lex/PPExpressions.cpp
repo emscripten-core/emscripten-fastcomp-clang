@@ -244,7 +244,9 @@ static bool EvaluateValue(PPValue &Result, Token &PeekTok, DefinedTracker &DT,
     // Parse the integer literal into Result.
     if (Literal.GetIntegerValue(Result.Val)) {
       // Overflow parsing integer literal.
-      if (ValueLive) PP.Diag(PeekTok, diag::err_integer_too_large);
+      if (ValueLive)
+        PP.Diag(PeekTok, diag::err_integer_literal_too_large)
+            << /* Unsigned */ 1;
       Result.Val.setIsUnsigned(true);
     } else {
       // Set the signedness of the result to match whether there was a U suffix
@@ -259,7 +261,7 @@ static bool EvaluateValue(PPValue &Result, Token &PeekTok, DefinedTracker &DT,
         // Octal, hexadecimal, and binary literals are implicitly unsigned if
         // the value does not fit into a signed integer type.
         if (ValueLive && Literal.getRadix() == 10)
-          PP.Diag(PeekTok, diag::ext_integer_too_large_for_signed);
+          PP.Diag(PeekTok, diag::ext_integer_literal_too_large_for_signed);
         Result.Val.setIsUnsigned(true);
       }
     }
@@ -597,15 +599,10 @@ static bool EvaluateDirectiveSubExpr(PPValue &LHS, unsigned MinPrec,
       break;
     case tok::lessless: {
       // Determine whether overflow is about to happen.
-      unsigned ShAmt = static_cast<unsigned>(RHS.Val.getLimitedValue());
-      if (LHS.isUnsigned()) {
-        Overflow = ShAmt >= LHS.Val.getBitWidth();
-        if (Overflow)
-          ShAmt = LHS.Val.getBitWidth()-1;
-        Res = LHS.Val << ShAmt;
-      } else {
-        Res = llvm::APSInt(LHS.Val.sshl_ov(ShAmt, Overflow), false);
-      }
+      if (LHS.isUnsigned())
+        Res = LHS.Val.ushl_ov(RHS.Val, Overflow);
+      else
+        Res = llvm::APSInt(LHS.Val.sshl_ov(RHS.Val, Overflow), false);
       break;
     }
     case tok::greatergreater: {

@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_SEMA_TREETRANSFORM_H
-#define LLVM_CLANG_SEMA_TREETRANSFORM_H
+#ifndef LLVM_CLANG_LIB_SEMA_TREETRANSFORM_H
+#define LLVM_CLANG_LIB_SEMA_TREETRANSFORM_H
 
 #include "TypeLocBuilder.h"
 #include "clang/AST/Decl.h"
@@ -327,6 +327,27 @@ public:
   /// \returns the transformed OpenMP clause.
   OMPClause *TransformOMPClause(OMPClause *S);
 
+  /// \brief Transform the given attribute.
+  ///
+  /// By default, this routine transforms a statement by delegating to the
+  /// appropriate TransformXXXAttr function to transform a specific kind
+  /// of attribute. Subclasses may override this function to transform
+  /// attributed statements using some other mechanism.
+  ///
+  /// \returns the transformed attribute
+  const Attr *TransformAttr(const Attr *S);
+
+/// \brief Transform the specified attribute.
+///
+/// Subclasses should override the transformation of attributes with a pragma
+/// spelling to transform expressions stored within the attribute.
+///
+/// \returns the transformed attribute.
+#define ATTR(X)
+#define PRAGMA_SPELLING_ATTR(X)                                                \
+  const X##Attr *Transform##X##Attr(const X##Attr *R) { return R; }
+#include "clang/Basic/AttrList.inc"
+
   /// \brief Transform the given expression.
   ///
   /// By default, this routine transforms an expression by delegating to the
@@ -560,10 +581,9 @@ public:
                                                TemplateName Template,
                                                CXXScopeSpec &SS);
 
-  QualType
-  TransformDependentTemplateSpecializationType(TypeLocBuilder &TLB,
-                                               DependentTemplateSpecializationTypeLoc TL,
-                                         NestedNameSpecifierLoc QualifierLoc);
+  QualType TransformDependentTemplateSpecializationType(
+      TypeLocBuilder &TLB, DependentTemplateSpecializationTypeLoc TL,
+      NestedNameSpecifierLoc QualifierLoc);
 
   /// \brief Transforms the parameters of a function type into the
   /// given vectors.
@@ -1665,10 +1685,8 @@ public:
   }
 
   StmtResult RebuildSEHTryStmt(bool IsCXXTry, SourceLocation TryLoc,
-                               Stmt *TryBlock, Stmt *Handler, int HandlerIndex,
-                               int HandlerParentIndex) {
-    return getSema().ActOnSEHTryBlock(IsCXXTry, TryLoc, TryBlock, Handler,
-                                      HandlerIndex, HandlerParentIndex);
+                               Stmt *TryBlock, Stmt *Handler) {
+    return getSema().ActOnSEHTryBlock(IsCXXTry, TryLoc, TryBlock, Handler);
   }
 
   StmtResult RebuildSEHExceptStmt(SourceLocation Loc, Expr *FilterExpr,
@@ -1678,6 +1696,15 @@ public:
 
   StmtResult RebuildSEHFinallyStmt(SourceLocation Loc, Stmt *Block) {
     return getSema().ActOnSEHFinallyBlock(Loc, Block);
+  }
+
+  /// \brief Build a new predefined expression.
+  ///
+  /// By default, performs semantic analysis to build the new expression.
+  /// Subclasses may override this routine to provide different behavior.
+  ExprResult RebuildPredefinedExpr(SourceLocation Loc,
+                                   PredefinedExpr::IdentType IT) {
+    return getSema().BuildPredefinedExpr(Loc, IT);
   }
 
   /// \brief Build a new expression that references a declaration.
@@ -3102,6 +3129,14 @@ TreeTransform<Derived>::TransformNestedNameSpecifierLoc(
       // global scope.
       SS.MakeGlobal(SemaRef.Context, Q.getBeginLoc());
       break;
+
+    case NestedNameSpecifier::Super: {
+      CXXRecordDecl *RD =
+          cast_or_null<CXXRecordDecl>(getDerived().TransformDecl(
+              SourceLocation(), QNNS->getAsRecordDecl()));
+      SS.MakeSuper(SemaRef.Context, RD, Q.getBeginLoc(), Q.getEndLoc());
+      break;
+    }
 
     case NestedNameSpecifier::TypeSpecWithTemplate:
     case NestedNameSpecifier::TypeSpec: {
@@ -5147,8 +5182,8 @@ TreeTransform<Derived>::TransformElaboratedType(TypeLocBuilder &TLB,
     if (const TemplateSpecializationType *TST =
           NamedT->getAs<TemplateSpecializationType>()) {
       TemplateName Template = TST->getTemplateName();
-      if (TypeAliasTemplateDecl *TAT =
-          dyn_cast_or_null<TypeAliasTemplateDecl>(Template.getAsTemplateDecl())) {
+      if (TypeAliasTemplateDecl *TAT = dyn_cast_or_null<TypeAliasTemplateDecl>(
+              Template.getAsTemplateDecl())) {
         SemaRef.Diag(TL.getNamedTypeLoc().getBeginLoc(),
                      diag::err_tag_reference_non_tag) << 4;
         SemaRef.Diag(TAT->getLocation(), diag::note_declared_at);
@@ -5529,19 +5564,43 @@ TreeTransform<Derived>::TransformLabelStmt(LabelStmt *S) {
                                        SubStmt.get());
 }
 
-template<typename Derived>
-StmtResult
-TreeTransform<Derived>::TransformAttributedStmt(AttributedStmt *S) {
+template <typename Derived>
+const Attr *TreeTransform<Derived>::TransformAttr(const Attr *R) {
+  if (!R)
+    return R;
+
+  switch (R->getKind()) {
+// Transform attributes with a pragma spelling by calling TransformXXXAttr.
+#define ATTR(X)
+#define PRAGMA_SPELLING_ATTR(X)                                                \
+  case attr::X:                                                                \
+    return getDerived().Transform##X##Attr(cast<X##Attr>(R));
+#include "clang/Basic/AttrList.inc"
+  default:
+    return R;
+  }
+}
+
+template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformAttributedStmt(AttributedStmt *S) {
+  bool AttrsChanged = false;
+  SmallVector<const Attr *, 1> Attrs;
+
+  // Visit attributes and keep track if any are transformed.
+  for (const auto *I : S->getAttrs()) {
+    const Attr *R = getDerived().TransformAttr(I);
+    AttrsChanged |= (I != R);
+    Attrs.push_back(R);
+  }
+
   StmtResult SubStmt = getDerived().TransformStmt(S->getSubStmt());
   if (SubStmt.isInvalid())
     return StmtError();
 
-  // TODO: transform attributes
-  if (SubStmt.get() == S->getSubStmt() /* && attrs are the same */)
+  if (SubStmt.get() == S->getSubStmt() && !AttrsChanged)
     return S;
 
-  return getDerived().RebuildAttributedStmt(S->getAttrLoc(),
-                                            S->getAttrs(),
+  return getDerived().RebuildAttributedStmt(S->getAttrLoc(), Attrs,
                                             SubStmt.get());
 }
 
@@ -5824,7 +5883,8 @@ TreeTransform<Derived>::TransformBreakStmt(BreakStmt *S) {
 template<typename Derived>
 StmtResult
 TreeTransform<Derived>::TransformReturnStmt(ReturnStmt *S) {
-  ExprResult Result = getDerived().TransformExpr(S->getRetValue());
+  ExprResult Result = getDerived().TransformInitializer(S->getRetValue(),
+                                                        /*NotCopyInit*/false);
   if (Result.isInvalid())
     return StmtError();
 
@@ -6380,9 +6440,8 @@ StmtResult TreeTransform<Derived>::TransformSEHTryStmt(SEHTryStmt *S) {
       Handler.get() == S->getHandler())
     return S;
 
-  return getDerived().RebuildSEHTryStmt(
-      S->getIsCXXTry(), S->getTryLoc(), TryBlock.get(), Handler.get(),
-      S->getHandlerIndex(), S->getHandlerParentIndex());
+  return getDerived().RebuildSEHTryStmt(S->getIsCXXTry(), S->getTryLoc(),
+                                        TryBlock.get(), Handler.get());
 }
 
 template <typename Derived>
@@ -6504,6 +6563,17 @@ TreeTransform<Derived>::TransformOMPForDirective(OMPForDirective *D) {
 
 template <typename Derived>
 StmtResult
+TreeTransform<Derived>::TransformOMPForSimdDirective(OMPForSimdDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_for_simd, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult
 TreeTransform<Derived>::TransformOMPSectionsDirective(OMPSectionsDirective *D) {
   DeclarationNameInfo DirName;
   getDerived().getSema().StartOpenMPDSABlock(OMPD_sections, DirName, nullptr,
@@ -6561,6 +6631,17 @@ StmtResult TreeTransform<Derived>::TransformOMPParallelForDirective(
     OMPParallelForDirective *D) {
   DeclarationNameInfo DirName;
   getDerived().getSema().StartOpenMPDSABlock(OMPD_parallel_for, DirName,
+                                             nullptr, D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformOMPParallelForSimdDirective(
+    OMPParallelForSimdDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_parallel_for_simd, DirName,
                                              nullptr, D->getLocStart());
   StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
   getDerived().getSema().EndOpenMPDSABlock(Res.get());
@@ -6627,6 +6708,50 @@ StmtResult
 TreeTransform<Derived>::TransformOMPFlushDirective(OMPFlushDirective *D) {
   DeclarationNameInfo DirName;
   getDerived().getSema().StartOpenMPDSABlock(OMPD_flush, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformOMPOrderedDirective(OMPOrderedDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_ordered, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformOMPAtomicDirective(OMPAtomicDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_atomic, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformOMPTargetDirective(OMPTargetDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_target, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformOMPTeamsDirective(OMPTeamsDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_teams, DirName, nullptr,
                                              D->getLocStart());
   StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
   getDerived().getSema().EndOpenMPDSABlock(Res.get());
@@ -6735,6 +6860,39 @@ TreeTransform<Derived>::TransformOMPUntiedClause(OMPUntiedClause *C) {
 template <typename Derived>
 OMPClause *
 TreeTransform<Derived>::TransformOMPMergeableClause(OMPMergeableClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPReadClause(OMPReadClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPWriteClause(OMPWriteClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPUpdateClause(OMPUpdateClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPCaptureClause(OMPCaptureClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPSeqCstClause(OMPSeqCstClause *C) {
   // No need to rebuild this clause, no template-dependent parameters.
   return C;
 }
@@ -6912,7 +7070,11 @@ OMPClause *TreeTransform<Derived>::TransformOMPFlushClause(OMPFlushClause *C) {
 template<typename Derived>
 ExprResult
 TreeTransform<Derived>::TransformPredefinedExpr(PredefinedExpr *E) {
-  return E;
+  if (!E->isTypeDependent())
+    return E;
+
+  return getDerived().RebuildPredefinedExpr(E->getLocation(),
+                                            E->getIdentType());
 }
 
 template<typename Derived>
@@ -7873,15 +8035,11 @@ TreeTransform<Derived>::TransformCXXNamedCastExpr(CXXNamedCastExpr *E) {
       Type == E->getTypeInfoAsWritten() &&
       SubExpr.get() == E->getSubExpr())
     return E;
-  return getDerived().RebuildCXXNamedCastExpr(E->getOperatorLoc(),
-                                              E->getStmtClass(),
-                                              E->getAngleBrackets().getBegin(),
-                                              Type,
-                                              E->getAngleBrackets().getEnd(),
-                                              // FIXME. this should be '(' location
-                                              E->getAngleBrackets().getEnd(),
-                                              SubExpr.get(),
-                                              E->getRParenLoc());
+  return getDerived().RebuildCXXNamedCastExpr(
+      E->getOperatorLoc(), E->getStmtClass(), E->getAngleBrackets().getBegin(),
+      Type, E->getAngleBrackets().getEnd(),
+      // FIXME. this should be '(' location
+      E->getAngleBrackets().getEnd(), SubExpr.get(), E->getRParenLoc());
 }
 
 template<typename Derived>
@@ -8954,6 +9112,10 @@ TreeTransform<Derived>::TransformLambdaScope(LambdaExpr *E,
       getSema().CheckCXXThisCapture(C->getLocation(), C->isExplicit());
       continue;
     }
+    // Captured expression will be recaptured during captured variables
+    // rebuilding.
+    if (C->capturesVLAType())
+      continue;
 
     // Rebuild init-captures, including the implied field declaration.
     if (C->isInitCapture()) {
@@ -9033,7 +9195,7 @@ TreeTransform<Derived>::TransformLambdaScope(LambdaExpr *E,
     VarDecl *CapturedVar
       = cast_or_null<VarDecl>(getDerived().TransformDecl(C->getLocation(),
                                                          C->getCapturedVar()));
-    if (!CapturedVar) {
+    if (!CapturedVar || CapturedVar->isInvalidDecl()) {
       Invalid = true;
       continue;
     }
@@ -10348,9 +10510,16 @@ TreeTransform<Derived>::RebuildCXXPseudoDestructorExpr(Expr *Base,
 
   // The scope type is now known to be a valid nested name specifier
   // component. Tack it on to the end of the nested name specifier.
-  if (ScopeType)
-    SS.Extend(SemaRef.Context, SourceLocation(),
-              ScopeType->getTypeLoc(), CCLoc);
+  if (ScopeType) {
+    if (!ScopeType->getType()->getAs<TagType>()) {
+      getSema().Diag(ScopeType->getTypeLoc().getBeginLoc(),
+                     diag::err_expected_class_or_namespace)
+          << ScopeType->getType() << getSema().getLangOpts().CPlusPlus;
+      return ExprError();
+    }
+    SS.Extend(SemaRef.Context, SourceLocation(), ScopeType->getTypeLoc(),
+              CCLoc);
+  }
 
   SourceLocation TemplateKWLoc; // FIXME: retrieve it from caller.
   return getSema().BuildMemberReferenceExpr(Base, BaseType,
@@ -10397,4 +10566,4 @@ TreeTransform<Derived>::TransformCapturedStmt(CapturedStmt *S) {
 
 } // end namespace clang
 
-#endif // LLVM_CLANG_SEMA_TREETRANSFORM_H
+#endif

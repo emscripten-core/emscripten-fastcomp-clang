@@ -88,7 +88,8 @@ CodeGenFunction::EmitObjCBoxedExpr(const ObjCBoxedExpr *E) {
 }
 
 llvm::Value *CodeGenFunction::EmitObjCCollectionLiteral(const Expr *E,
-                                    const ObjCMethodDecl *MethodWithObjects) {
+                                    const ObjCMethodDecl *MethodWithObjects,
+                                    const ObjCMethodDecl *AllocMethod) {
   ASTContext &Context = CGM.getContext();
   const ObjCDictionaryLiteral *DLE = nullptr;
   const ObjCArrayLiteral *ALE = dyn_cast<ObjCArrayLiteral>(E);
@@ -184,6 +185,15 @@ llvm::Value *CodeGenFunction::EmitObjCCollectionLiteral(const Expr *E,
     = InterfacePointerType->getObjectType()->getInterface();
   CGObjCRuntime &Runtime = CGM.getObjCRuntime();
   llvm::Value *Receiver = Runtime.GetClass(*this, Class);
+  if (AllocMethod) {
+    // Generate the "alloc" message send.
+    CallArgList Args;
+    Selector AllocMethodSel = AllocMethod->getSelector();
+    RValue result = Runtime.GenerateMessageSend(
+      *this, ReturnValueSlot(), AllocMethod->getReturnType(), AllocMethodSel,
+      Receiver, Args, Class, AllocMethod);
+    Receiver = result.getScalarVal();
+  }
 
   // Generate the message send.
   RValue result = Runtime.GenerateMessageSend(
@@ -203,12 +213,14 @@ llvm::Value *CodeGenFunction::EmitObjCCollectionLiteral(const Expr *E,
 }
 
 llvm::Value *CodeGenFunction::EmitObjCArrayLiteral(const ObjCArrayLiteral *E) {
-  return EmitObjCCollectionLiteral(E, E->getArrayWithObjectsMethod());
+  return EmitObjCCollectionLiteral(E, E->getArrayWithObjectsMethod(),
+                                      E->getArrayAllocMethod());
 }
 
 llvm::Value *CodeGenFunction::EmitObjCDictionaryLiteral(
                                             const ObjCDictionaryLiteral *E) {
-  return EmitObjCCollectionLiteral(E, E->getDictWithObjectsMethod());
+  return EmitObjCCollectionLiteral(E, E->getDictWithObjectsMethod(),
+                                      E->getDictAllocMethod());
 }
 
 /// Emit a selector.
@@ -744,8 +756,8 @@ PropertyImplStrategy::PropertyImplStrategy(CodeGenModule &CGM,
 /// is illegal within a category.
 void CodeGenFunction::GenerateObjCGetter(ObjCImplementationDecl *IMP,
                                          const ObjCPropertyImplDecl *PID) {
-  llvm::Constant *AtomicHelperFn = 
-    GenerateObjCAtomicGetterCopyHelperFunction(PID);
+  llvm::Constant *AtomicHelperFn =
+      CodeGenFunction(CGM).GenerateObjCAtomicGetterCopyHelperFunction(PID);
   const ObjCPropertyDecl *PD = PID->getPropertyDecl();
   ObjCMethodDecl *OMD = PD->getGetterMethodDecl();
   assert(OMD && "Invalid call to generate getter (empty method)");
@@ -1273,8 +1285,8 @@ CodeGenFunction::generateObjCSetterBody(const ObjCImplementationDecl *classImpl,
 /// is illegal within a category.
 void CodeGenFunction::GenerateObjCSetter(ObjCImplementationDecl *IMP,
                                          const ObjCPropertyImplDecl *PID) {
-  llvm::Constant *AtomicHelperFn = 
-    GenerateObjCAtomicSetterCopyHelperFunction(PID);
+  llvm::Constant *AtomicHelperFn =
+      CodeGenFunction(CGM).GenerateObjCAtomicSetterCopyHelperFunction(PID);
   const ObjCPropertyDecl *PD = PID->getPropertyDecl();
   ObjCMethodDecl *OMD = PD->getSetterMethodDecl();
   assert(OMD && "Invalid call to generate setter (empty method)");
@@ -1757,7 +1769,7 @@ void CodeGenFunction::EmitARCIntrinsicUse(ArrayRef<llvm::Value*> values) {
   llvm::Constant *&fn = CGM.getARCEntrypoints().clang_arc_use;
   if (!fn) {
     llvm::FunctionType *fnType =
-      llvm::FunctionType::get(CGM.VoidTy, ArrayRef<llvm::Type*>(), true);
+      llvm::FunctionType::get(CGM.VoidTy, None, true);
     fn = CGM.CreateRuntimeFunction(fnType, "clang.arc.use");
   }
 

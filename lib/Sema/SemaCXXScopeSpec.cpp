@@ -148,6 +148,9 @@ DeclContext *Sema::computeDeclContext(const CXXScopeSpec &SS,
 
   case NestedNameSpecifier::Global:
     return Context.getTranslationUnitDecl();
+
+  case NestedNameSpecifier::Super:
+    return NNS->getAsRecordDecl();
   }
 
   llvm_unreachable("Invalid NestedNameSpecifier::Kind!");
@@ -240,9 +243,40 @@ bool Sema::RequireCompleteDeclContext(CXXScopeSpec &SS,
   return true;
 }
 
-bool Sema::ActOnCXXGlobalScopeSpecifier(Scope *S, SourceLocation CCLoc,
+bool Sema::ActOnCXXGlobalScopeSpecifier(SourceLocation CCLoc,
                                         CXXScopeSpec &SS) {
   SS.MakeGlobal(Context, CCLoc);
+  return false;
+}
+
+bool Sema::ActOnSuperScopeSpecifier(SourceLocation SuperLoc,
+                                    SourceLocation ColonColonLoc,
+                                    CXXScopeSpec &SS) {
+  CXXRecordDecl *RD = nullptr;
+  for (Scope *S = getCurScope(); S; S = S->getParent()) {
+    if (S->isFunctionScope()) {
+      if (CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(S->getEntity()))
+        RD = MD->getParent();
+      break;
+    }
+    if (S->isClassScope()) {
+      RD = cast<CXXRecordDecl>(S->getEntity());
+      break;
+    }
+  }
+
+  if (!RD) {
+    Diag(SuperLoc, diag::err_invalid_super_scope);
+    return true;
+  } else if (RD->isLambda()) {
+    Diag(SuperLoc, diag::err_super_in_lambda_unsupported);
+    return true;
+  } else if (RD->getNumBases() == 0) {
+    Diag(SuperLoc, diag::err_no_base_classes) << RD->getName();
+    return true;
+  }
+
+  SS.MakeSuper(Context, RD, SuperLoc, ColonColonLoc);
   return false;
 }
 
@@ -612,6 +646,9 @@ bool Sema::BuildCXXNestedNameSpecifier(Scope *S,
        }
     }
 
+    if (auto *TD = dyn_cast_or_null<TypedefNameDecl>(SD))
+      MarkAnyDeclReferenced(TD->getLocation(), TD, /*OdrUse=*/false);
+
     // If we're just performing this lookup for error-recovery purposes,
     // don't extend the nested-name-specifier. Just return now.
     if (ErrorRecoveryLookup)
@@ -703,8 +740,13 @@ bool Sema::BuildCXXNestedNameSpecifier(Scope *S,
   if (getLangOpts().MSVCCompat) {
     DeclContext *DC = LookupCtx ? LookupCtx : CurContext;
     if (DC->isDependentContext() && DC->isFunctionOrMethod()) {
-      SS.Extend(Context, &Identifier, IdentifierLoc, CCLoc);
-      return false;
+      CXXRecordDecl *ContainingClass = dyn_cast<CXXRecordDecl>(DC->getParent());
+      if (ContainingClass && ContainingClass->hasAnyDependentBases()) {
+        Diag(IdentifierLoc, diag::ext_undeclared_unqual_id_with_dependent_base)
+            << &Identifier << ContainingClass;
+        SS.Extend(Context, &Identifier, IdentifierLoc, CCLoc);
+        return false;
+      }
     }
   }
 
@@ -945,6 +987,7 @@ bool Sema::ShouldEnterDeclaratorScope(Scope *S, const CXXScopeSpec &SS) {
   case NestedNameSpecifier::Identifier:
   case NestedNameSpecifier::TypeSpec:
   case NestedNameSpecifier::TypeSpecWithTemplate:
+  case NestedNameSpecifier::Super:
     // These are never namespace scopes.
     return true;
   }

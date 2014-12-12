@@ -231,7 +231,11 @@ class HeaderSearch {
   
   /// \brief Describes whether a given directory has a module map in it.
   llvm::DenseMap<const DirectoryEntry *, bool> DirectoryHasModuleMap;
-  
+
+  /// \brief Set of module map files we've already loaded, and a flag indicating
+  /// whether they were valid or not.
+  llvm::DenseMap<const FileEntry *, bool> LoadedModuleMaps;
+
   /// \brief Uniqued set of framework names, which is used to track which 
   /// headers were included as framework headers.
   llvm::StringSet<llvm::BumpPtrAllocator> FrameworkNames;
@@ -384,14 +388,12 @@ public:
   /// \param SuggestedModule If non-null, and the file found is semantically
   /// part of a known module, this will be set to the module that should
   /// be imported instead of preprocessing/parsing the file found.
-  const FileEntry *LookupFile(StringRef Filename, SourceLocation IncludeLoc,
-                              bool isAngled, const DirectoryLookup *FromDir,
-                              const DirectoryLookup *&CurDir,
-                              ArrayRef<const FileEntry *> Includers,
-                              SmallVectorImpl<char> *SearchPath,
-                              SmallVectorImpl<char> *RelativePath,
-                              ModuleMap::KnownHeader *SuggestedModule,
-                              bool SkipCache = false);
+  const FileEntry *LookupFile(
+      StringRef Filename, SourceLocation IncludeLoc, bool isAngled,
+      const DirectoryLookup *FromDir, const DirectoryLookup *&CurDir,
+      ArrayRef<std::pair<const FileEntry *, const DirectoryEntry *>> Includers,
+      SmallVectorImpl<char> *SearchPath, SmallVectorImpl<char> *RelativePath,
+      ModuleMap::KnownHeader *SuggestedModule, bool SkipCache = false);
 
   /// \brief Look up a subframework for the specified \#include file.
   ///

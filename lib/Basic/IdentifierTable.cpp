@@ -428,6 +428,7 @@ ObjCMethodFamily Selector::getMethodFamilyImpl(Selector sel) {
     if (name == "retain") return OMF_retain;
     if (name == "retainCount") return OMF_retainCount;
     if (name == "self") return OMF_self;
+    if (name == "initialize") return OMF_initialize;
   }
  
   if (name == "performSelector") return OMF_performSelector;
@@ -484,6 +485,33 @@ ObjCInstanceTypeFamily Selector::getInstTypeMethodFamily(Selector sel) {
       break;
   }
   return OIT_None;
+}
+
+ObjCStringFormatFamily Selector::getStringFormatFamilyImpl(Selector sel) {
+  IdentifierInfo *first = sel.getIdentifierInfoForSlot(0);
+  if (!first) return SFF_None;
+  
+  StringRef name = first->getName();
+  
+  switch (name.front()) {
+    case 'a':
+      if (name == "appendFormat") return SFF_NSString;
+      break;
+      
+    case 'i':
+      if (name == "initWithFormat") return SFF_NSString;
+      break;
+      
+    case 'l':
+      if (name == "localizedStringWithFormat") return SFF_NSString;
+      break;
+      
+    case 's':
+      if (name == "stringByAppendingFormat" ||
+          name == "stringWithFormat") return SFF_NSString;
+      break;
+  }
+  return SFF_None;
 }
 
 namespace {

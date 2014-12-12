@@ -5027,8 +5027,7 @@ ObjCCommonTypesHelper::ObjCCommonTypesHelper(CodeGen::CodeGenModule &cgm)
 
   // arm64 targets use "int" ivar offset variables. All others,
   // including OS X x86_64 and Windows x86_64, use "long" ivar offsets.
-  if (CGM.getTarget().getTriple().getArch() == llvm::Triple::arm64 ||
-      CGM.getTarget().getTriple().getArch() == llvm::Triple::aarch64)
+  if (CGM.getTarget().getTriple().getArch() == llvm::Triple::aarch64)
     IvarOffsetVarTy = IntTy;
   else
     IvarOffsetVarTy = LongTy;
@@ -6237,7 +6236,7 @@ llvm::Constant *CGObjCNonFragileABIMac::GetOrEmitProtocolRef(
     // contents for protocols which were referenced but never defined.
     Entry =
         new llvm::GlobalVariable(CGM.getModule(), ObjCTypes.ProtocolnfABITy,
-                                 false, llvm::GlobalValue::WeakAnyLinkage,
+                                 false, llvm::GlobalValue::ExternalLinkage,
                                  nullptr,
                                  "\01l_OBJC_PROTOCOL_$_" + PD->getObjCRuntimeNameAsString());
     Entry->setSection("__DATA,__datacoal_nt,coalesced");
@@ -6348,8 +6347,8 @@ llvm::Constant *CGObjCNonFragileABIMac::GetOrEmitProtocol(
                                                    Values);
 
   if (Entry) {
-    // Already created, update the initializer.
-    assert(Entry->hasWeakAnyLinkage());
+    // Already created, fix the linkage and update the initializer.
+    Entry->setLinkage(llvm::GlobalValue::WeakAnyLinkage);
     Entry->setInitializer(Init);
   } else {
     Entry =
@@ -6482,7 +6481,7 @@ llvm::Value *CGObjCNonFragileABIMac::EmitIvarOffset(
   if (IsIvarOffsetKnownIdempotent(CGF, Ivar))
     cast<llvm::LoadInst>(IvarOffsetValue)
         ->setMetadata(CGM.getModule().getMDKindID("invariant.load"),
-                      llvm::MDNode::get(VMContext, ArrayRef<llvm::Value *>()));
+                      llvm::MDNode::get(VMContext, None));
 
   // This could be 32bit int or 64bit integer depending on the architecture.
   // Cast it to 64bit integer value, if it is a 32bit integer ivar offset value
@@ -6795,8 +6794,7 @@ CGObjCNonFragileABIMac::GenerateMessageSendSuper(CodeGen::CodeGenFunction &CGF,
   // If this is a class message the metaclass is passed as the target.
   llvm::Value *Target;
   if (IsClassMessage)
-      Target = EmitMetaClassRef(CGF, Class,
-                                (isCategoryImpl && Class->isWeakImported()));
+      Target = EmitMetaClassRef(CGF, Class, Class->isWeakImported());
   else
     Target = EmitSuperClassRef(CGF, Class);
 
@@ -6841,8 +6839,7 @@ llvm::Value *CGObjCNonFragileABIMac::EmitSelector(CodeGenFunction &CGF,
   llvm::LoadInst* LI = CGF.Builder.CreateLoad(Entry);
   
   LI->setMetadata(CGM.getModule().getMDKindID("invariant.load"), 
-                  llvm::MDNode::get(VMContext,
-                                    ArrayRef<llvm::Value*>()));
+                  llvm::MDNode::get(VMContext, None));
   return LI;
 }
 /// EmitObjCIvarAssign - Code gen for assigning to a __strong object.

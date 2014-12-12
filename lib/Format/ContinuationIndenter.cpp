@@ -150,7 +150,8 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
       Previous.Type != TT_InlineASMColon &&
       Previous.Type != TT_ConditionalExpr && nextIsMultilineString(State))
     return true;
-  if (((Previous.Type == TT_DictLiteral && Previous.is(tok::l_brace)) ||
+  if (Style.Language != FormatStyle::LK_Proto &&
+      ((Previous.Type == TT_DictLiteral && Previous.is(tok::l_brace)) ||
        Previous.Type == TT_ArrayInitializerLSquare) &&
       Style.ColumnLimit > 0 &&
       getLengthToMatchingParen(Previous) + State.Column > getColumnLimit(State))
@@ -301,6 +302,18 @@ void ContinuationIndenter::addTokenOnCurrentLine(LineState &State, bool DryRun,
   if (startsSegmentOfBuilderTypeCall(Current))
     State.Stack.back().ContainsUnwrappedBuilder = true;
 
+  if (Current.isMemberAccess() && Previous.is(tok::r_paren) &&
+      (Previous.MatchingParen &&
+       (Previous.TotalLength - Previous.MatchingParen->TotalLength > 10))) {
+    // If there is a function call with long parameters, break before trailing
+    // calls. This prevents things like:
+    //   EXPECT_CALL(SomeLongParameter).Times(
+    //       2);
+    // We don't want to do this for short parameters as they can just be
+    // indexes.
+    State.Stack.back().NoLineBreak = true;
+  }
+
   State.Column += Spaces;
   if (Current.isNot(tok::comment) && Previous.is(tok::l_paren) &&
       Previous.Previous && Previous.Previous->isOneOf(tok::kw_if, tok::kw_for))
@@ -445,6 +458,7 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
       !PreviousNonComment->isOneOf(tok::comma, tok::semi) &&
       PreviousNonComment->Type != TT_TemplateCloser &&
       PreviousNonComment->Type != TT_BinaryOperator &&
+      PreviousNonComment->Type != TT_JavaAnnotation &&
       Current.Type != TT_BinaryOperator && !PreviousNonComment->opensScope())
     State.Stack.back().BreakBeforeParameter = true;
 
@@ -474,7 +488,7 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
   if (!State.NextToken || !State.NextToken->Previous)
     return 0;
   FormatToken &Current = *State.NextToken;
-  const FormatToken &Previous = *State.NextToken->Previous;
+  const FormatToken &Previous = *Current.Previous;
   // If we are continuing an expression, we want to use the continuation indent.
   unsigned ContinuationIndent =
       std::max(State.Stack.back().LastSpace, State.Stack.back().Indent) +
@@ -520,7 +534,8 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
   if (Previous.is(tok::comma) && State.Stack.back().VariablePos != 0)
     return State.Stack.back().VariablePos;
   if ((PreviousNonComment && (PreviousNonComment->ClosesTemplateDeclaration ||
-                              PreviousNonComment->Type == TT_AttributeParen)) ||
+                              PreviousNonComment->Type == TT_AttributeParen ||
+                              PreviousNonComment->Type == TT_JavaAnnotation)) ||
       (!Style.IndentWrappedFunctionNames &&
        (NextNonComment->is(tok::kw_operator) ||
         NextNonComment->Type == TT_FunctionDeclarationName)))
@@ -560,6 +575,9 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
     return State.FirstIndent + Style.ConstructorInitializerIndentWidth;
   if (NextNonComment->Type == TT_CtorInitializerComma)
     return State.Stack.back().Indent;
+  if (Previous.is(tok::r_paren) && !Current.isBinaryOperator() &&
+      Current.isNot(tok::colon))
+    return ContinuationIndent;
   if (State.Stack.back().Indent == State.FirstIndent && PreviousNonComment &&
       PreviousNonComment->isNot(tok::r_brace))
     // Ensure that we fall back to the continuation indent width instead of
@@ -639,7 +657,11 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
       State.Stack[State.Stack.size() - 2].JSFunctionInlined = false;
     }
     if (Current.TokenText == "function")
-      State.Stack.back().JSFunctionInlined = !Newline;
+      State.Stack.back().JSFunctionInlined =
+          !Newline && Previous && Previous->Type != TT_DictLiteral &&
+          // If the unnamed function is the only parameter to another function,
+          // we can likely inline it and come up with a good format.
+          (Previous->isNot(tok::l_paren) || Previous->ParameterCount > 1);
   }
 
   moveStatePastFakeLParens(State, Newline);
@@ -697,7 +719,8 @@ void ContinuationIndenter::moveStatePastFakeLParens(LineState &State,
     // Indent from 'LastSpace' unless this the fake parentheses encapsulating a
     // builder type call after 'return'. If such a call is line-wrapped, we
     // commonly just want to indent from the start of the line.
-    if (!Previous || Previous->isNot(tok::kw_return) || *I > 0)
+    if (!Current.isTrailingComment() &&
+        (!Previous || Previous->isNot(tok::kw_return) || *I > 0))
       NewParenState.Indent =
           std::max(std::max(State.Column, NewParenState.Indent),
                    State.Stack.back().LastSpace);
@@ -736,7 +759,7 @@ void ContinuationIndenter::moveStatePastFakeLParens(LineState &State,
     // other expression, unless the indentation needs to be skipped.
     if (*I == prec::Conditional ||
         (!SkipFirstExtraIndent && *I > prec::Assignment &&
-         !Style.BreakBeforeBinaryOperators))
+         !Current.isTrailingComment() && !Style.BreakBeforeBinaryOperators))
       NewParenState.Indent += Style.ContinuationIndentWidth;
     if ((Previous && !Previous->opensScope()) || *I > prec::Comma)
       NewParenState.BreakBeforeParameter = false;
@@ -838,11 +861,13 @@ void ContinuationIndenter::moveStatePastScopeOpener(LineState &State,
     NewIndent = Style.ContinuationIndentWidth +
                 std::max(State.Stack.back().LastSpace,
                          State.Stack.back().StartOfFunctionCall);
-    AvoidBinPacking = !Style.BinPackParameters ||
-                      (Style.ExperimentalAutoDetectBinPacking &&
-                       (Current.PackingKind == PPK_OnePerLine ||
-                        (!BinPackInconclusiveFunctions &&
-                         Current.PackingKind == PPK_Inconclusive)));
+    AvoidBinPacking =
+        (State.Line->MustBeDeclaration && !Style.BinPackParameters) ||
+        (!State.Line->MustBeDeclaration && !Style.BinPackArguments) ||
+        (Style.ExperimentalAutoDetectBinPacking &&
+         (Current.PackingKind == PPK_OnePerLine ||
+          (!BinPackInconclusiveFunctions &&
+           Current.PackingKind == PPK_Inconclusive)));
     // If this '[' opens an ObjC call, determine whether all parameters fit
     // into one line and put one per line if they don't.
     if (Current.Type == TT_ObjCMethodExpr && Style.ColumnLimit != 0 &&

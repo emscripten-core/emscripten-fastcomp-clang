@@ -69,8 +69,6 @@ PrintingPolicy Sema::getPrintingPolicy(const ASTContext &Context,
 void Sema::ActOnTranslationUnitScope(Scope *S) {
   TUScope = S;
   PushDeclContext(S, Context.getTranslationUnitDecl());
-
-  VAListTagName = PP.getIdentifierInfo("__va_list_tag");
 }
 
 Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
@@ -95,7 +93,12 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
     NSNumberDecl(nullptr),
     NSStringDecl(nullptr), StringWithUTF8StringMethod(nullptr),
     NSArrayDecl(nullptr), ArrayWithObjectsMethod(nullptr),
+    InitArrayWithObjectsMethod(nullptr),
     NSDictionaryDecl(nullptr), DictionaryWithObjectsMethod(nullptr),
+    InitDictionaryWithObjectsMethod(nullptr),
+    ArrayAllocObjectsMethod(nullptr),
+    DictAllocObjectsMethod(nullptr),
+    MSAsmLabelNameCounter(0),
     GlobalNewDeleteDeclared(false),
     TUKind(TUKind),
     NumSFINAEErrors(0),
@@ -150,6 +153,10 @@ void Sema::Initialize() {
   if (ExternalSemaSource *ExternalSema
       = dyn_cast_or_null<ExternalSemaSource>(Context.getExternalSource()))
     ExternalSema->InitializeSema(*this);
+
+  // This needs to happen after ExternalSemaSource::InitializeSema(this) or we
+  // will not be able to merge any duplicate __va_list_tag decls correctly.
+  VAListTagName = PP.getIdentifierInfo("__va_list_tag");
 
   // Initialize predefined 128-bit integer types, if needed.
   if (Context.getTargetInfo().hasInt128Type()) {
@@ -538,7 +545,12 @@ static bool MethodsAndNestedClassesComplete(const CXXRecordDecl *RD,
     if (const CXXMethodDecl *M = dyn_cast<CXXMethodDecl>(*I))
       Complete = M->isDefined() || (M->isPure() && !isa<CXXDestructorDecl>(M));
     else if (const FunctionTemplateDecl *F = dyn_cast<FunctionTemplateDecl>(*I))
-      Complete = F->getTemplatedDecl()->isDefined();
+      // If the template function is marked as late template parsed at this point,
+      // it has not been instantiated and therefore we have not performed semantic
+      // analysis on it yet, so we cannot know if the type can be considered
+      // complete.
+      Complete = !F->getTemplatedDecl()->isLateTemplateParsed() &&
+                  F->getTemplatedDecl()->isDefined();
     else if (const CXXRecordDecl *R = dyn_cast<CXXRecordDecl>(*I)) {
       if (R->isInjectedClassName())
         continue;
@@ -589,6 +601,19 @@ static bool IsRecordFullyDefined(const CXXRecordDecl *RD,
   }
   RecordsComplete[RD] = Complete;
   return Complete;
+}
+
+void Sema::emitAndClearUnusedLocalTypedefWarnings() {
+  if (ExternalSource)
+    ExternalSource->ReadUnusedLocalTypedefNameCandidates(
+        UnusedLocalTypedefNameCandidates);
+  for (const TypedefNameDecl *TD : UnusedLocalTypedefNameCandidates) {
+    if (TD->isReferenced())
+      continue;
+    Diag(TD->getLocation(), diag::warn_unused_local_typedef)
+        << isa<TypeAliasDecl>(TD) << TD->getDeclName();
+  }
+  UnusedLocalTypedefNameCandidates.clear();
 }
 
 /// ActOnEndOfTranslationUnit - This is called at the very end of the
@@ -713,6 +738,10 @@ void Sema::ActOnEndOfTranslationUnit() {
       }
     }
 
+    // Warnings emitted in ActOnEndOfTranslationUnit() should be emitted for
+    // modules when they are built, not every time they are used.
+    emitAndClearUnusedLocalTypedefWarnings();
+
     // Modules don't need any of the checking below.
     TUScope = nullptr;
     return;
@@ -788,8 +817,9 @@ void Sema::ActOnEndOfTranslationUnit() {
                 !FD->isInlineSpecified() &&
                 !SourceMgr.isInMainFile(
                    SourceMgr.getExpansionLoc(FD->getLocation())))
-              Diag(DiagD->getLocation(), diag::warn_unneeded_static_internal_decl)
-                << DiagD->getDeclName();
+              Diag(DiagD->getLocation(),
+                   diag::warn_unneeded_static_internal_decl)
+                  << DiagD->getDeclName();
             else
               Diag(DiagD->getLocation(), diag::warn_unneeded_internal_decl)
                    << /*function*/0 << DiagD->getDeclName();
@@ -820,6 +850,8 @@ void Sema::ActOnEndOfTranslationUnit() {
     if (ExternalSource)
       ExternalSource->ReadUndefinedButUsed(UndefinedButUsed);
     checkUndefinedButUsed(*this);
+
+    emitAndClearUnusedLocalTypedefWarnings();
   }
 
   if (!Diags.isIgnored(diag::warn_unused_private_field, SourceLocation())) {
@@ -1432,8 +1464,8 @@ IdentifierInfo *Sema::getFloat128Identifier() const {
 
 void Sema::PushCapturedRegionScope(Scope *S, CapturedDecl *CD, RecordDecl *RD,
                                    CapturedRegionKind K) {
-  CapturingScopeInfo *CSI = new CapturedRegionScopeInfo(getDiagnostics(), S, CD, RD,
-                                                        CD->getContextParam(), K);
+  CapturingScopeInfo *CSI = new CapturedRegionScopeInfo(
+      getDiagnostics(), S, CD, RD, CD->getContextParam(), K);
   CSI->ReturnType = Context.VoidTy;
   FunctionScopes.push_back(CSI);
 }

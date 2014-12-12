@@ -6,8 +6,8 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-#ifndef CLANG_LIB_DRIVER_SANITIZERARGS_H_
-#define CLANG_LIB_DRIVER_SANITIZERARGS_H_
+#ifndef LLVM_CLANG_DRIVER_SANITIZERARGS_H
+#define LLVM_CLANG_DRIVER_SANITIZERARGS_H
 
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
@@ -49,12 +49,13 @@ class SanitizerArgs {
 
   std::string BlacklistFile;
   int MsanTrackOrigins;
+  int AsanFieldPadding;
   bool AsanZeroBaseShadow;
   bool UbsanTrapOnError;
   bool AsanSharedRuntime;
+  bool LinkCXXRuntimes;
 
  public:
-  SanitizerArgs();
   /// Parses the sanitizer arguments from an argument list.
   SanitizerArgs(const ToolChain &TC, const llvm::opt::ArgList &Args);
 
@@ -77,6 +78,7 @@ class SanitizerArgs {
     return (Kind & HasZeroBaseShadow) || AsanZeroBaseShadow;
   }
   bool needsUnwindTables() const { return Kind & NeedsUnwindTables; }
+  bool linkCXXRuntimes() const { return LinkCXXRuntimes; }
   void addArgs(const llvm::opt::ArgList &Args,
                llvm::opt::ArgStringList &CmdArgs) const;
 
@@ -147,4 +149,4 @@ class SanitizerArgs {
 }  // namespace driver
 }  // namespace clang
 
-#endif // CLANG_LIB_DRIVER_SANITIZERARGS_H_
+#endif

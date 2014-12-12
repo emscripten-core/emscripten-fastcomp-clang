@@ -1569,12 +1569,12 @@ class CXXScalarValueInitExpr : public Expr {
 public:
   /// \brief Create an explicitly-written scalar-value initialization
   /// expression.
-  CXXScalarValueInitExpr(QualType Type,
-                         TypeSourceInfo *TypeInfo,
-                         SourceLocation rParenLoc ) :
-    Expr(CXXScalarValueInitExprClass, Type, VK_RValue, OK_Ordinary,
-         false, false, Type->isInstantiationDependentType(), false),
-    RParenLoc(rParenLoc), TypeInfo(TypeInfo) {}
+  CXXScalarValueInitExpr(QualType Type, TypeSourceInfo *TypeInfo,
+                         SourceLocation rParenLoc)
+      : Expr(CXXScalarValueInitExprClass, Type, VK_RValue, OK_Ordinary,
+             false, false, Type->isInstantiationDependentType(),
+             Type->containsUnexpandedParameterPack()),
+        RParenLoc(rParenLoc), TypeInfo(TypeInfo) {}
 
   explicit CXXScalarValueInitExpr(EmptyShell Shell)
     : Expr(CXXScalarValueInitExprClass, Shell) { }
@@ -2113,7 +2113,7 @@ public:
   
   /// \brief Retrieve the argument types.
   ArrayRef<TypeSourceInfo *> getArgs() const { 
-    return ArrayRef<TypeSourceInfo *>(getTypeSourceInfos(), getNumArgs());
+    return llvm::makeArrayRef(getTypeSourceInfos(), getNumArgs());
   }
   
   typedef TypeSourceInfo **arg_iterator;
@@ -2767,7 +2767,7 @@ public:
                                   ArrayRef<CleanupObject> objects);
 
   ArrayRef<CleanupObject> getObjects() const {
-    return ArrayRef<CleanupObject>(getObjectsBuffer(), getNumObjects());
+    return llvm::makeArrayRef(getObjectsBuffer(), getNumObjects());
   }
 
   unsigned getNumObjects() const { return ExprWithCleanupsBits.NumObjects; }

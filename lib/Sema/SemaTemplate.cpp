@@ -1105,9 +1105,13 @@ Sema::CheckClassTemplate(Scope *S, unsigned TagSpec, TagUseKind TUK,
 
   AddPushedVisibilityAttribute(NewClass);
 
-  if (TUK != TUK_Friend)
-    PushOnScopeChains(NewTemplate, S);
-  else {
+  if (TUK != TUK_Friend) {
+    // Per C++ [basic.scope.temp]p2, skip the template parameter scopes.
+    Scope *Outer = S;
+    while ((Outer->getFlags() & Scope::TemplateParamScope) != 0)
+      Outer = Outer->getParent();
+    PushOnScopeChains(NewTemplate, Outer);
+  } else {
     if (PrevClassTemplate && PrevClassTemplate->getAccess() != AS_none) {
       NewTemplate->setAccess(PrevClassTemplate->getAccess());
       NewClass->setAccess(PrevClassTemplate->getAccess());
@@ -4123,6 +4127,7 @@ bool UnnamedLocalNoLinkageFinder::VisitNestedNameSpecifier(
   case NestedNameSpecifier::Namespace:
   case NestedNameSpecifier::NamespaceAlias:
   case NestedNameSpecifier::Global:
+  case NestedNameSpecifier::Super:
     return false;
 
   case NestedNameSpecifier::TypeSpec:
@@ -4612,8 +4617,8 @@ CheckTemplateArgumentAddressOfObjectOrFunction(Sema &S,
     return true;
 
   // Create the template argument.
-  Converted = TemplateArgument(cast<ValueDecl>(Entity->getCanonicalDecl()),
-                               ParamType->isReferenceType());
+  Converted =
+      TemplateArgument(cast<ValueDecl>(Entity->getCanonicalDecl()), ParamType);
   S.MarkAnyDeclReferenced(Arg->getLocStart(), Entity, false);
   return false;
 }
@@ -4708,7 +4713,7 @@ static bool CheckTemplateArgumentPointerToMember(Sema &S,
             Converted = TemplateArgument(Arg);
           } else {
             VD = cast<ValueDecl>(VD->getCanonicalDecl());
-            Converted = TemplateArgument(VD, /*isReferenceParam*/false);
+            Converted = TemplateArgument(VD, ParamType);
           }
           return Invalid;
         }
@@ -4737,7 +4742,7 @@ static bool CheckTemplateArgumentPointerToMember(Sema &S,
       Converted = TemplateArgument(Arg);
     } else {
       ValueDecl *D = cast<ValueDecl>(DRE->getDecl()->getCanonicalDecl());
-      Converted = TemplateArgument(D, /*isReferenceParam*/false);
+      Converted = TemplateArgument(D, ParamType);
     }
     return Invalid;
   }
@@ -7896,7 +7901,11 @@ Sema::CheckTypenameType(ElaboratedTypeKeyword Keyword,
 
   DeclarationName Name(&II);
   LookupResult Result(*this, Name, IILoc, LookupOrdinaryName);
-  LookupQualifiedName(Result, Ctx);
+  NestedNameSpecifier *NNS = SS.getScopeRep();
+  if (NNS->getKind() == NestedNameSpecifier::Super)
+    LookupInSuper(Result, NNS->getAsRecordDecl());
+  else
+    LookupQualifiedName(Result, Ctx);
   unsigned DiagID = 0;
   Decl *Referenced = nullptr;
   switch (Result.getResultKind()) {
@@ -7941,6 +7950,7 @@ Sema::CheckTypenameType(ElaboratedTypeKeyword Keyword,
     if (TypeDecl *Type = dyn_cast<TypeDecl>(Result.getFoundDecl())) {
       // We found a type. Build an ElaboratedType, since the
       // typename-specifier was just sugar.
+      MarkAnyDeclReferenced(Type->getLocation(), Type, /*OdrUse=*/false);
       return Context.getElaboratedType(ETK_Typename, 
                                        QualifierLoc.getNestedNameSpecifier(),
                                        Context.getTypeDeclType(Type));

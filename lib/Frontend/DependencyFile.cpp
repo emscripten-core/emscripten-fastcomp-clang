@@ -121,10 +121,11 @@ bool DependencyCollector::sawDependency(StringRef Filename, bool FromModule,
 
 DependencyCollector::~DependencyCollector() { }
 void DependencyCollector::attachToPreprocessor(Preprocessor &PP) {
-  PP.addPPCallbacks(new DepCollectorPPCallbacks(*this, PP.getSourceManager()));
+  PP.addPPCallbacks(
+      llvm::make_unique<DepCollectorPPCallbacks>(*this, PP.getSourceManager()));
 }
 void DependencyCollector::attachToASTReader(ASTReader &R) {
-  R.addListener(new DepCollectorASTListener(*this));
+  R.addListener(llvm::make_unique<DepCollectorASTListener>(*this));
 }
 
 namespace {
@@ -203,14 +204,14 @@ DependencyFileGenerator *DependencyFileGenerator::CreateAndAttachToPreprocessor(
     PP.SetSuppressIncludeNotFoundError(true);
 
   DFGImpl *Callback = new DFGImpl(&PP, Opts);
-  PP.addPPCallbacks(Callback); // PP owns the Callback
+  PP.addPPCallbacks(std::unique_ptr<PPCallbacks>(Callback));
   return new DependencyFileGenerator(Callback);
 }
 
 void DependencyFileGenerator::AttachToASTReader(ASTReader &R) {
   DFGImpl *I = reinterpret_cast<DFGImpl *>(Impl);
   assert(I && "missing implementation");
-  R.addListener(new DFGASTReaderListener(*I));
+  R.addListener(llvm::make_unique<DFGASTReaderListener>(*I));
 }
 
 /// FileMatchesDepCriteria - Determine whether the given Filename should be
@@ -297,11 +298,11 @@ void DFGImpl::OutputDependencyFile() {
     return;
   }
 
-  std::string Err;
-  llvm::raw_fd_ostream OS(OutputFile.c_str(), Err, llvm::sys::fs::F_Text);
-  if (!Err.empty()) {
-    PP->getDiagnostics().Report(diag::err_fe_error_opening)
-      << OutputFile << Err;
+  std::error_code EC;
+  llvm::raw_fd_ostream OS(OutputFile, EC, llvm::sys::fs::F_Text);
+  if (EC) {
+    PP->getDiagnostics().Report(diag::err_fe_error_opening) << OutputFile
+                                                            << EC.message();
     return;
   }
 

@@ -220,7 +220,7 @@ namespace  {
     void dumpName(const NamedDecl *D);
     bool hasNodes(const DeclContext *DC);
     void dumpDeclContext(const DeclContext *DC);
-    void dumpLookups(const DeclContext *DC);
+    void dumpLookups(const DeclContext *DC, bool DumpDecls);
     void dumpAttr(const Attr *A);
 
     // C++ Utilities
@@ -569,7 +569,7 @@ void ASTDumper::dumpDeclContext(const DeclContext *DC) {
   }
 }
 
-void ASTDumper::dumpLookups(const DeclContext *DC) {
+void ASTDumper::dumpLookups(const DeclContext *DC, bool DumpDecls) {
   IndentScope Indent(*this);
 
   OS << "StoredDeclsMap ";
@@ -602,9 +602,26 @@ void ASTDumper::dumpLookups(const DeclContext *DC) {
          RI != RE; ++RI) {
       if (RI + 1 == RE)
         lastChild();
-      dumpDeclRef(*RI);
+
+      IndentScope LookupIndent(*this);
+      dumpBareDeclRef(*RI);
+
       if ((*RI)->isHidden())
         OS << " hidden";
+
+      // If requested, dump the redecl chain for this lookup.
+      if (DumpDecls) {
+        // Dump earliest decl first.
+        std::function<void(Decl*)> DumpPrev = [&](Decl *D) {
+          if (Decl *Prev = D->getPreviousDecl()) {
+            DumpPrev(Prev);
+            dumpDecl(Prev);
+          }
+        };
+        DumpPrev(*RI);
+        lastChild();
+        dumpDecl(*RI);
+      }
     }
   }
 
@@ -692,8 +709,12 @@ void ASTDumper::dumpCXXCtorInitializer(const CXXCtorInitializer *Init) {
   if (Init->isAnyMemberInitializer()) {
     OS << ' ';
     dumpBareDeclRef(Init->getAnyMember());
-  } else {
+  } else if (Init->isBaseInitializer()) {
     dumpType(QualType(Init->getBaseClass(), 0));
+  } else if (Init->isDelegatingInitializer()) {
+    dumpType(Init->getTypeSourceInfo()->getType());
+  } else {
+    llvm_unreachable("Unknown initializer type");
   }
   dumpStmt(Init->getInit());
 }
@@ -809,7 +830,7 @@ void ASTDumper::dumpDecl(const Decl *D) {
     OS << " implicit";
   if (D->isUsed())
     OS << " used";
-  else if (D->isReferenced())
+  else if (D->isThisDeclarationReferenced())
     OS << " referenced";
   if (D->isInvalidDecl())
     OS << " invalid";
@@ -914,13 +935,13 @@ void ASTDumper::VisitFunctionDecl(const FunctionDecl *D) {
 
   if (const FunctionProtoType *FPT = D->getType()->getAs<FunctionProtoType>()) {
     FunctionProtoType::ExtProtoInfo EPI = FPT->getExtProtoInfo();
-    switch (EPI.ExceptionSpecType) {
+    switch (EPI.ExceptionSpec.Type) {
     default: break;
     case EST_Unevaluated:
-      OS << " noexcept-unevaluated " << EPI.ExceptionSpecDecl;
+      OS << " noexcept-unevaluated " << EPI.ExceptionSpec.SourceDecl;
       break;
     case EST_Uninstantiated:
-      OS << " noexcept-uninstantiated " << EPI.ExceptionSpecTemplate;
+      OS << " noexcept-uninstantiated " << EPI.ExceptionSpec.SourceTemplate;
       break;
     }
   }
@@ -1693,15 +1714,7 @@ void ASTDumper::VisitObjCIvarRefExpr(const ObjCIvarRefExpr *Node) {
 
 void ASTDumper::VisitPredefinedExpr(const PredefinedExpr *Node) {
   VisitExpr(Node);
-  switch (Node->getIdentType()) {
-  default: llvm_unreachable("unknown case");
-  case PredefinedExpr::Func:           OS <<  " __func__"; break;
-  case PredefinedExpr::Function:       OS <<  " __FUNCTION__"; break;
-  case PredefinedExpr::FuncDName:      OS <<  " __FUNCDNAME__"; break;
-  case PredefinedExpr::LFunction:      OS <<  " L__FUNCTION__"; break;
-  case PredefinedExpr::PrettyFunction: OS <<  " __PRETTY_FUNCTION__";break;
-  case PredefinedExpr::FuncSig:        OS <<  " __FUNCSIG__"; break;
-  }
+  OS << " " << PredefinedExpr::getIdentTypeName(Node->getIdentType());
 }
 
 void ASTDumper::VisitCharacterLiteral(const CharacterLiteral *Node) {
@@ -2169,13 +2182,14 @@ LLVM_DUMP_METHOD void DeclContext::dumpLookups() const {
   dumpLookups(llvm::errs());
 }
 
-LLVM_DUMP_METHOD void DeclContext::dumpLookups(raw_ostream &OS) const {
+LLVM_DUMP_METHOD void DeclContext::dumpLookups(raw_ostream &OS,
+                                               bool DumpDecls) const {
   const DeclContext *DC = this;
   while (!DC->isTranslationUnit())
     DC = DC->getParent();
   ASTContext &Ctx = cast<TranslationUnitDecl>(DC)->getASTContext();
   ASTDumper P(OS, &Ctx.getCommentCommandTraits(), &Ctx.getSourceManager());
-  P.dumpLookups(this);
+  P.dumpLookups(this, DumpDecls);
 }
 
 //===----------------------------------------------------------------------===//

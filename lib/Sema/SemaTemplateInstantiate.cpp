@@ -767,6 +767,8 @@ namespace {
                           QualType ObjectType = QualType(),
                           NamedDecl *FirstQualifierInScope = nullptr);
 
+    const LoopHintAttr *TransformLoopHintAttr(const LoopHintAttr *LH);
+
     ExprResult TransformPredefinedExpr(PredefinedExpr *E);
     ExprResult TransformDeclRefExpr(DeclRefExpr *E);
     ExprResult TransformCXXDefaultArgExpr(CXXDefaultArgExpr *E);
@@ -1023,7 +1025,7 @@ TemplateInstantiator::RebuildElaboratedType(SourceLocation KeywordLoc,
 
 TemplateName TemplateInstantiator::TransformTemplateName(CXXScopeSpec &SS,
                                                          TemplateName Name,
-                                                         SourceLocation NameLoc,                                     
+                                                         SourceLocation NameLoc,
                                                          QualType ObjectType,
                                              NamedDecl *FirstQualifierInScope) {
   if (TemplateTemplateParmDecl *TTP
@@ -1125,6 +1127,24 @@ TemplateInstantiator::TransformTemplateParmRefExpr(DeclRefExpr *E,
   }
 
   return transformNonTypeTemplateParmRef(NTTP, E->getLocation(), Arg);
+}
+
+const LoopHintAttr *
+TemplateInstantiator::TransformLoopHintAttr(const LoopHintAttr *LH) {
+  Expr *TransformedExpr = getDerived().TransformExpr(LH->getValue()).get();
+
+  if (TransformedExpr == LH->getValue())
+    return LH;
+
+  // Generate error if there is a problem with the value.
+  if (getSema().CheckLoopHintExpr(TransformedExpr, LH->getLocation()))
+    return LH;
+
+  // Create new LoopHintValueAttr with integral expression in place of the
+  // non-type template parameter.
+  return LoopHintAttr::CreateImplicit(
+      getSema().Context, LH->getSemanticSpelling(), LH->getOption(),
+      LH->getState(), TransformedExpr, LH->getRange());
 }
 
 ExprResult TemplateInstantiator::transformNonTypeTemplateParmRef(
@@ -1255,8 +1275,8 @@ TemplateInstantiator::TransformFunctionParmPackRefExpr(DeclRefExpr *E,
 
   Decl *TransformedDecl;
   if (DeclArgumentPack *Pack = Found->dyn_cast<DeclArgumentPack *>()) {
-    // If this is a reference to a function parameter pack which we can substitute
-    // but can't yet expand, build a FunctionParmPackExpr for it.
+    // If this is a reference to a function parameter pack which we can
+    // substitute but can't yet expand, build a FunctionParmPackExpr for it.
     if (getSema().ArgumentPackSubstitutionIndex == -1) {
       QualType T = TransformType(E->getType());
       if (T.isNull())

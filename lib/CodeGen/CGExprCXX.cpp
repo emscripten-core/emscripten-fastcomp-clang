@@ -24,21 +24,21 @@
 using namespace clang;
 using namespace CodeGen;
 
-RValue CodeGenFunction::EmitCXXMemberCall(const CXXMethodDecl *MD,
-                                          SourceLocation CallLoc,
-                                          llvm::Value *Callee,
-                                          ReturnValueSlot ReturnValue,
-                                          llvm::Value *This,
-                                          llvm::Value *ImplicitParam,
-                                          QualType ImplicitParamTy,
-                                          CallExpr::const_arg_iterator ArgBeg,
-                                          CallExpr::const_arg_iterator ArgEnd) {
+RValue CodeGenFunction::EmitCXXMemberOrOperatorCall(
+    const CXXMethodDecl *MD, llvm::Value *Callee, ReturnValueSlot ReturnValue,
+    llvm::Value *This, llvm::Value *ImplicitParam, QualType ImplicitParamTy,
+    const CallExpr *CE) {
+  assert(CE == nullptr || isa<CXXMemberCallExpr>(CE) ||
+         isa<CXXOperatorCallExpr>(CE));
   assert(MD->isInstance() &&
-         "Trying to emit a member call expr on a static method!");
+         "Trying to emit a member or operator call expr on a static method!");
 
   // C++11 [class.mfct.non-static]p2:
   //   If a non-static member function of a class X is called for an object that
   //   is not of type X, or of a type derived from X, the behavior is undefined.
+  SourceLocation CallLoc;
+  if (CE)
+    CallLoc = CE->getExprLoc();
   EmitTypeCheck(isa<CXXConstructorDecl>(MD) ? TCK_ConstructorCall
                                             : TCK_MemberCall,
                 CallLoc, This, getContext().getRecordType(MD->getParent()));
@@ -55,9 +55,18 @@ RValue CodeGenFunction::EmitCXXMemberCall(const CXXMethodDecl *MD,
 
   const FunctionProtoType *FPT = MD->getType()->castAs<FunctionProtoType>();
   RequiredArgs required = RequiredArgs::forPrototypePlus(FPT, Args.size());
-  
+
   // And the rest of the call args.
-  EmitCallArgs(Args, FPT, ArgBeg, ArgEnd);
+  if (CE) {
+    // Special case: skip first argument of CXXOperatorCall (it is "this").
+    unsigned ArgsToSkip = isa<CXXOperatorCallExpr>(CE) ? 1 : 0;
+    EmitCallArgs(Args, FPT, CE->arg_begin() + ArgsToSkip, CE->arg_end(),
+                 CE->getDirectCallee());
+  } else {
+    assert(
+        FPT->getNumParams() == 0 &&
+        "No CallExpr specified for function with non-zero number of arguments");
+  }
 
   return EmitCall(CGM.getTypes().arrangeCXXMethodCall(Args, FPT, required),
                   Callee, ReturnValue, Args, MD);
@@ -86,9 +95,8 @@ RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE,
   if (MD->isStatic()) {
     // The method is static, emit it as we would a regular call.
     llvm::Value *Callee = CGM.GetAddrOfFunction(MD);
-    return EmitCall(getContext().getPointerType(MD->getType()), Callee,
-                    CE->getLocStart(), ReturnValue, CE->arg_begin(),
-                    CE->arg_end());
+    return EmitCall(getContext().getPointerType(MD->getType()), Callee, CE,
+                    ReturnValue);
   }
 
   // Compute the object pointer.
@@ -102,7 +110,15 @@ RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE,
     assert(DevirtualizedMethod);
     const CXXRecordDecl *DevirtualizedClass = DevirtualizedMethod->getParent();
     const Expr *Inner = Base->ignoreParenBaseCasts();
-    if (getCXXRecord(Inner) == DevirtualizedClass)
+    if (DevirtualizedMethod->getReturnType().getCanonicalType() !=
+        MD->getReturnType().getCanonicalType())
+      // If the return types are not the same, this might be a case where more
+      // code needs to run to compensate for it. For example, the derived
+      // method might return a type that inherits form from the return
+      // type of MD and has a prefix.
+      // For now we just avoid devirtualizing these covariant cases.
+      DevirtualizedMethod = nullptr;
+    else if (getCXXRecord(Inner) == DevirtualizedClass)
       // If the class of the Inner expression is where the dynamic method
       // is defined, build the this pointer from it.
       Base = Inner;
@@ -113,15 +129,6 @@ RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE,
       // we don't have support for that yet, so do a virtual call.
       DevirtualizedMethod = nullptr;
     }
-    // If the return types are not the same, this might be a case where more
-    // code needs to run to compensate for it. For example, the derived
-    // method might return a type that inherits form from the return
-    // type of MD and has a prefix.
-    // For now we just avoid devirtualizing these covariant cases.
-    if (DevirtualizedMethod &&
-        DevirtualizedMethod->getReturnType().getCanonicalType() !=
-            MD->getReturnType().getCanonicalType())
-      DevirtualizedMethod = nullptr;
   }
 
   llvm::Value *This;
@@ -144,13 +151,13 @@ RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE,
       EmitAggregateAssign(This, RHS, CE->getType());
       return RValue::get(This);
     }
-    
-    if (isa<CXXConstructorDecl>(MD) && 
+
+    if (isa<CXXConstructorDecl>(MD) &&
         cast<CXXConstructorDecl>(MD)->isCopyOrMoveConstructor()) {
       // Trivial move and copy ctor are the same.
+      assert(CE->getNumArgs() == 1 && "unexpected argcount for trivial ctor");
       llvm::Value *RHS = EmitLValue(*CE->arg_begin()).getAddress();
-      EmitSynthesizedCXXCopyCtorCall(cast<CXXConstructorDecl>(MD), This, RHS,
-                                     CE->arg_begin(), CE->arg_end());
+      EmitAggregateCopy(This, RHS, CE->arg_begin()->getType());
       return RValue::get(This);
     }
     llvm_unreachable("unknown trivial member function");
@@ -160,11 +167,11 @@ RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE,
   const CXXMethodDecl *CalleeDecl = DevirtualizedMethod ? DevirtualizedMethod : MD;
   const CGFunctionInfo *FInfo = nullptr;
   if (const CXXDestructorDecl *Dtor = dyn_cast<CXXDestructorDecl>(CalleeDecl))
-    FInfo = &CGM.getTypes().arrangeCXXDestructor(Dtor,
-                                                 Dtor_Complete);
+    FInfo = &CGM.getTypes().arrangeCXXStructorDeclaration(
+        Dtor, StructorType::Complete);
   else if (const CXXConstructorDecl *Ctor = dyn_cast<CXXConstructorDecl>(CalleeDecl))
-    FInfo = &CGM.getTypes().arrangeCXXConstructorDeclaration(Ctor,
-                                                             Ctor_Complete);
+    FInfo = &CGM.getTypes().arrangeCXXStructorDeclaration(
+        Ctor, StructorType::Complete);
   else
     FInfo = &CGM.getTypes().arrangeCXXMethodDeclaration(CalleeDecl);
 
@@ -185,21 +192,22 @@ RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE,
     assert(ReturnValue.isNull() && "Destructor shouldn't have return value");
     if (UseVirtualCall) {
       CGM.getCXXABI().EmitVirtualDestructorCall(*this, Dtor, Dtor_Complete,
-                                                CE->getExprLoc(), This);
+                                                This, CE);
     } else {
       if (getLangOpts().AppleKext &&
           MD->isVirtual() &&
           ME->hasQualifier())
         Callee = BuildAppleKextVirtualCall(MD, ME->getQualifier(), Ty);
       else if (!DevirtualizedMethod)
-        Callee = CGM.GetAddrOfCXXDestructor(Dtor, Dtor_Complete, FInfo, Ty);
+        Callee =
+            CGM.getAddrOfCXXStructor(Dtor, StructorType::Complete, FInfo, Ty);
       else {
         const CXXDestructorDecl *DDtor =
           cast<CXXDestructorDecl>(DevirtualizedMethod);
         Callee = CGM.GetAddrOfFunction(GlobalDecl(DDtor, Dtor_Complete), Ty);
       }
-      EmitCXXMemberCall(MD, CE->getExprLoc(), Callee, ReturnValue, This,
-                        /*ImplicitParam=*/nullptr, QualType(), nullptr,nullptr);
+      EmitCXXMemberOrOperatorCall(MD, Callee, ReturnValue, This,
+                                  /*ImplicitParam=*/nullptr, QualType(), CE);
     }
     return RValue::get(nullptr);
   }
@@ -225,9 +233,8 @@ RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE,
         *this, MD, This, UseVirtualCall);
   }
 
-  return EmitCXXMemberCall(MD, CE->getExprLoc(), Callee, ReturnValue, This,
-                           /*ImplicitParam=*/nullptr, QualType(),
-                           CE->arg_begin(), CE->arg_end());
+  return EmitCXXMemberOrOperatorCall(MD, Callee, ReturnValue, This,
+                                     /*ImplicitParam=*/nullptr, QualType(), CE);
 }
 
 RValue
@@ -275,7 +282,7 @@ CodeGenFunction::EmitCXXMemberPointerCallExpr(const CXXMemberCallExpr *E,
   RequiredArgs required = RequiredArgs::forPrototypePlus(FPT, 1);
   
   // And the rest of the call args
-  EmitCallArgs(Args, FPT, E->arg_begin(), E->arg_end());
+  EmitCallArgs(Args, FPT, E->arg_begin(), E->arg_end(), E->getDirectCallee());
   return EmitCall(CGM.getTypes().arrangeCXXMethodCall(Args, FPT, required),
                   Callee, ReturnValue, Args);
 }
@@ -298,9 +305,8 @@ CodeGenFunction::EmitCXXOperatorMemberCallExpr(const CXXOperatorCallExpr *E,
   }
 
   llvm::Value *Callee = EmitCXXOperatorMemberCallee(E, MD, This);
-  return EmitCXXMemberCall(MD, E->getExprLoc(), Callee, ReturnValue, This,
-                           /*ImplicitParam=*/nullptr, QualType(),
-                           E->arg_begin() + 1, E->arg_end());
+  return EmitCXXMemberOrOperatorCall(MD, Callee, ReturnValue, This,
+                                     /*ImplicitParam=*/nullptr, QualType(), E);
 }
 
 RValue CodeGenFunction::EmitCUDAKernelCallExpr(const CUDAKernelCallExpr *E,
@@ -392,8 +398,7 @@ CodeGenFunction::EmitCXXConstructExpr(const CXXConstructExpr *E,
   
   if (const ConstantArrayType *arrayType 
         = getContext().getAsConstantArrayType(E->getType())) {
-    EmitCXXAggrConstructorCall(CD, arrayType, Dest.getAddr(), 
-                               E->arg_begin(), E->arg_end());
+    EmitCXXAggrConstructorCall(CD, arrayType, Dest.getAddr(), E);
   } else {
     CXXCtorType Type = Ctor_Complete;
     bool ForVirtualBase = false;
@@ -420,7 +425,7 @@ CodeGenFunction::EmitCXXConstructExpr(const CXXConstructExpr *E,
     
     // Call the constructor.
     EmitCXXConstructorCall(CD, Type, ForVirtualBase, Delegating, Dest.getAddr(),
-                           E->arg_begin(), E->arg_end());
+                           E);
   }
 }
 
@@ -445,7 +450,7 @@ CodeGenFunction::EmitSynthesizedCXXCopyCtor(llvm::Value *Dest,
   
   assert(!getContext().getAsConstantArrayType(E->getType())
          && "EmitSynthesizedCXXCopyCtor - Copied-in Array");
-  EmitSynthesizedCXXCopyCtorCall(CD, Dest, Src, E->arg_begin(), E->arg_end());
+  EmitSynthesizedCXXCopyCtorCall(CD, Dest, Src, E);
 }
 
 static CharUnits CalculateCookiePadding(CodeGenFunction &CGF,
@@ -895,8 +900,7 @@ CodeGenFunction::EmitNewArrayInitializer(const CXXNewExpr *E,
       NumElements = Builder.CreateSub(
           NumElements,
           llvm::ConstantInt::get(NumElements->getType(), InitListElements));
-    EmitCXXAggrConstructorCall(Ctor, NumElements, CurPtr,
-                               CCE->arg_begin(), CCE->arg_end(),
+    EmitCXXAggrConstructorCall(Ctor, NumElements, CurPtr, CCE,
                                CCE->requiresZeroInitialization());
     return;
   }
@@ -1226,15 +1230,14 @@ llvm::Value *CodeGenFunction::EmitCXXNewExpr(const CXXNewExpr *E) {
   llvm::Value *allocSize =
     EmitCXXNewAllocSize(*this, E, minElements, numElements,
                         allocSizeWithoutCookie);
-  
+
   allocatorArgs.add(RValue::get(allocSize), sizeType);
 
   // We start at 1 here because the first argument (the allocation size)
   // has already been emitted.
-  EmitCallArgs(allocatorArgs, allocatorType->isVariadic(),
-               allocatorType->param_type_begin() + 1,
-               allocatorType->param_type_end(), E->placement_arg_begin(),
-               E->placement_arg_end());
+  EmitCallArgs(allocatorArgs, allocatorType, E->placement_arg_begin(),
+               E->placement_arg_end(), /* CalleeDecl */ nullptr,
+               /*ParamsToSkip*/ 1);
 
   // Emit the allocation call.  If the allocator is a global placement
   // operator, just "inline" it directly.
@@ -1415,15 +1418,16 @@ static void EmitObjectDelete(CodeGenFunction &CGF,
                                                     ElementType);
         }
 
-        // FIXME: Provide a source location here.
+        // FIXME: Provide a source location here even though there's no
+        // CXXMemberCallExpr for dtor call.
         CXXDtorType DtorType = UseGlobalDelete ? Dtor_Complete : Dtor_Deleting;
-        CGF.CGM.getCXXABI().EmitVirtualDestructorCall(CGF, Dtor, DtorType,
-                                                      SourceLocation(), Ptr);
+        CGF.CGM.getCXXABI().EmitVirtualDestructorCall(CGF, Dtor, DtorType, Ptr,
+                                                      nullptr);
 
         if (UseGlobalDelete) {
           CGF.PopCleanupBlock();
         }
-        
+
         return;
       }
     }
@@ -1800,19 +1804,23 @@ llvm::Value *CodeGenFunction::EmitDynamicCast(llvm::Value *Value,
 
 void CodeGenFunction::EmitLambdaExpr(const LambdaExpr *E, AggValueSlot Slot) {
   RunCleanupsScope Scope(*this);
-  LValue SlotLV = MakeAddrLValue(Slot.getAddr(), E->getType(),
-                                 Slot.getAlignment());
+  LValue SlotLV =
+      MakeAddrLValue(Slot.getAddr(), E->getType(), Slot.getAlignment());
 
   CXXRecordDecl::field_iterator CurField = E->getLambdaClass()->field_begin();
   for (LambdaExpr::capture_init_iterator i = E->capture_init_begin(),
                                          e = E->capture_init_end();
        i != e; ++i, ++CurField) {
     // Emit initialization
-    
     LValue LV = EmitLValueForFieldInitialization(SlotLV, *CurField);
-    ArrayRef<VarDecl *> ArrayIndexes;
-    if (CurField->getType()->isArrayType())
-      ArrayIndexes = E->getCaptureInitIndexVars(i);
-    EmitInitializerForField(*CurField, LV, *i, ArrayIndexes);
+    if (CurField->hasCapturedVLAType()) {
+      auto VAT = CurField->getCapturedVLAType();
+      EmitStoreThroughLValue(RValue::get(VLASizeMap[VAT->getSizeExpr()]), LV);
+    } else {
+      ArrayRef<VarDecl *> ArrayIndexes;
+      if (CurField->getType()->isArrayType())
+        ArrayIndexes = E->getCaptureInitIndexVars(i);
+      EmitInitializerForField(*CurField, LV, *i, ArrayIndexes);
+    }
   }
 }

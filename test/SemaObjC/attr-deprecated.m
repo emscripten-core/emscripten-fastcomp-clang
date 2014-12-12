@@ -197,18 +197,19 @@ __attribute__((deprecated))
 @interface TestBase
 @property (nonatomic, strong) id object __attribute__((deprecated("deprecated"))); // expected-note {{'object' has been explicitly marked deprecated here}} \
 expected-note {{property 'object' is declared deprecated here}} \
-expected-note {{'setObject:' has been explicitly marked deprecated here}}
+expected-note {{'setObject:' has been explicitly marked deprecated here}} \
+expected-note {{property declared here}}
 @end
 
 @interface TestDerived : TestBase
-@property (nonatomic, strong) id object;
+@property (nonatomic, strong) id object; //expected-warning {{auto property synthesis will not synthesize property 'object'; it will be implemented by its superclass}}
 @end
 
 @interface TestUse @end
 
 @implementation TestBase @end
 
-@implementation TestDerived @end
+@implementation TestDerived @end // expected-note {{detected while default synthesizing properties in class implementation}}
 
 @implementation TestUse
 

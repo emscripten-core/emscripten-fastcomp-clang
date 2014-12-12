@@ -38,9 +38,9 @@ public:
     return ASTFrontendAction::BeginSourceFileAction(ci, filename);
   }
 
-  virtual ASTConsumer *CreateASTConsumer(CompilerInstance &CI,
-                                         StringRef InFile) {
-    return new Visitor(decl_names);
+  virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                         StringRef InFile) {
+    return llvm::make_unique<Visitor>(decl_names);
   }
 
 private:
@@ -65,7 +65,8 @@ private:
 TEST(ASTFrontendAction, Sanity) {
   CompilerInvocation *invocation = new CompilerInvocation;
   invocation->getPreprocessorOpts().addRemappedFile(
-    "test.cc", MemoryBuffer::getMemBuffer("int main() { float x; }"));
+      "test.cc",
+      MemoryBuffer::getMemBuffer("int main() { float x; }").release());
   invocation->getFrontendOpts().Inputs.push_back(FrontendInputFile("test.cc",
                                                                    IK_CXX));
   invocation->getFrontendOpts().ProgramAction = frontend::ParseSyntaxOnly;
@@ -84,7 +85,8 @@ TEST(ASTFrontendAction, Sanity) {
 TEST(ASTFrontendAction, IncrementalParsing) {
   CompilerInvocation *invocation = new CompilerInvocation;
   invocation->getPreprocessorOpts().addRemappedFile(
-    "test.cc", MemoryBuffer::getMemBuffer("int main() { float x; }"));
+      "test.cc",
+      MemoryBuffer::getMemBuffer("int main() { float x; }").release());
   invocation->getFrontendOpts().Inputs.push_back(FrontendInputFile("test.cc",
                                                                    IK_CXX));
   invocation->getFrontendOpts().ProgramAction = frontend::ParseSyntaxOnly;
@@ -98,6 +100,53 @@ TEST(ASTFrontendAction, IncrementalParsing) {
   ASSERT_EQ(2U, test_action.decl_names.size());
   EXPECT_EQ("main", test_action.decl_names[0]);
   EXPECT_EQ("x", test_action.decl_names[1]);
+}
+
+struct TestPPCallbacks : public PPCallbacks {
+  TestPPCallbacks() : SeenEnd(false) {}
+
+  void EndOfMainFile() override { SeenEnd = true; }
+
+  bool SeenEnd;
+};
+
+class TestPPCallbacksFrontendAction : public PreprocessorFrontendAction {
+  TestPPCallbacks *Callbacks;
+
+public:
+  TestPPCallbacksFrontendAction(TestPPCallbacks *C)
+      : Callbacks(C), SeenEnd(false) {}
+
+  void ExecuteAction() override {
+    Preprocessor &PP = getCompilerInstance().getPreprocessor();
+    PP.addPPCallbacks(std::unique_ptr<TestPPCallbacks>(Callbacks));
+    PP.EnterMainSourceFile();
+  }
+  void EndSourceFileAction() override { SeenEnd = Callbacks->SeenEnd; }
+
+  bool SeenEnd;
+};
+
+TEST(PreprocessorFrontendAction, EndSourceFile) {
+  CompilerInvocation *Invocation = new CompilerInvocation;
+  Invocation->getPreprocessorOpts().addRemappedFile(
+      "test.cc",
+      MemoryBuffer::getMemBuffer("int main() { float x; }").release());
+  Invocation->getFrontendOpts().Inputs.push_back(
+      FrontendInputFile("test.cc", IK_CXX));
+  Invocation->getFrontendOpts().ProgramAction = frontend::ParseSyntaxOnly;
+  Invocation->getTargetOpts().Triple = "i386-unknown-linux-gnu";
+  CompilerInstance Compiler;
+  Compiler.setInvocation(Invocation);
+  Compiler.createDiagnostics();
+
+  TestPPCallbacks *Callbacks = new TestPPCallbacks;
+  TestPPCallbacksFrontendAction TestAction(Callbacks);
+  ASSERT_FALSE(Callbacks->SeenEnd);
+  ASSERT_FALSE(TestAction.SeenEnd);
+  ASSERT_TRUE(Compiler.ExecuteAction(TestAction));
+  // Check that EndOfMainFile was called before EndSourceFileAction.
+  ASSERT_TRUE(TestAction.SeenEnd);
 }
 
 } // anonymous namespace

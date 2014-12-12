@@ -80,7 +80,7 @@
 // COMMON:#define __ORDER_LITTLE_ENDIAN__ 1234
 // COMMON:#define __ORDER_PDP_ENDIAN__ 3412
 // COMMON:#define __STDC_HOSTED__ 1
-// COMMON:#define __STDC_VERSION__
+// COMMON:#define __STDC_VERSION__ 201112L
 // COMMON:#define __STDC__ 1
 // COMMON:#define __VERSION__
 // COMMON:#define __clang__ 1
@@ -422,7 +422,6 @@
 // AARCH64:#define __aarch64__ 1
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=aarch64_be-none-none < /dev/null | FileCheck -check-prefix AARCH64-BE %s
-// RUN: %clang_cc1 -E -dM -ffreestanding -triple=arm64_be-none-none < /dev/null | FileCheck -check-prefix AARCH64-BE %s
 //
 // AARCH64-BE:#define _LP64 1
 // AARCH64-BE:#define __AARCH64EB__ 1
@@ -1765,12 +1764,13 @@
 // ARM-NETBSD:#define __arm 1
 // ARM-NETBSD:#define __arm__ 1
 
-// RUN: %clang -target arm -arch armv7s -x c -E -dM %s -o - | FileCheck --check-prefix=ARM-DARWIN-NO-EABI %s
-// RUN: %clang -target arm -arch armv6m -x c -E -dM %s -o - | FileCheck --check-prefix=ARM-DARWIN-NO-EABI %s
-// RUN: %clang -target arm -arch armv7m -x c -E -dM %s -o - | FileCheck --check-prefix=ARM-DARWIN-NO-EABI %s
-// RUN: %clang -target arm -arch armv7em -x c -E -dM %s -o - | FileCheck --check-prefix=ARM-DARWIN-NO-EABI %s
+// RUN: %clang -target arm-apple-darwin-eabi -arch armv7s -x c -E -dM %s -o - | FileCheck --check-prefix=ARM-DARWIN-NO-EABI %s
+// RUN: %clang -target arm-apple-darwin-eabi -arch armv6m -x c -E -dM %s -o - | FileCheck --check-prefix=ARM-DARWIN-EABI %s
+// RUN: %clang -target arm-apple-darwin-eabi -arch armv7m -x c -E -dM %s -o - | FileCheck --check-prefix=ARM-DARWIN-EABI %s
+// RUN: %clang -target arm-apple-darwin-eabi -arch armv7em -x c -E -dM %s -o - | FileCheck --check-prefix=ARM-DARWIN-EABI %s
 // RUN: %clang -target thumbv7-apple-darwin-eabi -arch armv7 -x c -E -dM %s -o - | FileCheck --check-prefix=ARM-DARWIN-NO-EABI %s
 // ARM-DARWIN-NO-EABI-NOT: #define __ARM_EABI__ 1
+// ARM-DARWIN-EABI: #define __ARM_EABI__ 1
 
 // Check that -mhwdiv works properly for targets which don't have the hwdiv feature enabled by default.
 
@@ -2546,7 +2546,7 @@
 // MIPS32BE:#define __SIZE_TYPE__ unsigned int
 // MIPS32BE:#define __SIZE_WIDTH__ 32
 // MIPS32BE:#define __STDC_HOSTED__ 0
-// MIPS32BE:#define __STDC_VERSION__ 199901L
+// MIPS32BE:#define __STDC_VERSION__ 201112L
 // MIPS32BE:#define __STDC__ 1
 // MIPS32BE:#define __UINT16_C_SUFFIX__ {{$}}
 // MIPS32BE:#define __UINT16_MAX__ 65535
@@ -4917,6 +4917,15 @@
 // PPC64-LINUX:#define __powerpc__ 1
 // PPC64-LINUX:#define __ppc64__ 1
 // PPC64-LINUX:#define __ppc__ 1
+
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc64-unknown-linux-gnu < /dev/null | FileCheck -check-prefix PPC64-ELFv1 %s
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc64-unknown-linux-gnu -target-abi elfv1 < /dev/null | FileCheck -check-prefix PPC64-ELFv1 %s
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc64-unknown-linux-gnu -target-abi elfv2 < /dev/null | FileCheck -check-prefix PPC64-ELFv2 %s
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc64le-unknown-linux-gnu < /dev/null | FileCheck -check-prefix PPC64-ELFv2 %s
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc64le-unknown-linux-gnu -target-abi elfv1 < /dev/null | FileCheck -check-prefix PPC64-ELFv1 %s
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc64le-unknown-linux-gnu -target-abi elfv2 < /dev/null | FileCheck -check-prefix PPC64-ELFv2 %s
+// PPC64-ELFv1:#define _CALL_ELF 1
+// PPC64-ELFv2:#define _CALL_ELF 2
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc-none-none -fno-signed-char < /dev/null | FileCheck -check-prefix PPC %s
 //
@@ -5449,7 +5458,7 @@
 // PPC-DARWIN:#define __SIZE_TYPE__ long unsigned int
 // PPC-DARWIN:#define __SIZE_WIDTH__ 32
 // PPC-DARWIN:#define __STDC_HOSTED__ 0
-// PPC-DARWIN:#define __STDC_VERSION__ 199901L
+// PPC-DARWIN:#define __STDC_VERSION__ 201112L
 // PPC-DARWIN:#define __STDC__ 1
 // PPC-DARWIN:#define __UINT16_C_SUFFIX__ {{$}}
 // PPC-DARWIN:#define __UINT16_MAX__ 65535
@@ -6222,6 +6231,13 @@
 // X86_64:#define __x86_64 1
 // X86_64:#define __x86_64__ 1
 //
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=x86_64h-none-none < /dev/null | FileCheck -check-prefix X86_64H %s
+//
+// X86_64H:#define __x86_64 1
+// X86_64H:#define __x86_64__ 1
+// X86_64H:#define __x86_64h 1
+// X86_64H:#define __x86_64h__ 1
+
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=x86_64-none-none-gnux32 < /dev/null | FileCheck -check-prefix X32 %s
 //
 // X32:#define _ILP32 1

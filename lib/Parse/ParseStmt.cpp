@@ -424,27 +424,11 @@ StmtResult Parser::ParseSEHTryBlock() {
 ///   seh-finally-block
 ///
 StmtResult Parser::ParseSEHTryBlockCommon(SourceLocation TryLoc) {
-  if (Tok.isNot(tok::l_brace))
+  if(Tok.isNot(tok::l_brace))
     return StmtError(Diag(Tok, diag::err_expected) << tok::l_brace);
 
-  int SEHTryIndex, SEHTryParentIndex;
-  StmtResult TryBlock;
-  {
-    assert(Tok.is(tok::l_brace) && "Not a compount stmt!");
-
-    // Enter a scope to hold everything within the compound stmt.  Compound
-    // statements can always hold declarations.
-    ParseScope CompoundScope(this, Scope::DeclScope | Scope::SEHTryScope);
-    SEHTryIndex = getCurScope()->getSEHTryIndex();
-    SEHTryParentIndex = getCurScope()->getSEHTryParentIndex();
-
-    // Parse the statements in the body.
-    TryBlock = ParseCompoundStatementBody();
-  }
-
-  //StmtResult TryBlock(ParseCompoundStatement(/*isStmtExpr=*/false,
-  //                    Scope::DeclScope | Scope::SEHTryScope));
-
+  StmtResult TryBlock(ParseCompoundStatement(/*isStmtExpr=*/false,
+                      Scope::DeclScope | Scope::SEHTryScope));
   if(TryBlock.isInvalid())
     return TryBlock;
 
@@ -466,9 +450,7 @@ StmtResult Parser::ParseSEHTryBlockCommon(SourceLocation TryLoc) {
   return Actions.ActOnSEHTryBlock(false /* IsCXXTry */,
                                   TryLoc,
                                   TryBlock.get(),
-                                  Handler.get(),
-                                  SEHTryIndex,
-                                  SEHTryParentIndex);
+                                  Handler.get());
 }
 
 /// ParseSEHExceptBlock - Handle __except
@@ -1535,7 +1517,7 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc) {
       ForRangeInit.RangeExpr = ParseExpression();
 
     Diag(Loc, getLangOpts().CPlusPlus1z
-                  ? diag::warn_cxx1y_compat_for_range_identifier
+                  ? diag::warn_cxx14_compat_for_range_identifier
                   : diag::ext_for_range_identifier)
       << ((getLangOpts().CPlusPlus11 && !getLangOpts().CPlusPlus1z)
               ? FixItHint::CreateInsertion(Loc, "auto &&")
@@ -1835,10 +1817,11 @@ StmtResult Parser::ParsePragmaLoopHint(StmtVector &Stmts, bool OnlyStatement,
 
   // Get loop hints and consume annotated token.
   while (Tok.is(tok::annot_pragma_loop_hint)) {
-    LoopHint Hint = HandlePragmaLoopHint();
-    ConsumeToken();
+    LoopHint Hint;
+    if (!HandlePragmaLoopHint(Hint))
+      continue;
 
-    ArgsUnion ArgHints[] = {Hint.PragmaNameLoc, Hint.OptionLoc, Hint.ValueLoc,
+    ArgsUnion ArgHints[] = {Hint.PragmaNameLoc, Hint.OptionLoc, Hint.StateLoc,
                             ArgsUnion(Hint.ValueExpr)};
     TempAttrs.addNew(Hint.PragmaNameLoc->Ident, Hint.Range, nullptr,
                      Hint.PragmaNameLoc->Loc, ArgHints, 4,
@@ -1977,21 +1960,9 @@ StmtResult Parser::ParseCXXTryBlockCommon(SourceLocation TryLoc, bool FnTry) {
     return StmtError(Diag(Tok, diag::err_expected) << tok::l_brace);
   // FIXME: Possible draft standard bug: attribute-specifier should be allowed?
 
-  int SEHTryIndex, SEHTryParentIndex;
-  StmtResult TryBlock;
-  {
-    assert(Tok.is(tok::l_brace) && "Not a compount stmt!");
-
-    // Enter a scope to hold everything within the compound stmt.  Compound
-    // statements can always hold declarations.
-    ParseScope CompoundScope(this, Scope::DeclScope | Scope::TryScope |
-                                       (FnTry ? Scope::FnTryCatchScope : 0));
-    SEHTryIndex = getCurScope()->getSEHTryIndex();
-    SEHTryParentIndex = getCurScope()->getSEHTryParentIndex();
-
-    // Parse the statements in the body.
-    TryBlock = ParseCompoundStatementBody();
-  }
+  StmtResult TryBlock(ParseCompoundStatement(/*isStmtExpr=*/false,
+                      Scope::DeclScope | Scope::TryScope |
+                        (FnTry ? Scope::FnTryCatchScope : 0)));
   if (TryBlock.isInvalid())
     return TryBlock;
 
@@ -2016,9 +1987,7 @@ StmtResult Parser::ParseCXXTryBlockCommon(SourceLocation TryLoc, bool FnTry) {
     return Actions.ActOnSEHTryBlock(true /* IsCXXTry */,
                                     TryLoc,
                                     TryBlock.get(),
-                                    Handler.get(),
-                                    SEHTryIndex,
-                                    SEHTryParentIndex);
+                                    Handler.get());
   }
   else {
     StmtVector Handlers;

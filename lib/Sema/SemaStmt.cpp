@@ -19,6 +19,7 @@
 #include "clang/AST/EvaluatedExprVisitor.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/TypeLoc.h"
@@ -184,6 +185,12 @@ void Sema::DiagnoseUnusedExprResult(const Stmt *S) {
   const Expr *E = dyn_cast_or_null<Expr>(S);
   if (!E)
     return;
+
+  // If we are in an unevaluated expression context, then there can be no unused
+  // results because the results aren't expected to be used in the first place.
+  if (isUnevaluatedContext())
+    return;
+
   SourceLocation ExprLoc = E->IgnoreParens()->getExprLoc();
   // In most cases, we don't want to warn if the expression is written in a
   // macro body, or if the macro comes from a system header. If the offending
@@ -431,7 +438,11 @@ Sema::ActOnLabelStmt(SourceLocation IdentLoc, LabelDecl *TheDecl,
   TheDecl->setStmt(LS);
   if (!TheDecl->isGnuLocal()) {
     TheDecl->setLocStart(IdentLoc);
-    TheDecl->setLocation(IdentLoc);
+    if (!TheDecl->isMSAsmLabel()) {
+      // Don't update the location of MS ASM labels.  These will result in
+      // a diagnostic, and changing the location here will mess that up.
+      TheDecl->setLocation(IdentLoc);
+    }
   }
   return LS;
 }
@@ -479,47 +490,6 @@ Sema::ActOnIfStmt(SourceLocation IfLoc, FullExprArg CondVal, Decl *CondVar,
 
   return new (Context) IfStmt(Context, IfLoc, ConditionVar, ConditionExpr,
                               thenStmt, ElseLoc, elseStmt);
-}
-
-/// ConvertIntegerToTypeWarnOnOverflow - Convert the specified APInt to have
-/// the specified width and sign.  If an overflow occurs, detect it and emit
-/// the specified diagnostic.
-void Sema::ConvertIntegerToTypeWarnOnOverflow(llvm::APSInt &Val,
-                                              unsigned NewWidth, bool NewSign,
-                                              SourceLocation Loc,
-                                              unsigned DiagID) {
-  // Perform a conversion to the promoted condition type if needed.
-  if (NewWidth > Val.getBitWidth()) {
-    // If this is an extension, just do it.
-    Val = Val.extend(NewWidth);
-    Val.setIsSigned(NewSign);
-
-    // If the input was signed and negative and the output is
-    // unsigned, don't bother to warn: this is implementation-defined
-    // behavior.
-    // FIXME: Introduce a second, default-ignored warning for this case?
-  } else if (NewWidth < Val.getBitWidth()) {
-    // If this is a truncation, check for overflow.
-    llvm::APSInt ConvVal(Val);
-    ConvVal = ConvVal.trunc(NewWidth);
-    ConvVal.setIsSigned(NewSign);
-    ConvVal = ConvVal.extend(Val.getBitWidth());
-    ConvVal.setIsSigned(Val.isSigned());
-    if (ConvVal != Val)
-      Diag(Loc, DiagID) << Val.toString(10) << ConvVal.toString(10);
-
-    // Regardless of whether a diagnostic was emitted, really do the
-    // truncation.
-    Val = Val.trunc(NewWidth);
-    Val.setIsSigned(NewSign);
-  } else if (NewSign != Val.isSigned()) {
-    // Convert the sign to match the sign of the condition.  This can cause
-    // overflow as well: unsigned(INTMIN)
-    // We don't diagnose this overflow, because it is implementation-defined
-    // behavior.
-    // FIXME: Introduce a second, default-ignored warning for this case?
-    Val.setIsSigned(NewSign);
-  }
 }
 
 namespace {
@@ -671,11 +641,28 @@ Sema::ActOnStartOfSwitchStmt(SourceLocation SwitchLoc, Expr *Cond,
 }
 
 static void AdjustAPSInt(llvm::APSInt &Val, unsigned BitWidth, bool IsSigned) {
-  if (Val.getBitWidth() < BitWidth)
-    Val = Val.extend(BitWidth);
-  else if (Val.getBitWidth() > BitWidth)
-    Val = Val.trunc(BitWidth);
+  Val = Val.extOrTrunc(BitWidth);
   Val.setIsSigned(IsSigned);
+}
+
+/// Check the specified case value is in range for the given unpromoted switch
+/// type.
+static void checkCaseValue(Sema &S, SourceLocation Loc, const llvm::APSInt &Val,
+                           unsigned UnpromotedWidth, bool UnpromotedSign) {
+  // If the case value was signed and negative and the switch expression is
+  // unsigned, don't bother to warn: this is implementation-defined behavior.
+  // FIXME: Introduce a second, default-ignored warning for this case?
+  if (UnpromotedWidth < Val.getBitWidth()) {
+    llvm::APSInt ConvVal(Val);
+    AdjustAPSInt(ConvVal, UnpromotedWidth, UnpromotedSign);
+    AdjustAPSInt(ConvVal, Val.getBitWidth(), Val.isSigned());
+    // FIXME: Use different diagnostics for overflow  in conversion to promoted
+    // type versus "switch expression cannot have this value". Use proper
+    // IntRange checking rather than just looking at the unpromoted type here.
+    if (ConvVal != Val)
+      S.Diag(Loc, diag::warn_case_value_overflow) << Val.toString(10)
+                                                  << ConvVal.toString(10);
+  }
 }
 
 /// Returns true if we should emit a diagnostic about this case expression not
@@ -744,13 +731,20 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
     }
   }
 
-  // Get the bitwidth of the switched-on value before promotions.  We must
+  // Get the bitwidth of the switched-on value after promotions. We must
   // convert the integer case values to this width before comparison.
   bool HasDependentValue
     = CondExpr->isTypeDependent() || CondExpr->isValueDependent();
-  unsigned CondWidth
+  unsigned CondWidth = HasDependentValue ? 0 : Context.getIntWidth(CondType);
+  bool CondIsSigned = CondType->isSignedIntegerOrEnumerationType();
+
+  // Get the width and signedness that the condition might actually have, for
+  // warning purposes.
+  // FIXME: Grab an IntRange for the condition rather than using the unpromoted
+  // type.
+  unsigned CondWidthBeforePromotion
     = HasDependentValue ? 0 : Context.getIntWidth(CondTypeBeforePromotion);
-  bool CondIsSigned
+  bool CondIsSignedBeforePromotion
     = CondTypeBeforePromotion->isSignedIntegerOrEnumerationType();
 
   // Accumulate all of the case values in a vector so that we can sort them
@@ -816,15 +810,13 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
         Lo = ImpCastExprToType(Lo, CondType, CK_IntegralCast).get();
       }
 
-      // Convert the value to the same width/sign as the condition had prior to
-      // integral promotions.
-      //
-      // FIXME: This causes us to reject valid code:
-      //   switch ((char)c) { case 256: case 0: return 0; }
-      // Here we claim there is a duplicated condition value, but there is not.
-      ConvertIntegerToTypeWarnOnOverflow(LoVal, CondWidth, CondIsSigned,
-                                         Lo->getLocStart(),
-                                         diag::warn_case_value_overflow);
+      // Check the unconverted value is within the range of possible values of
+      // the switch expression.
+      checkCaseValue(*this, Lo->getLocStart(), LoVal,
+                     CondWidthBeforePromotion, CondIsSignedBeforePromotion);
+
+      // Convert the value to the same width/sign as the condition.
+      AdjustAPSInt(LoVal, CondWidth, CondIsSigned);
 
       CS->setLHS(Lo);
 
@@ -847,9 +839,8 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
     llvm::APSInt ConstantCondValue;
     bool HasConstantCond = false;
     if (!HasDependentValue && !TheDefaultStmt) {
-      HasConstantCond
-        = CondExprBeforePromotion->EvaluateAsInt(ConstantCondValue, Context,
-                                                 Expr::SE_AllowSideEffects);
+      HasConstantCond = CondExpr->EvaluateAsInt(ConstantCondValue, Context,
+                                                Expr::SE_AllowSideEffects);
       assert(!HasConstantCond ||
              (ConstantCondValue.getBitWidth() == CondWidth &&
               ConstantCondValue.isSigned() == CondIsSigned));
@@ -935,10 +926,13 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
           Hi = ImpCastExprToType(Hi, CondType, CK_IntegralCast).get();
         }
 
+        // Check the unconverted value is within the range of possible values of
+        // the switch expression.
+        checkCaseValue(*this, Hi->getLocStart(), HiVal,
+                       CondWidthBeforePromotion, CondIsSignedBeforePromotion);
+
         // Convert the value to the same width/sign as the condition.
-        ConvertIntegerToTypeWarnOnOverflow(HiVal, CondWidth, CondIsSigned,
-                                           Hi->getLocStart(),
-                                           diag::warn_case_value_overflow);
+        AdjustAPSInt(HiVal, CondWidth, CondIsSigned);
 
         CR->setRHS(Hi);
 
@@ -1260,13 +1254,13 @@ namespace {
   // the evaluated decls into a vector.  Simple is set to true if none
   // of the excluded constructs are used.
   class DeclExtractor : public EvaluatedExprVisitor<DeclExtractor> {
-    llvm::SmallPtrSet<VarDecl*, 8> &Decls;
+    llvm::SmallPtrSetImpl<VarDecl*> &Decls;
     SmallVectorImpl<SourceRange> &Ranges;
     bool Simple;
   public:
     typedef EvaluatedExprVisitor<DeclExtractor> Inherited;
 
-    DeclExtractor(Sema &S, llvm::SmallPtrSet<VarDecl*, 8> &Decls,
+    DeclExtractor(Sema &S, llvm::SmallPtrSetImpl<VarDecl*> &Decls,
                   SmallVectorImpl<SourceRange> &Ranges) :
         Inherited(S.Context),
         Decls(Decls),
@@ -1338,13 +1332,13 @@ namespace {
   // DeclMatcher checks to see if the decls are used in a non-evauluated
   // context.
   class DeclMatcher : public EvaluatedExprVisitor<DeclMatcher> {
-    llvm::SmallPtrSet<VarDecl*, 8> &Decls;
+    llvm::SmallPtrSetImpl<VarDecl*> &Decls;
     bool FoundDecl;
 
   public:
     typedef EvaluatedExprVisitor<DeclMatcher> Inherited;
 
-    DeclMatcher(Sema &S, llvm::SmallPtrSet<VarDecl*, 8> &Decls,
+    DeclMatcher(Sema &S, llvm::SmallPtrSetImpl<VarDecl*> &Decls,
                 Stmt *Statement) :
         Inherited(S.Context), Decls(Decls), FoundDecl(false) {
       if (!Statement) return;
@@ -1427,8 +1421,8 @@ namespace {
     if (Decls.size() == 0) return;
 
     // Don't warn on volatile, static, or global variables.
-    for (llvm::SmallPtrSet<VarDecl*, 8>::iterator I = Decls.begin(),
-                                                  E = Decls.end();
+    for (llvm::SmallPtrSetImpl<VarDecl*>::iterator I = Decls.begin(),
+                                                   E = Decls.end();
          I != E; ++I)
       if ((*I)->getType().isVolatileQualified() ||
           (*I)->hasGlobalStorage()) return;
@@ -1443,8 +1437,8 @@ namespace {
       PDiag << 0;
     else {
       PDiag << Decls.size();
-      for (llvm::SmallPtrSet<VarDecl*, 8>::iterator I = Decls.begin(),
-                                                    E = Decls.end();
+      for (llvm::SmallPtrSetImpl<VarDecl*>::iterator I = Decls.begin(),
+                                                     E = Decls.end();
            I != E; ++I)
         PDiag << (*I)->getDeclName();
     }
@@ -2727,14 +2721,54 @@ Sema::ActOnCapScopeReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
   return Result;
 }
 
+namespace {
+/// \brief Marks all typedefs in all local classes in a type referenced.
+///
+/// In a function like
+/// auto f() {
+///   struct S { typedef int a; };
+///   return S();
+/// }
+///
+/// the local type escapes and could be referenced in some TUs but not in
+/// others. Pretend that all local typedefs are always referenced, to not warn
+/// on this. This isn't necessary if f has internal linkage, or the typedef
+/// is private.
+class LocalTypedefNameReferencer
+    : public RecursiveASTVisitor<LocalTypedefNameReferencer> {
+public:
+  LocalTypedefNameReferencer(Sema &S) : S(S) {}
+  bool VisitRecordType(const RecordType *RT);
+private:
+  Sema &S;
+};
+bool LocalTypedefNameReferencer::VisitRecordType(const RecordType *RT) {
+  auto *R = dyn_cast<CXXRecordDecl>(RT->getDecl());
+  if (!R || !R->isLocalClass() || !R->isLocalClass()->isExternallyVisible() ||
+      R->isDependentType())
+    return true;
+  for (auto *TmpD : R->decls())
+    if (auto *T = dyn_cast<TypedefNameDecl>(TmpD))
+      if (T->getAccess() != AS_private || R->hasFriends())
+        S.MarkAnyDeclReferenced(T->getLocation(), T, /*OdrUse=*/false);
+  return true;
+}
+}
+
+TypeLoc Sema::getReturnTypeLoc(FunctionDecl *FD) const {
+  TypeLoc TL = FD->getTypeSourceInfo()->getTypeLoc().IgnoreParens();
+  while (auto ATL = TL.getAs<AttributedTypeLoc>())
+    TL = ATL.getModifiedLoc().IgnoreParens();
+  return TL.castAs<FunctionProtoTypeLoc>().getReturnLoc();
+}
+
 /// Deduce the return type for a function from a returned expression, per
 /// C++1y [dcl.spec.auto]p6.
 bool Sema::DeduceFunctionTypeFromReturnExpr(FunctionDecl *FD,
                                             SourceLocation ReturnLoc,
                                             Expr *&RetExpr,
                                             AutoType *AT) {
-  TypeLoc OrigResultType = FD->getTypeSourceInfo()->getTypeLoc().
-    IgnoreParens().castAs<FunctionProtoTypeLoc>().getReturnLoc();
+  TypeLoc OrigResultType = getReturnTypeLoc(FD);
   QualType Deduced;
 
   if (RetExpr && isa<InitListExpr>(RetExpr)) {
@@ -2772,6 +2806,11 @@ bool Sema::DeduceFunctionTypeFromReturnExpr(FunctionDecl *FD,
 
     if (DAR != DAR_Succeeded)
       return true;
+
+    // If a local type is part of the returned type, mark its fields as
+    // referenced.
+    LocalTypedefNameReferencer Referencer(*this);
+    Referencer.TraverseType(RetExpr->getType());
   } else {
     //  In the case of a return with no operand, the initializer is considered
     //  to be void().
@@ -2872,7 +2911,7 @@ StmtResult Sema::BuildReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
 
   // FIXME: Add a flag to the ScopeInfo to indicate whether we're performing
   // deduction.
-  if (getLangOpts().CPlusPlus1y) {
+  if (getLangOpts().CPlusPlus14) {
     if (AutoType *AT = FnRetType->getContainedAutoType()) {
       FunctionDecl *FD = cast<FunctionDecl>(CurContext);
       if (DeduceFunctionTypeFromReturnExpr(FD, ReturnLoc, RetValExp, AT)) {
@@ -3119,9 +3158,24 @@ Sema::ActOnObjCAtSynchronizedOperand(SourceLocation atLoc, Expr *operand) {
   if (!type->isDependentType() &&
       !type->isObjCObjectPointerType()) {
     const PointerType *pointerType = type->getAs<PointerType>();
-    if (!pointerType || !pointerType->getPointeeType()->isVoidType())
-      return Diag(atLoc, diag::error_objc_synchronized_expects_object)
-               << type << operand->getSourceRange();
+    if (!pointerType || !pointerType->getPointeeType()->isVoidType()) {
+      if (getLangOpts().CPlusPlus) {
+        if (RequireCompleteType(atLoc, type,
+                                diag::err_incomplete_receiver_type))
+          return Diag(atLoc, diag::error_objc_synchronized_expects_object)
+                   << type << operand->getSourceRange();
+
+        ExprResult result = PerformContextuallyConvertToObjCPointer(operand);
+        if (!result.isUsable())
+          return Diag(atLoc, diag::error_objc_synchronized_expects_object)
+                   << type << operand->getSourceRange();
+
+        operand = result.get();
+      } else {
+          return Diag(atLoc, diag::error_objc_synchronized_expects_object)
+                   << type << operand->getSourceRange();
+      }
+    }
   }
 
   // The operand to @synchronized is a full-expression.
@@ -3249,15 +3303,16 @@ StmtResult Sema::ActOnCXXTryBlock(SourceLocation TryLoc, Stmt *TryBlock,
   return CXXTryStmt::Create(Context, TryLoc, TryBlock, Handlers);
 }
 
-StmtResult Sema::ActOnSEHTryBlock(bool IsCXXTry, SourceLocation TryLoc,
-                                  Stmt *TryBlock, Stmt *Handler,
-                                  int HandlerIndex, int HandlerParentIndex) {
+StmtResult
+Sema::ActOnSEHTryBlock(bool IsCXXTry,
+                       SourceLocation TryLoc,
+                       Stmt *TryBlock,
+                       Stmt *Handler) {
   assert(TryBlock && Handler);
 
   getCurFunction()->setHasBranchProtectedScope();
 
-  return SEHTryStmt::Create(Context, IsCXXTry, TryLoc, TryBlock, Handler,
-                            HandlerIndex, HandlerParentIndex);
+  return SEHTryStmt::Create(Context,IsCXXTry,TryLoc,TryBlock,Handler);
 }
 
 StmtResult

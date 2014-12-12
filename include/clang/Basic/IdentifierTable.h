@@ -563,6 +563,7 @@ enum ObjCMethodFamily {
   OMF_retain,
   OMF_retainCount,
   OMF_self,
+  OMF_initialize,
 
   // performSelector families
   OMF_performSelector
@@ -586,6 +587,12 @@ enum ObjCInstanceTypeFamily {
   OIT_Singleton,
   OIT_Init,
   OIT_ReturnsSelf
+};
+
+enum ObjCStringFormatFamily {
+  SFF_None,
+  SFF_NSString,
+  SFF_CFString
 };
 
 /// \brief Smart pointer class that efficiently represents Objective-C method
@@ -633,6 +640,8 @@ class Selector {
   }
 
   static ObjCMethodFamily getMethodFamilyImpl(Selector sel);
+  
+  static ObjCStringFormatFamily getStringFormatFamilyImpl(Selector sel);
 
 public:
   friend class SelectorTable; // only the SelectorTable can create these
@@ -703,7 +712,11 @@ public:
   ObjCMethodFamily getMethodFamily() const {
     return getMethodFamilyImpl(*this);
   }
-
+  
+  ObjCStringFormatFamily getStringFormatFamily() const {
+    return getStringFormatFamilyImpl(*this);
+  }
+  
   static Selector getEmptyMarker() {
     return Selector(uintptr_t(-1));
   }

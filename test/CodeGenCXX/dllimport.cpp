@@ -95,7 +95,7 @@ inline int __declspec(dllimport) inlineStaticLocalsFunc() {
 USE(inlineStaticLocalsFunc);
 
 // The address of a dllimport global cannot be used in constant initialization.
-// M32-DAG: @"\01?arr@?0??initializationFunc@@YAPAHXZ@4QBQAHB" = internal global [1 x i32*] zeroinitializer
+// M32-DAG: @"\01?arr@?1??initializationFunc@@YAPAHXZ@4QBQAHB" = internal global [1 x i32*] zeroinitializer
 // GNU-DAG: @_ZZ18initializationFuncvE3arr = internal global [1 x i32*] zeroinitializer
 int *initializationFunc() {
   static int *const arr[] = {&ExternGlobalDecl};
@@ -276,6 +276,11 @@ USE(redecl3)
 // GNU-DAG: declare           void @_Z7friend2v()
 // MSC-DAG: define            void @"\01?friend3@@YAXXZ"()
 // GNU-DAG: define            void @_Z7friend3v()
+// MSC-DAG: declare           void @"\01?friend4@@YAXXZ"()
+// GNU-DAG: declare           void @_Z7friend4v()
+// MSC-DAG: declare dllimport void @"\01?friend5@@YAXXZ"()
+// GNU-DAG: declare dllimport void @_Z7friend5v()
+
 struct FuncFriend {
   friend __declspec(dllimport) void friend1();
   friend __declspec(dllimport) void friend2();
@@ -284,9 +289,18 @@ struct FuncFriend {
 __declspec(dllimport) void friend1();
                       void friend2(); // dllimport ignored
                       void friend3() {} // dllimport ignored
+
+__declspec(dllimport) void friend4();
+__declspec(dllimport) void friend5();
+struct FuncFriendRedecl {
+  friend void friend4(); // dllimport ignored
+  friend void ::friend5();
+};
 USE(friend1)
 USE(friend2)
 USE(friend3)
+USE(friend4)
+USE(friend5)
 
 // Implicit declarations can be redeclared with dllimport.
 // MSC-DAG: declare dllimport noalias i8* @"\01??2@{{YAPAXI|YAPEAX_K}}@Z"(
@@ -665,11 +679,26 @@ USEMEMFUNC(PartiallySpecializedClassTemplate<void*>, f);
 // M32-DAG: define linkonce_odr x86_thiscallcc void @"\01?f@?$PartiallySpecializedClassTemplate@PAX@@QAEXXZ"
 // G32-DAG: {{declare|define available_externally}} dllimport x86_thiscallcc void @_ZN33PartiallySpecializedClassTemplateIPvE1fEv
 
+// Attributes on explicit specializations are honored.
 template <typename T> struct ExplicitlySpecializedClassTemplate {};
 template <> struct __declspec(dllimport) ExplicitlySpecializedClassTemplate<void*> { void f() {} };
 USEMEMFUNC(ExplicitlySpecializedClassTemplate<void*>, f);
 // M32-DAG: {{declare|define available_externally}} dllimport x86_thiscallcc void @"\01?f@?$ExplicitlySpecializedClassTemplate@PAX@@QAEXXZ"
 // G32-DAG: {{declare|define available_externally}} dllimport x86_thiscallcc void @_ZN34ExplicitlySpecializedClassTemplateIPvE1fEv
+
+// MS inherits DLL attributes to partial specializations.
+template <typename T> struct __declspec(dllimport) PartiallySpecializedImportedClassTemplate {};
+template <typename T> struct PartiallySpecializedImportedClassTemplate<T*> { void f() {} };
+USEMEMFUNC(PartiallySpecializedImportedClassTemplate<void*>, f);
+// M32-DAG: {{declare|define available_externally}} dllimport x86_thiscallcc void @"\01?f@?$PartiallySpecializedImportedClassTemplate@PAX@@QAEXXZ"
+// G32-DAG: define linkonce_odr x86_thiscallcc void @_ZN41PartiallySpecializedImportedClassTemplateIPvE1fEv
+
+// Attributes on the instantiation take precedence over attributes on the template.
+template <typename T> struct __declspec(dllexport) ExplicitlyInstantiatedWithDifferentAttr { void f() {} };
+template struct __declspec(dllimport) ExplicitlyInstantiatedWithDifferentAttr<int>;
+USEMEMFUNC(ExplicitlyInstantiatedWithDifferentAttr<int>, f);
+// M32-DAG: {{declare|define available_externally}} dllimport x86_thiscallcc void @"\01?f@?$ExplicitlyInstantiatedWithDifferentAttr@H@@QAEXXZ"
+
 
 //===----------------------------------------------------------------------===//
 // Classes with template base classes

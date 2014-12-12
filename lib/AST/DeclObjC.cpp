@@ -558,36 +558,39 @@ ObjCMethodDecl *ObjCInterfaceDecl::lookupMethod(Selector Sel,
     LoadExternalDefinition();
 
   while (ClassDecl) {
+    // 1. Look through primary class.
     if ((MethodDecl = ClassDecl->getMethod(Sel, isInstance)))
       return MethodDecl;
-
-    // Didn't find one yet - look through protocols.
-    for (const auto *I : ClassDecl->protocols())
-      if ((MethodDecl = I->lookupMethod(Sel, isInstance)))
-        return MethodDecl;
     
-    // Didn't find one yet - now look through categories.
-    for (const auto *Cat : ClassDecl->visible_categories()) {
+    // 2. Didn't find one yet - now look through categories.
+    for (const auto *Cat : ClassDecl->visible_categories())
       if ((MethodDecl = Cat->getMethod(Sel, isInstance)))
         if (C != Cat || !MethodDecl->isImplicit())
           return MethodDecl;
 
-      if (!shallowCategoryLookup) {
+    // 3. Didn't find one yet - look through primary class's protocols.
+    for (const auto *I : ClassDecl->protocols())
+      if ((MethodDecl = I->lookupMethod(Sel, isInstance)))
+        return MethodDecl;
+    
+    // 4. Didn't find one yet - now look through categories' protocols
+    if (!shallowCategoryLookup)
+      for (const auto *Cat : ClassDecl->visible_categories()) {
         // Didn't find one yet - look through protocols.
         const ObjCList<ObjCProtocolDecl> &Protocols =
-        Cat->getReferencedProtocols();
+          Cat->getReferencedProtocols();
         for (ObjCList<ObjCProtocolDecl>::iterator I = Protocols.begin(),
              E = Protocols.end(); I != E; ++I)
           if ((MethodDecl = (*I)->lookupMethod(Sel, isInstance)))
             if (C != Cat || !MethodDecl->isImplicit())
               return MethodDecl;
       }
-    }
-
+    
+    
     if (!followSuper)
       return nullptr;
 
-    // Get the super class (if any).
+    // 5. Get to the super class (if any).
     ClassDecl = ClassDecl->getSuperClass();
   }
   return nullptr;
@@ -849,6 +852,11 @@ ObjCMethodFamily ObjCMethodDecl::getMethodFamily() const {
       family = OMF_None;
     break;
       
+  case OMF_initialize:
+    if (isInstanceMethod() || !getReturnType()->isVoidType())
+      family = OMF_None;
+    break;
+      
   case OMF_performSelector:
     if (!isInstanceMethod() || !getReturnType()->isObjCIdType())
       family = OMF_None;
@@ -950,6 +958,13 @@ ObjCInterfaceDecl *ObjCMethodDecl::getClassInterface() {
   if (isa<ObjCProtocolDecl>(getDeclContext()))
     return nullptr;
   llvm_unreachable("unknown method context");
+}
+
+SourceRange ObjCMethodDecl::getReturnTypeSourceRange() const {
+  const auto *TSI = getReturnTypeSourceInfo();
+  if (TSI)
+    return TSI->getTypeLoc().getSourceRange();
+  return SourceRange();
 }
 
 static void CollectOverriddenMethodsRecurse(const ObjCContainerDecl *Container,
