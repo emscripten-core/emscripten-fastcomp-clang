@@ -2,25 +2,6 @@
 //    include paths, library paths, emulation, default static
 //
 // RUN: %clang -### -o %t.o %s 2>&1 \
-// RUN:     -target armv7a-unknown-nacl-gnueabihf \
-// RUN:   | FileCheck --check-prefix=CHECK-ARM %s
-// CHECK-ARM: {{.*}}clang{{.*}}" "-cc1"
-// CHECK-ARM: "-fuse-init-array"
-// CHECK-ARM: "-target-cpu" "cortex-a8"
-// CHECK-ARM: "-resource-dir" "{{.*}}/lib/clang/[[VER:[0-9.]+]]"
-// CHECK-ARM: "-internal-isystem" "{{.*}}/../lib/clang/[[VER]]/include"
-// CHECK-ARM: "-internal-isystem" "{{.*}}/../arm-nacl/include"
-// CHECK-ARM: "-internal-isystem" "{{.*}}/../arm-nacl/usr/include"
-// CHECK-ARM: /as"
-// CHECK-ARM: /ld"
-// CHECK-ARM: "--build-id"
-// CHECK-ARM: "-m" "armelf_nacl"
-// CHECK-ARM: "-static"
-// CHECK-ARM: "-L{{.*}}/../arm-nacl/lib"
-// CHECK-ARM: "-L{{.*}}/../arm-nacl/usr/lib"
-// CHECK-ARM: "-L{{.*}}/../lib/clang/[[VER]]/lib/arm-nacl"
-//
-// RUN: %clang -### -o %t.o %s 2>&1 \
 // RUN:     -target i686-unknown-nacl \
 // RUN:   | FileCheck --check-prefix=CHECK-I686 %s
 // CHECK-I686: {{.*}}clang{{.*}}" "-cc1"
@@ -57,7 +38,36 @@
 // CHECK-x86_64: "-L{{.*}}/../x86_64-nacl/lib"
 // CHECK-x86_64: "-L{{.*}}/../x86_64-nacl/usr/lib"
 // CHECK-x86_64: "-L{{.*}}/../lib/clang/[[VER]]/lib/x86_64-nacl"
+//
+// RUN: %clang -### -o %t.o %s 2>&1 \
+// RUN:     -target armv7a-unknown-nacl-gnueabihf \
+// RUN:   | FileCheck --check-prefix=CHECK-ARM %s
+// CHECK-ARM: {{.*}}clang{{.*}}" "-cc1"
+// CHECK-ARM: "-fuse-init-array"
+// CHECK-ARM: "-target-cpu" "cortex-a8"
+// CHECK-ARM: "-target-abi" "aapcs-linux"
+// CHECK-ARM: "-mfloat-abi" "hard"
+// CHECK-ARM: "-resource-dir" "{{.*}}/lib/clang/[[VER:[0-9.]+]]"
+// CHECK-ARM: "-internal-isystem" "{{.*}}/../lib/clang/[[VER]]/include"
+// CHECK-ARM: "-internal-isystem" "{{.*}}/../arm-nacl/include"
+// CHECK-ARM: "-internal-isystem" "{{.*}}/../arm-nacl/usr/include"
+// CHECK-ARM: /as"
+// CHECK-ARM: /ld"
+// CHECK-ARM: "--build-id"
+// CHECK-ARM: "-m" "armelf_nacl"
+// CHECK-ARM: "-static"
+// CHECK-ARM: "-L{{.*}}/../arm-nacl/lib"
+// CHECK-ARM: "-L{{.*}}/../arm-nacl/usr/lib"
+// CHECK-ARM: "-L{{.*}}/../lib/clang/[[VER]]/lib/arm-nacl"
 
+// Check that even when the target arch is just "arm" (as will be the case when
+// it is inferred from the binary name) that we get the right ABI flags
+// RUN: %clang -### -o %t.o %s 2>&1 \
+// RUN:     -target arm-nacl \
+// RUN:   | FileCheck --check-prefix=CHECK-ARM-NOV7 %s
+// CHECK-ARM-NOV7: "-triple" "armv7--nacl"
+// CHECK-ARM-NOV7: "-target-abi" "aapcs-linux"
+// CHECK-ARM-NOV7: "-mfloat-abi" "hard"
 
 // Check C++ include directories
 

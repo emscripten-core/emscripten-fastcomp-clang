@@ -629,6 +629,10 @@ StringRef tools::arm::getARMFloatABI(const Driver &D, const ArgList &Args,
       }
       break;
 
+    case llvm::Triple::NaCl: // @LOCALMOD
+      FloatABI = "hard";
+      break;
+
     default:
       switch(Triple.getEnvironment()) {
       case llvm::Triple::GNUEABIHF:
@@ -747,6 +751,8 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
   } else if (Triple.isOSWindows()) {
     // FIXME: this is invalid for WindowsCE
     ABIName = "aapcs";
+  } else if (Triple.isOSNaCl()) { // @LOCALMOD
+    ABIName = "aapcs-linux";
   } else {
     // Select the default based on the platform.
     switch(Triple.getEnvironment()) {
