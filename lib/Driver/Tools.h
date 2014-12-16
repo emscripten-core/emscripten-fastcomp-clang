@@ -466,6 +466,16 @@ namespace gnutools {
 // @LOCALMOD-BEGIN
 /// nacltools -- Directly call GNU Binutils' assembler and linker.
 namespace nacltools {
+  class LLVM_LIBRARY_VISIBILITY AssembleARM : public gnutools::Assemble  {
+  public:
+    AssembleARM(const ToolChain &TC) : gnutools::Assemble(TC) {}
+
+    void ConstructJob(Compilation &C, const JobAction &JA,
+                      const InputInfo &Output,
+                      const InputInfoList &Inputs,
+                      const llvm::opt::ArgList &TCArgs,
+                      const char *LinkingOutput) const override;
+  };
   class LLVM_LIBRARY_VISIBILITY Link : public Tool  {
   public:
     Link(const ToolChain &TC) : Tool("NaCl::Link", "linker", TC) {}

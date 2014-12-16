@@ -2449,6 +2449,7 @@ NaCl_TC::NaCl_TC(const Driver &D, const llvm::Triple &Triple,
 
   // Use provided linker, not system linker
   Linker = GetProgramPath("ld");
+  NaClArmMacrosPath = GetFilePath("nacl-arm-macros.s");
 }
 
 void NaCl_TC::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
@@ -2530,6 +2531,12 @@ ToolChain::CXXStdlibType NaCl_TC::GetCXXStdlibType(const ArgList &Args) const {
 
 Tool *NaCl_TC::buildLinker() const {
   return new tools::nacltools::Link(*this);
+}
+
+Tool *NaCl_TC::buildAssembler() const {
+  if (getTriple().getArch() == llvm::Triple::arm)
+    return new tools::nacltools::AssembleARM(*this);
+  return new tools::gnutools::Assemble(*this);
 }
 // End NaCl
 // @LOCALMOD-END

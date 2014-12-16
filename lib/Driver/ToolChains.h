@@ -737,9 +737,18 @@ public:
   bool
   IsIntegratedAssemblerDefault() const override { return false; }
 
+  // Get the path to the file containing NaCl's ARM macros. It lives in NaCl_TC
+  // because the AssembleARM tool needs a const char * that it can pass around
+  // and the toolchain outlives all the jobs.
+  const char *GetNaClArmMacrosPath() const { return NaClArmMacrosPath.c_str(); }
   std::string Linker;
+
 protected:
   Tool *buildLinker() const override;
+  Tool *buildAssembler() const override;
+
+private:
+  std::string NaClArmMacrosPath;
 };
 // @LOCALMOD-END
 
