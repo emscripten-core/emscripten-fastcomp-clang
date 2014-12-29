@@ -156,6 +156,7 @@ public:
       return false;
     case GenericItanium:
     case iOS:
+    case iOS64:
     case Microsoft:
       return true;
     }
