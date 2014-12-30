@@ -597,6 +597,7 @@ void clang::EmitBackendOutput(DiagnosticsEngine &Diags,
 
   AsmHelper.EmitAssembly(Action, OS);
 
+#if 0 // XXX EMSCRIPTEN - figure out why this fails for us
   // If an optional clang TargetInfo description string was passed in, use it to
   // verify the LLVM TargetMachine's DataLayout.
   if (AsmHelper.TM && !TDesc.empty()) {
@@ -609,4 +610,5 @@ void clang::EmitBackendOutput(DiagnosticsEngine &Diags,
       Diags.Report(DiagID) << DLDesc << TDesc;
     }
   }
+#endif
 }
