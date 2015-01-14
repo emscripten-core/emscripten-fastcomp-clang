@@ -639,6 +639,10 @@ StringRef tools::arm::getARMFloatABI(const Driver &D, const ArgList &Args,
       }
       break;
 
+    case llvm::Triple::NaCl: // @LOCALMOD
+      FloatABI = "hard";
+      break;
+
     default:
       switch(Triple.getEnvironment()) {
       case llvm::Triple::GNUEABIHF:
@@ -757,6 +761,8 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
   } else if (Triple.isOSWindows()) {
     // FIXME: this is invalid for WindowsCE
     ABIName = "aapcs";
+  } else if (Triple.isOSNaCl()) { // @LOCALMOD
+    ABIName = "aapcs-linux";
   } else {
     // Select the default based on the platform.
     switch(Triple.getEnvironment()) {
@@ -7553,6 +7559,26 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
 }
 
 // @LOCALMOD-BEGIN
+// ARM assembly (inline or standalone) can be written with a set of macros for
+// the various SFI requirements like register masking. The assembly tool inserts
+// the file containing the macros as an input into all the assembly jobs.
+void nacltools::AssembleARM::ConstructJob(Compilation &C, const JobAction &JA,
+                                       const InputInfo &Output,
+                                       const InputInfoList &Inputs,
+                                       const ArgList &Args,
+                                       const char *LinkingOutput) const {
+  const toolchains::NaCl_TC& ToolChain =
+    static_cast<const toolchains::NaCl_TC&>(getToolChain());
+  InputInfo NaClMacros(ToolChain.GetNaClArmMacrosPath(), types::TY_PP_Asm,
+                       "nacl-arm-macros.s");
+  InputInfoList NewInputs;
+  NewInputs.push_back(NaClMacros);
+  NewInputs.append(Inputs.begin(), Inputs.end());
+  gnutools::Assemble::ConstructJob(C, JA, Output, NewInputs, Args,
+                                   LinkingOutput);
+}
+
+
 // This is almost a duplicate of gnutools::link::ConstructJob with changes that
 // we use static by default, do not yet support sanitizers or LTO, and a few
 // others. Eventually we can probably migrate back to gnutools::link
