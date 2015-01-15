@@ -50,6 +50,11 @@ void __LITTLE_ENDIAN__defined() {}
 void __native_client__defined() {}
 #endif
 
+// CHECK: __le32defined
+#ifdef __le32
+void __le32defined() {}
+#endif
+
 // CHECK: __le32__defined
 #ifdef __le32__
 void __le32__defined() {}
@@ -63,6 +68,16 @@ void __pnacl__defined() {}
 // CHECK: unixdefined
 #ifdef unix
 void unixdefined() {}
+#endif
+
+// CHECK: __unixdefined
+#ifdef __unix
+void __unixdefined() {}
+#endif
+
+// CHECK: __unix__defined
+#ifdef __unix__
+void __unix__defined() {}
 #endif
 
 // CHECK: __ELF__defined
