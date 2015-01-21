@@ -5806,48 +5806,66 @@ class PNaClTargetInfo : public TargetInfo {
 public:
   PNaClTargetInfo(const llvm::Triple &Triple) : TargetInfo(Triple) {
     BigEndian = false;
-    NoAsmVariants = true;
-    LongWidth = LongAlign = PointerWidth = PointerAlign = 32;
-    MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
-    SizeType = TargetInfo::UnsignedInt;
-    PtrDiffType = TargetInfo::SignedInt;
-    IntPtrType = TargetInfo::SignedInt;
-    DescriptionString = "e-m:e-p32:32-n8:16:32:64-S128";
-    UserLabelPrefix = "";
-    RegParmMax = 0; // Disallow regparm
+    this->UserLabelPrefix = "";
+    this->LongAlign = 32;
+    this->LongWidth = 32;
+    this->PointerAlign = 32;
+    this->PointerWidth = 32;
+    this->IntMaxType = TargetInfo::SignedLongLong;
+    this->Int64Type = TargetInfo::SignedLongLong;
+    this->DoubleAlign = 64;
+    this->LongDoubleWidth = 64;
+    this->LongDoubleAlign = 64;
+    this->SizeType = TargetInfo::UnsignedInt;
+    this->PtrDiffType = TargetInfo::SignedInt;
+    this->IntPtrType = TargetInfo::SignedInt;
+    this->RegParmMax = 0; // Disallow regparm
   }
 
-  void getTargetDefines(const LangOptions &Opts,
-                        MacroBuilder &Builder) const override {
-    DefineStd(Builder, "unix", Opts);
-    defineCPUMacros(Builder, "le32", /*Tuning=*/false);
-    Builder.defineMacro("__ELF__");
+  void getDefaultFeatures(llvm::StringMap<bool> &Features) const override {
+  }
+  void getArchDefines(const LangOptions &Opts, MacroBuilder &Builder) const {
+    Builder.defineMacro("__le32__");
     Builder.defineMacro("__pnacl__");
   }
-  void getTargetBuiltins(const Builtin::Info *&Records,
-                         unsigned &NumRecords) const override {}
-  BuiltinVaListKind getBuiltinVaListKind() const override {
-    return TargetInfo::PNaClABIBuiltinVaList;
+  void getTargetDefines(const LangOptions &Opts,
+                        MacroBuilder &Builder) const override {
+    getArchDefines(Opts, Builder);
   }
   bool hasFeature(StringRef Feature) const override {
     return Feature == "pnacl";
   }
-  const char *getClobbers() const override { return ""; }
-  void getGCCRegNames(const char *const *&Names,
-                      unsigned &NumNames) const override {
-    Names = nullptr;
-    NumNames = 0;
+  void getTargetBuiltins(const Builtin::Info *&Records,
+                         unsigned &NumRecords) const override {
   }
+  BuiltinVaListKind getBuiltinVaListKind() const override {
+    return TargetInfo::PNaClABIBuiltinVaList;
+  }
+  void getGCCRegNames(const char * const *&Names,
+                      unsigned &NumNames) const override;
   void getGCCRegAliases(const GCCRegAlias *&Aliases,
-                        unsigned &NumAliases) const override {
-    Aliases = nullptr;
-    NumAliases = 0;
-  }
+                        unsigned &NumAliases) const override;
   bool validateAsmConstraint(const char *&Name,
                              TargetInfo::ConstraintInfo &Info) const override {
     return false;
   }
+
+  const char *getClobbers() const override {
+    return "";
+  }
 };
+
+void PNaClTargetInfo::getGCCRegNames(const char * const *&Names,
+                                     unsigned &NumNames) const {
+  Names = nullptr;
+  NumNames = 0;
+}
+
+void PNaClTargetInfo::getGCCRegAliases(const GCCRegAlias *&Aliases,
+                                       unsigned &NumAliases) const {
+  Aliases = nullptr;
+  NumAliases = 0;
+}
 } // end anonymous namespace.
 
 namespace {
