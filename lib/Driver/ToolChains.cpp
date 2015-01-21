@@ -2529,6 +2529,15 @@ ToolChain::CXXStdlibType NaCl_TC::GetCXXStdlibType(const ArgList &Args) const {
   return ToolChain::CST_Libcxx;
 }
 
+std::string NaCl_TC::ComputeEffectiveClangTriple(
+    const ArgList &Args, types::ID InputType) const {
+  llvm::Triple TheTriple(ComputeLLVMTriple(Args, InputType));
+  if (TheTriple.getArch() == llvm::Triple::arm &&
+      TheTriple.getEnvironment() == llvm::Triple::UnknownEnvironment)
+    TheTriple.setEnvironment(llvm::Triple::GNUEABIHF);
+  return TheTriple.getTriple();
+}
+
 Tool *NaCl_TC::buildLinker() const {
   return new tools::nacltools::Link(*this);
 }

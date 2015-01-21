@@ -751,8 +751,6 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
   } else if (Triple.isOSWindows()) {
     // FIXME: this is invalid for WindowsCE
     ABIName = "aapcs";
-  } else if (Triple.isOSNaCl()) { // @LOCALMOD
-    ABIName = "aapcs-linux";
   } else {
     // Select the default based on the platform.
     switch(Triple.getEnvironment()) {

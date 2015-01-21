@@ -65,7 +65,7 @@
 // RUN: %clang -### -o %t.o %s 2>&1 \
 // RUN:     -target arm-nacl \
 // RUN:   | FileCheck --check-prefix=CHECK-ARM-NOV7 %s
-// CHECK-ARM-NOV7: "-triple" "armv7--nacl"
+// CHECK-ARM-NOV7: "-triple" "armv7--nacl-gnueabihf"
 // CHECK-ARM-NOV7: "-target-abi" "aapcs-linux"
 // CHECK-ARM-NOV7: "-mfloat-abi" "hard"
 
