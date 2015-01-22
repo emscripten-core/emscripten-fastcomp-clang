@@ -742,6 +742,9 @@ public:
   // because the AssembleARM tool needs a const char * that it can pass around
   // and the toolchain outlives all the jobs.
   const char *GetNaClArmMacrosPath() const { return NaClArmMacrosPath.c_str(); }
+
+  std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
+                                          types::ID InputType) const override;
   std::string Linker;
 
 protected:
