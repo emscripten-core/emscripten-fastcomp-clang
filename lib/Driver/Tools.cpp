@@ -7665,8 +7665,6 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-static");
   else if (Args.hasArg(options::OPT_shared))
     CmdArgs.push_back("-shared");
-  else
-    CmdArgs.push_back("-dynamic");
 
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());

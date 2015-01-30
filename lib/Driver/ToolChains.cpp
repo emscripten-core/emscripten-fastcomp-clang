@@ -2376,19 +2376,19 @@ void NaCl_TC::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
 
   SmallString<128> P(D.Dir + "/../");
   if (getTriple().getArch() == llvm::Triple::arm) {
-    llvm::sys::path::append(P, "arm-nacl/include");
-    addSystemInclude(DriverArgs, CC1Args, P.str());
+    llvm::sys::path::append(P, "arm-nacl/usr/include");
   } else if (getTriple().getArch() == llvm::Triple::x86) {
-    llvm::sys::path::append(P, "x86_64-nacl/include");
-    addSystemInclude(DriverArgs, CC1Args, P.str());
+    llvm::sys::path::append(P, "x86_64-nacl/usr/include");
   } else if (getTriple().getArch() == llvm::Triple::x86_64) {
-    llvm::sys::path::append(P, "x86_64-nacl/include");
-    addSystemInclude(DriverArgs, CC1Args, P.str());
+    llvm::sys::path::append(P, "x86_64-nacl/usr/include");
   } else {
     return;
   }
+
+  addSystemInclude(DriverArgs, CC1Args, P.str());
   llvm::sys::path::remove_filename(P);
-  llvm::sys::path::append(P, "usr/include");
+  llvm::sys::path::remove_filename(P);
+  llvm::sys::path::append(P, "include");
   addSystemInclude(DriverArgs, CC1Args, P.str());
 }
 
@@ -2398,6 +2398,7 @@ void NaCl_TC::AddCXXStdlibLibArgs(const ArgList &Args,
   GetCXXStdlibType(Args);
   CmdArgs.push_back("-lc++");
 }
+
 void NaCl_TC::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
                                           ArgStringList &CC1Args) const {
   const Driver &D = getDriver();
@@ -2422,7 +2423,6 @@ void NaCl_TC::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
     addSystemInclude(DriverArgs, CC1Args, P.str());
   }
 }
-
 
 ToolChain::CXXStdlibType NaCl_TC::GetCXXStdlibType(const ArgList &Args) const {
   if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
