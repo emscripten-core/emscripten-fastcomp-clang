@@ -2424,7 +2424,7 @@ NaCl_TC::NaCl_TC(const Driver &D, const llvm::Triple &Triple,
   switch(Triple.getArch()) {
     case llvm::Triple::x86: {
       file_paths.push_back(FilePath + "x86_64-nacl/lib32");
-      file_paths.push_back(FilePath + "i686-nacl/usr/lib");
+      file_paths.push_back(FilePath + "x86_64-nacl/usr/lib32");
       prog_paths.push_back(ProgPath + "x86_64-nacl/bin");
       file_paths.push_back(ToolPath + "i686-nacl");
       break;
@@ -2471,7 +2471,7 @@ void NaCl_TC::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   if (getTriple().getArch() == llvm::Triple::arm) {
     llvm::sys::path::append(P, "arm-nacl/usr/include");
   } else if (getTriple().getArch() == llvm::Triple::x86) {
-    llvm::sys::path::append(P, "i686-nacl/usr/include");
+    llvm::sys::path::append(P, "x86_64-nacl/usr/include");
   } else if (getTriple().getArch() == llvm::Triple::x86_64) {
     llvm::sys::path::append(P, "x86_64-nacl/usr/include");
   } else {
