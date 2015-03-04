@@ -7717,10 +7717,12 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("--start-group");
       CmdArgs.push_back("-lc");
       // libc++ and PPAPI programs always require libpthread, so just always
-      // include it in the group.
-      Args.ClaimAllArgs(options::OPT_pthread);
-      Args.ClaimAllArgs(options::OPT_pthreads);
-      CmdArgs.push_back("-lpthread");
+      // include it in the group for C++.
+      if (Args.hasArg(options::OPT_pthread) ||
+          Args.hasArg(options::OPT_pthreads) ||
+          D.CCCIsCXX()) {
+        CmdArgs.push_back("-lpthread");
+      }
 
       CmdArgs.push_back("-lgcc");
       CmdArgs.push_back("--as-needed");
@@ -8502,4 +8504,3 @@ void CrossWindows::Link::ConstructJob(Compilation &C, const JobAction &JA,
 
   C.addCommand(llvm::make_unique<Command>(JA, *this, Exec, CmdArgs));
 }
-
