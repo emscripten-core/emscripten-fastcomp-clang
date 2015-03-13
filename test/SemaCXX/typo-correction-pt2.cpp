@@ -28,7 +28,7 @@ struct A {
 };
 struct B : A {
   using A::CreateFoo;
-  void CreateFoo(int, int);
+  void CreateFoo(int, int);  // expected-note {{'CreateFoo' declared here}}
 };
 void f(B &x) {
   x.Createfoo(0,0);  // expected-error {{no member named 'Createfoo' in 'PR13387::B'; did you mean 'CreateFoo'?}}
@@ -300,3 +300,35 @@ namespace PR19681 {
     (void)static_cast<void(TypoB::*)(int)>(&TypoA::private_memfn);  // expected-error{{no member named 'private_memfn' in 'PR19681::TypoA'; did you mean '::PR19681::TypoB::private_memfn'?}}
   }
 }
+
+namespace testWantFunctionLikeCasts {
+  long test(bool a) {
+    if (a)
+      return struc(5.7);  // expected-error-re {{use of undeclared identifier 'struc'{{$}}}}
+    else
+      return lon(8.0);  // expected-error {{use of undeclared identifier 'lon'; did you mean 'long'?}}
+  }
+}
+
+namespace testCXXDeclarationSpecifierParsing {
+namespace test {
+  struct SomeSettings {};  // expected-note {{'test::SomeSettings' declared here}}
+}
+class Test {};
+int bar() {
+  Test::SomeSettings some_settings; // expected-error {{no type named 'SomeSettings' in 'testCXXDeclarationSpecifierParsing::Test'; did you mean 'test::SomeSettings'?}}
+}
+}
+
+namespace testNonStaticMemberHandling {
+struct Foo {
+  bool usesMetadata;  // expected-note {{'usesMetadata' declared here}}
+};
+int test(Foo f) {
+  if (UsesMetadata)  // expected-error-re {{use of undeclared identifier 'UsesMetadata'{{$}}}}
+    return 5;
+  if (f.UsesMetadata)  // expected-error {{no member named 'UsesMetadata' in 'testNonStaticMemberHandling::Foo'; did you mean 'usesMetadata'?}}
+    return 11;
+  return 0;
+}
+};

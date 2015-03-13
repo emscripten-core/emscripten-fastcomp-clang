@@ -19,9 +19,9 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Version.h"
 #include "clang/Format/Format.h"
-#include "clang/Lex/Lexer.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Signals.h"
@@ -76,7 +76,7 @@ static cl::opt<std::string>
 AssumeFilename("assume-filename",
                cl::desc("When reading from stdin, clang-format assumes this\n"
                         "filename to look for a style config file (with\n"
-                        "-style=file)."),
+                        "-style=file) and to determine the language."),
                cl::cat(ClangFormatCategory));
 
 static cl::opt<bool> Inplace("i",
@@ -225,9 +225,7 @@ static bool format(StringRef FileName) {
 
   FormatStyle FormatStyle = getStyle(
       Style, (FileName == "-") ? AssumeFilename : FileName, FallbackStyle);
-  Lexer Lex(ID, Sources.getBuffer(ID), Sources,
-            getFormattingLangOpts(FormatStyle.Standard));
-  tooling::Replacements Replaces = reformat(FormatStyle, Lex, Sources, Ranges);
+  tooling::Replacements Replaces = reformat(FormatStyle, Sources, ID, Ranges);
   if (OutputXML) {
     llvm::outs()
         << "<?xml version='1.0'?>\n<replacements xml:space='preserve'>\n";

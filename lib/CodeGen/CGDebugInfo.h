@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CLANG_CODEGEN_CGDEBUGINFO_H
-#define CLANG_CODEGEN_CGDEBUGINFO_H
+#ifndef LLVM_CLANG_LIB_CODEGEN_CGDEBUGINFO_H
+#define LLVM_CLANG_LIB_CODEGEN_CGDEBUGINFO_H
 
 #include "CGBuilder.h"
 #include "clang/AST/Expr.h"
@@ -86,6 +86,10 @@ class CGDebugInfo {
   /// ReplaceMap - Cache of forward declared types to RAUW at the end of
   /// compilation.
   std::vector<std::pair<const TagType *, llvm::WeakVH>> ReplaceMap;
+
+  /// \brief Cache of replaceable forward declarartions (functions and
+  /// variables) to RAUW at the end of compilation.
+  std::vector<std::pair<const DeclaratorDecl *, llvm::WeakVH>> FwdDeclReplaceMap;
 
   // LexicalBlockStack - Keep track of our current nested lexical block.
   std::vector<llvm::TrackingVH<llvm::MDNode> > LexicalBlockStack;
@@ -180,20 +184,24 @@ class CGDebugInfo {
 
   llvm::DIType createFieldType(StringRef name, QualType type,
                                uint64_t sizeInBitsOverride, SourceLocation loc,
-                               AccessSpecifier AS, uint64_t offsetInBits,
+                               AccessSpecifier AS,
+                               uint64_t offsetInBits,
                                llvm::DIFile tunit,
-                               llvm::DIScope scope);
+                               llvm::DIScope scope,
+                               const RecordDecl* RD = nullptr);
 
   // Helpers for collecting fields of a record.
   void CollectRecordLambdaFields(const CXXRecordDecl *CXXDecl,
                                  SmallVectorImpl<llvm::Value *> &E,
                                  llvm::DIType RecordTy);
   llvm::DIDerivedType CreateRecordStaticField(const VarDecl *Var,
-                                              llvm::DIType RecordTy);
+                                              llvm::DIType RecordTy,
+                                              const RecordDecl* RD);
   void CollectRecordNormalField(const FieldDecl *Field, uint64_t OffsetInBits,
                                 llvm::DIFile F,
                                 SmallVectorImpl<llvm::Value *> &E,
-                                llvm::DIType RecordTy);
+                                llvm::DIType RecordTy,
+                                const RecordDecl* RD);
   void CollectRecordFields(const RecordDecl *Decl, llvm::DIFile F,
                            SmallVectorImpl<llvm::Value *> &E,
                            llvm::DICompositeType RecordTy);
@@ -255,7 +263,8 @@ public:
   void EmitDeclareOfBlockDeclRefVariable(const VarDecl *variable,
                                          llvm::Value *storage,
                                          CGBuilderTy &Builder,
-                                         const CGBlockInfo &blockInfo);
+                                         const CGBlockInfo &blockInfo,
+                                         llvm::Instruction *InsertPoint = 0);
 
   /// EmitDeclareOfArgVariable - Emit call to llvm.dbg.declare for an argument
   /// variable declaration.
@@ -266,7 +275,7 @@ public:
   /// llvm.dbg.declare for the block-literal argument to a block
   /// invocation function.
   void EmitDeclareOfBlockLiteralArgVariable(const CGBlockInfo &block,
-                                            llvm::Value *Arg,
+                                            llvm::Value *Arg, unsigned ArgNo,
                                             llvm::Value *LocalAddr,
                                             CGBuilderTy &Builder);
 
@@ -278,6 +287,9 @@ public:
 
   /// \brief - Emit C++ using directive.
   void EmitUsingDirective(const UsingDirectiveDecl &UD);
+
+  /// EmitExplicitCastType - Emit the type explicitly casted to.
+  void EmitExplicitCastType(QualType Ty);
 
   /// \brief - Emit C++ using declaration.
   void EmitUsingDecl(const UsingDecl &UD);
@@ -356,9 +368,9 @@ private:
   llvm::DIType CreateMemberType(llvm::DIFile Unit, QualType FType,
                                 StringRef Name, uint64_t *Offset);
 
-  /// \brief Retrieve the DIScope, if any, for the canonical form of this
+  /// \brief Retrieve the DIDescriptor, if any, for the canonical form of this
   /// declaration.
-  llvm::DIScope getDeclarationOrDefinition(const Decl *D);
+  llvm::DIDescriptor getDeclarationOrDefinition(const Decl *D);
 
   /// getFunctionDeclaration - Return debug info descriptor to describe method
   /// declaration for the given method definition.
@@ -368,6 +380,14 @@ private:
   /// declaration for the given out-of-class definition.
   llvm::DIDerivedType
   getOrCreateStaticDataMemberDeclarationOrNull(const VarDecl *D);
+
+  /// \brief Create a DISubprogram describing the forward
+  /// decalration represented in the given FunctionDecl.
+  llvm::DISubprogram getFunctionForwardDeclaration(const FunctionDecl *FD);
+
+  /// \brief Create a DIGlobalVariable describing the forward
+  /// decalration represented in the given VarDecl.
+  llvm::DIGlobalVariable getGlobalVariableForwardDeclaration(const VarDecl *VD);
 
   /// Return a global variable that represents one of the collection of
   /// global variables created for an anonmyous union.
@@ -403,6 +423,21 @@ private:
   /// invalid then use current location.
   /// \param Force  Assume DebugColumnInfo option is true.
   unsigned getColumnNumber(SourceLocation Loc, bool Force=false);
+
+  /// \brief Collect various properties of a FunctionDecl.
+  /// \param GD  A GlobalDecl whose getDecl() must return a FunctionDecl.
+  void collectFunctionDeclProps(GlobalDecl GD,
+                                llvm::DIFile Unit,
+                                StringRef &Name, StringRef &LinkageName,
+                                llvm::DIDescriptor &FDContext,
+                                llvm::DIArray &TParamsArray,
+                                unsigned &Flags);
+
+  /// \brief Collect various properties of a VarDecl.
+  void collectVarDeclProps(const VarDecl *VD, llvm::DIFile &Unit,
+                           unsigned &LineNo, QualType &T,
+                           StringRef &Name, StringRef &LinkageName,
+                           llvm::DIDescriptor &VDContext);
 
   /// internString - Allocate a copy of \p A using the DebugInfoNames allocator
   /// and return a reference to it. If multiple arguments are given the strings

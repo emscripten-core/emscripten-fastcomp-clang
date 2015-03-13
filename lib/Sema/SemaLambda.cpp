@@ -873,7 +873,7 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
     // We don't do this before C++1y, because we don't support deduced return
     // types there.
     QualType DefaultTypeForNoTrailingReturn =
-        getLangOpts().CPlusPlus1y ? Context.getAutoDeductType()
+        getLangOpts().CPlusPlus14 ? Context.getAutoDeductType()
                                   : Context.DependentTy;
     QualType MethodTy =
         Context.getFunctionType(DefaultTypeForNoTrailingReturn, None, EPI);
@@ -999,7 +999,7 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
 
     VarDecl *Var = nullptr;
     if (C->Init.isUsable()) {
-      Diag(C->Loc, getLangOpts().CPlusPlus1y
+      Diag(C->Loc, getLangOpts().CPlusPlus14
                        ? diag::warn_cxx11_compat_init_capture
                        : diag::ext_init_capture);
 
@@ -1049,8 +1049,8 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
       if (R.empty()) {
         // FIXME: Disable corrections that would add qualification?
         CXXScopeSpec ScopeSpec;
-        DeclFilterCCC<VarDecl> Validator;
-        if (DiagnoseEmptyLookup(CurScope, ScopeSpec, R, Validator))
+        if (DiagnoseEmptyLookup(CurScope, ScopeSpec, R,
+                                llvm::make_unique<DeclFilterCCC<VarDecl>>()))
           continue;
       }
 
@@ -1062,7 +1062,7 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
     // C++11 [expr.prim.lambda]p8:
     //   An identifier or this shall not appear more than once in a
     //   lambda-capture.
-    if (!CaptureNames.insert(C->Id)) {
+    if (!CaptureNames.insert(C->Id).second) {
       if (Var && LSI->isCaptured(Var)) {
         Diag(C->Loc, diag::err_capture_more_than_once)
             << C->Id << SourceRange(LSI->getCapture(Var).getLocation())
@@ -1414,6 +1414,12 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
                                                          /*isImplicit=*/true));
         continue;
       }
+      if (From.isVLATypeCapture()) {
+        Captures.push_back(
+            LambdaCapture(From.getLocation(), IsImplicit, LCK_VLAType));
+        CaptureInits.push_back(nullptr);
+        continue;
+      }
 
       VarDecl *Var = From.getVariable();
       LambdaCaptureKind Kind = From.isCopyCapture()? LCK_ByCopy : LCK_ByRef;
@@ -1451,7 +1457,7 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
     // different machinery.
     // FIXME: Refactor and Merge the return type deduction machinery.
     // FIXME: Assumes current resolution to core issue 975.
-    if (LSI->HasImplicitReturnType && !getLangOpts().CPlusPlus1y) {
+    if (LSI->HasImplicitReturnType && !getLangOpts().CPlusPlus14) {
       deduceClosureReturnType(*LSI);
 
       //   - if there are no return statements in the

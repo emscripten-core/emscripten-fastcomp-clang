@@ -545,6 +545,16 @@ static void computeBlockInfo(CodeGenModule &CGM, CodeGenFunction *CGF,
   // multiple of alignment.
   for (SmallVectorImpl<BlockLayoutChunk>::iterator
          li = layout.begin(), le = layout.end(); li != le; ++li) {
+    if (endAlign < li->Alignment) {
+      // size may not be multiple of alignment. This can only happen with
+      // an over-aligned variable. We will be adding a padding field to
+      // make the size be multiple of alignment.
+      CharUnits padding = li->Alignment - endAlign;
+      elementTypes.push_back(llvm::ArrayType::get(CGM.Int8Ty,
+                                                  padding.getQuantity()));
+      blockSize += padding;
+      endAlign = getLowBit(blockSize);
+    }
     assert(endAlign >= li->Alignment);
     li->setIndex(info, elementTypes.size());
     elementTypes.push_back(li->Type);
@@ -905,7 +915,7 @@ llvm::Type *CodeGenModule::getBlockDescriptorType() {
   // };
   BlockDescriptorType =
     llvm::StructType::create("struct.__block_descriptor",
-                             UnsignedLongTy, UnsignedLongTy, NULL);
+                             UnsignedLongTy, UnsignedLongTy, nullptr);
 
   // Now form a pointer to that.
   BlockDescriptorType = llvm::PointerType::getUnqual(BlockDescriptorType);
@@ -928,7 +938,7 @@ llvm::Type *CodeGenModule::getGenericBlockLiteralType() {
   GenericBlockLiteralType =
     llvm::StructType::create("struct.__block_literal_generic",
                              VoidPtrTy, IntTy, IntTy, VoidPtrTy,
-                             BlockDescPtrTy, NULL);
+                             BlockDescPtrTy, nullptr);
 
   return GenericBlockLiteralType;
 }
@@ -1233,7 +1243,9 @@ CodeGenFunction::GenerateBlockFunction(GlobalDecl GD,
         }
 
         DI->EmitDeclareOfBlockDeclRefVariable(variable, BlockPointerDbgLoc,
-                                              Builder, blockInfo);
+                                              Builder, blockInfo,
+                                              entry_ptr == entry->end()
+                                              ? nullptr : entry_ptr);
       }
     }
     // Recover location if it was changed in the above loop.

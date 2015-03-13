@@ -95,11 +95,13 @@ namespace TemplateArgumentConversion {
 }
 
 namespace CaseStatements {
+  int x;
   void f(int n) {
     switch (n) {
     case MemberZero().zero: // expected-error {{did you mean to call it with no arguments?}} expected-note {{previous}}
     case id(0): // expected-error {{duplicate case value '0'}}
       return;
+    case __builtin_constant_p(true) ? (__SIZE_TYPE__)&x : 0:; // expected-error {{constant}}
     }
   }
 }
@@ -602,7 +604,7 @@ struct A { constexpr A(int a, int b) : k(a + b) {} int k; };
 constexpr int fn(const A &a) { return a.k; }
 static_assert(fn(A(4,5)) == 9, "");
 
-struct B { int n; int m; } constexpr b = { 0, b.n }; // expected-warning {{uninitialized}}
+struct B { int n; int m; } constexpr b = { 0, b.n };
 struct C {
   constexpr C(C *this_) : m(42), n(this_->m) {} // ok
   int m, n;
@@ -1177,7 +1179,7 @@ namespace ExternConstexpr {
   void f() {
     extern constexpr int i; // expected-error {{constexpr variable declaration must be a definition}}
     constexpr int j = 0;
-    constexpr int k; // expected-error {{default initialization of an object of const type}}
+    constexpr int k; // expected-error {{default initialization of an object of const type}} expected-note{{add an explicit initializer to initialize 'k'}}
   }
 }
 
@@ -1326,6 +1328,49 @@ namespace MutableMembers {
   struct C { B b; };
   constexpr C c[3] = {};
   constexpr int k = c[1].b.a.n; // expected-error {{constant expression}} expected-note {{mutable}}
+
+  struct D { int x; mutable int y; }; // expected-note {{here}}
+  constexpr D d1 = { 1, 2 };
+  int l = ++d1.y;
+  constexpr D d2 = d1; // expected-error {{constant}} expected-note {{mutable}} expected-note {{in call}}
+
+  struct E {
+    union {
+      int a;
+      mutable int b; // expected-note {{here}}
+    };
+  };
+  constexpr E e1 = {{1}};
+  constexpr E e2 = e1; // expected-error {{constant}} expected-note {{mutable}} expected-note {{in call}}
+
+  struct F {
+    union U { };
+    mutable U u;
+    struct X { };
+    mutable X x;
+    struct Y : X { X x; U u; };
+    mutable Y y;
+    int n;
+  };
+  // This is OK; we don't actually read any mutable state here.
+  constexpr F f1 = {};
+  constexpr F f2 = f1;
+
+  struct G {
+    struct X {};
+    union U { X a; };
+    mutable U u; // expected-note {{here}}
+  };
+  constexpr G g1 = {};
+  constexpr G g2 = g1; // expected-error {{constant}} expected-note {{mutable}} expected-note {{in call}}
+  constexpr G::U gu1 = {};
+  constexpr G::U gu2 = gu1;
+
+  union H {
+    mutable G::X gx; // expected-note {{here}}
+  };
+  constexpr H h1 = {};
+  constexpr H h2 = h1; // expected-error {{constant}} expected-note {{mutable}} expected-note {{in call}}
 }
 
 namespace Fold {
@@ -1443,7 +1488,7 @@ namespace InvalidClasses {
 
 namespace NamespaceAlias {
   constexpr int f() {
-    namespace NS = NamespaceAlias; // expected-warning {{use of this statement in a constexpr function is a C++1y extension}}
+    namespace NS = NamespaceAlias; // expected-warning {{use of this statement in a constexpr function is a C++14 extension}}
     return &NS::f != nullptr;
   }
 }
@@ -1700,7 +1745,7 @@ namespace VirtualFromBase {
   template <typename T> struct X : T {
     constexpr X() {}
     double d = 0.0;
-    constexpr int f() { return sizeof(T); } // expected-warning {{will not be implicitly 'const' in C++1y}}
+    constexpr int f() { return sizeof(T); } // expected-warning {{will not be implicitly 'const' in C++14}}
   };
 
   // Virtual f(), not OK.
@@ -1715,17 +1760,17 @@ namespace VirtualFromBase {
 }
 
 namespace ConstexprConstructorRecovery {
-  class X { 
-  public: 
-      enum E : short { 
-          headers = 0x1, 
-          middlefile = 0x2, 
-          choices = 0x4 
-      }; 
-      constexpr X() noexcept {}; 
-  protected: 
+  class X {
+  public:
+      enum E : short {
+          headers = 0x1,
+          middlefile = 0x2,
+          choices = 0x4
+      };
+      constexpr X() noexcept {};
+  protected:
       E val{0}; // expected-error {{cannot initialize a member subobject of type 'ConstexprConstructorRecovery::X::E' with an rvalue of type 'int'}}
-  }; 
+  };
   constexpr X x{};
 }
 
@@ -1799,8 +1844,9 @@ namespace ZeroSizeTypes {
 namespace BadDefaultInit {
   template<int N> struct X { static const int n = N; };
 
-  struct A { // expected-note {{subexpression}}
-    int k = X<A().k>::n; // expected-error {{defaulted default constructor of 'A' cannot be used}} expected-error {{not a constant expression}} expected-note {{in call to 'A()'}}
+  struct A {
+    int k = // expected-error {{cannot use defaulted default constructor of 'A' within the class outside of member functions because 'k' has an initializer}}
+        X<A().k>::n; // expected-error {{not a constant expression}} expected-note {{implicit default constructor for 'BadDefaultInit::A' first required here}}
   };
 
   // FIXME: The "constexpr constructor must initialize all members" diagnostic
@@ -1891,4 +1937,21 @@ namespace PR19010 {
     Empty2 array[2];
   };
   void test() { constexpr Test t; }
+}
+
+void PR21327(int a, int b) {
+  static_assert(&a + 1 != &b, ""); // expected-error {{constant expression}}
+}
+
+namespace EmptyClass {
+  struct E1 {} e1;
+  union E2 {} e2; // expected-note {{here}}
+  struct E3 : E1 {} e3;
+
+  // The defaulted copy constructor for an empty class does not read any
+  // members. The defaulted copy constructor for an empty union reads the
+  // object representation.
+  constexpr E1 e1b(e1);
+  constexpr E2 e2b(e2); // expected-error {{constant expression}} expected-note{{read of non-const}} expected-note {{in call}}
+  constexpr E3 e3b(e3);
 }

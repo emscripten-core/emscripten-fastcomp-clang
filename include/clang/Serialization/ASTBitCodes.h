@@ -14,8 +14,8 @@
 // respective lists.
 //
 //===----------------------------------------------------------------------===//
-#ifndef LLVM_CLANG_FRONTEND_PCHBITCODES_H
-#define LLVM_CLANG_FRONTEND_PCHBITCODES_H
+#ifndef LLVM_CLANG_SERIALIZATION_ASTBITCODES_H
+#define LLVM_CLANG_SERIALIZATION_ASTBITCODES_H
 
 #include "clang/AST/Type.h"
 #include "llvm/ADT/DenseMap.h"
@@ -288,7 +288,10 @@ namespace clang {
 
       /// \brief Record code for the module map file that was used to build this
       /// AST file.
-      MODULE_MAP_FILE = 14
+      MODULE_MAP_FILE = 14,
+
+      /// \brief Record code for the signature that identifiers this AST file.
+      SIGNATURE = 15
     };
 
     /// \brief Record types that occur within the input-files block
@@ -545,7 +548,10 @@ namespace clang {
       LATE_PARSED_TEMPLATE = 50,
 
       /// \brief Record code for \#pragma optimize options.
-      OPTIMIZE_PRAGMA_OPTIONS = 51
+      OPTIMIZE_PRAGMA_OPTIONS = 51,
+
+      /// \brief Record code for potentially unused local typedef names.
+      UNUSED_LOCAL_TYPEDEF_NAME_CANDIDATES = 52,
     };
 
     /// \brief Record types used within a source manager block.
@@ -635,7 +641,13 @@ namespace clang {
       /// \brief Specifies a conflict with another module.
       SUBMODULE_CONFLICT = 12,
       /// \brief Specifies a header that is private to this submodule.
-      SUBMODULE_PRIVATE_HEADER = 13
+      SUBMODULE_PRIVATE_HEADER = 13,
+      /// \brief Specifies a header that is part of the module but must be
+      /// textually included.
+      SUBMODULE_TEXTUAL_HEADER = 14,
+      /// \brief Specifies a header that is private to this submodule but
+      /// must be textually included.
+      SUBMODULE_PRIVATE_TEXTUAL_HEADER = 15,
     };
 
     /// \brief Record types used within a comments block.
@@ -758,9 +770,6 @@ namespace clang {
     /// Type IDs for non-predefined types will start at
     /// NUM_PREDEF_TYPE_IDs.
     const unsigned NUM_PREDEF_TYPE_IDS = 100;
-
-    /// \brief The number of allowed abbreviations in bits
-    const unsigned NUM_ALLOWED_ABBREVS_SIZE = 4;
 
     /// \brief Record codes for each kind of type.
     ///
@@ -1323,7 +1332,8 @@ namespace clang {
       EXPR_SUBST_NON_TYPE_TEMPLATE_PARM_PACK,// SubstNonTypeTemplateParmPackExpr
       EXPR_FUNCTION_PARM_PACK,    // FunctionParmPackExpr
       EXPR_MATERIALIZE_TEMPORARY, // MaterializeTemporaryExpr
-      
+      EXPR_CXX_FOLD,              // CXXFoldExpr
+
       // CUDA
       EXPR_CUDA_KERNEL_CALL,       // CUDAKernelCallExpr      
 
@@ -1339,22 +1349,28 @@ namespace clang {
       STMT_SEH_FINALLY,           // SEHFinallyStmt
       STMT_SEH_TRY,               // SEHTryStmt
 
-      // OpenMP drectives
+      // OpenMP directives
       STMT_OMP_PARALLEL_DIRECTIVE,
       STMT_OMP_SIMD_DIRECTIVE,
       STMT_OMP_FOR_DIRECTIVE,
+      STMT_OMP_FOR_SIMD_DIRECTIVE,
       STMT_OMP_SECTIONS_DIRECTIVE,
       STMT_OMP_SECTION_DIRECTIVE,
       STMT_OMP_SINGLE_DIRECTIVE,
       STMT_OMP_MASTER_DIRECTIVE,
       STMT_OMP_CRITICAL_DIRECTIVE,
       STMT_OMP_PARALLEL_FOR_DIRECTIVE,
+      STMT_OMP_PARALLEL_FOR_SIMD_DIRECTIVE,
       STMT_OMP_PARALLEL_SECTIONS_DIRECTIVE,
       STMT_OMP_TASK_DIRECTIVE,
       STMT_OMP_TASKYIELD_DIRECTIVE,
       STMT_OMP_BARRIER_DIRECTIVE,
       STMT_OMP_TASKWAIT_DIRECTIVE,
       STMT_OMP_FLUSH_DIRECTIVE,
+      STMT_OMP_ORDERED_DIRECTIVE,
+      STMT_OMP_ATOMIC_DIRECTIVE,
+      STMT_OMP_TARGET_DIRECTIVE,
+      STMT_OMP_TEAMS_DIRECTIVE,
 
       // ARC
       EXPR_OBJC_BRIDGED_CAST,     // ObjCBridgedCastExpr

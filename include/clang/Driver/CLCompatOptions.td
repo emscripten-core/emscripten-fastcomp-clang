@@ -132,6 +132,12 @@ def _SLASH_vd : CLJoined<"vd">, HelpText<"Control vtordisp placement">,
 def _SLASH_Z7 : CLFlag<"Z7">, Alias<gline_tables_only>;
 def _SLASH_Zi : CLFlag<"Zi">, HelpText<"Enable debug information">,
   Alias<gline_tables_only>;
+def _SLASH_Zp : CLJoined<"Zp">,
+  HelpText<"Specify the default maximum struct packing alignment">,
+  Alias<fpack_struct_EQ>;
+def _SLASH_Zp_flag : CLFlag<"Zp">,
+  HelpText<"Set the default maximum struct packing alignment to 1">,
+  Alias<fpack_struct_EQ>, AliasArgs<["1"]>;
 def _SLASH_Zs : CLFlag<"Zs">, HelpText<"Syntax-check only">,
   Alias<fsyntax_only>;
 
@@ -176,6 +182,9 @@ def _SLASH_MT : Option<["/", "-"], "MT", KIND_FLAG>, Group<_SLASH_M_Group>,
   Flags<[CLOption, DriverOption]>, HelpText<"Use static run-time">;
 def _SLASH_MTd : Option<["/", "-"], "MTd", KIND_FLAG>, Group<_SLASH_M_Group>,
   Flags<[CLOption, DriverOption]>, HelpText<"Use static debug run-time">;
+def _SLASH_o : CLJoinedOrSeparate<"o">,
+  HelpText<"Set output file or directory (ends in / or \\)">,
+  MetaVarName<"<file or directory>">;
 def _SLASH_P : CLFlag<"P">, HelpText<"Preprocess to file">;
 def _SLASH_Tc : CLCompileJoinedOrSeparate<"Tc">,
   HelpText<"Specify a C source file">, MetaVarName<"<filename>">;
@@ -188,6 +197,7 @@ def _SLASH_TP : CLCompileFlag<"TP">, HelpText<"Treat all source files as C++">;
 // Ignored:
 
 def _SLASH_analyze_ : CLIgnoredFlag<"analyze-">;
+def _SLASH_d2Zi_PLUS : CLIgnoredFlag<"d2Zi+">;
 def _SLASH_errorReport : CLIgnoredJoined<"errorReport">;
 def _SLASH_FS : CLIgnoredFlag<"FS">, HelpText<"Force synchronous PDB writes">;
 def _SLASH_GF : CLIgnoredFlag<"GF">;
@@ -205,6 +215,8 @@ def _SLASH_Zc_inline : CLIgnoredFlag<"Zc:inline">;
 def _SLASH_Zc_rvalueCast : CLIgnoredFlag<"Zc:rvalueCast">;
 def _SLASH_Zc_wchar_t : CLIgnoredFlag<"Zc:wchar_t">;
 def _SLASH_Zm : CLIgnoredJoined<"Zm">;
+def _SLASH_Zo : CLIgnoredFlag<"Zo">;
+def _SLASH_Zo_ : CLIgnoredFlag<"Zo-">;
 
 
 // Unsupported:
@@ -212,7 +224,6 @@ def _SLASH_Zm : CLIgnoredJoined<"Zm">;
 def _SLASH_AI : CLJoined<"AI">;
 def _SLASH_bigobj : CLFlag<"bigobj">;
 def _SLASH_clr : CLJoined<"clr">;
-def _SLASH_d2Zi_PLUS : CLFlag<"d2Zi+">;
 def _SLASH_doc : CLJoined<"doc">;
 def _SLASH_FA_joined : CLJoined<"FA">;
 def _SLASH_favor : CLJoined<"favor">;
@@ -250,7 +261,6 @@ def _SLASH_hotpatch : CLFlag<"hotpatch">;
 def _SLASH_kernel : CLFlag<"kernel">;
 def _SLASH_LN : CLFlag<"LN">;
 def _SLASH_MP : CLJoined<"MP">;
-def _SLASH_o : CLJoinedOrSeparate<"o">;
 def _SLASH_openmp : CLFlag<"openmp">;
 def _SLASH_Qfast_transcendentals : CLFlag<"Qfast_transcendentals">;
 def _SLASH_QIfist : CLFlag<"QIfist">;
@@ -274,5 +284,4 @@ def _SLASH_Ze : CLFlag<"Ze">;
 def _SLASH_Zg : CLFlag<"Zg">;
 def _SLASH_ZI : CLFlag<"ZI">;
 def _SLASH_Zl : CLFlag<"Zl">;
-def _SLASH_Zp : CLJoined<"Zp">;
 def _SLASH_ZW : CLJoined<"ZW">;

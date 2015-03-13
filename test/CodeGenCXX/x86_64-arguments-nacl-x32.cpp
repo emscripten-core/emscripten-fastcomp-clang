@@ -1,7 +1,5 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-nacl -emit-llvm -o - %s | FileCheck %s
-// TODO(jvoung): Enable this after 3.5 or 3.6 merge. Clang x32 doesn't
-// consider x32 has having 32-bit pointers in LLVM 3.4.
-// XUN: %clang_cc1 -triple=x86_64-unknown-linux-gnux32 -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_cc1 -triple=x86_64-unknown-linux-gnux32 -emit-llvm -o - %s | FileCheck %s
 
 struct test_struct {};
 typedef int test_struct::* test_struct_mdp;
