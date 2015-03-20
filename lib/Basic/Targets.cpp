@@ -252,6 +252,48 @@ public:
   }
 };
 
+// @LOCALMOD-START Emscripten
+// Emscripten target
+template <typename Target>
+class EmscriptenTargetInfo : public OSTargetInfo<Target> {
+protected:
+  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                    MacroBuilder &Builder) const override {
+    // A macro for the platform.
+    Builder.defineMacro("__EMSCRIPTEN__");
+    // Earlier versions of Emscripten defined this, so we continue to define it
+    // for compatibility, for now. Users should ideally prefer __EMSCRIPTEN__.
+    Builder.defineMacro("EMSCRIPTEN");
+    // A common platform macro.
+    if (Opts.POSIXThreads)
+      Builder.defineMacro("_REENTRANT");
+    // Follow g++ convention and predefine _GNU_SOURCE for C++.
+    if (Opts.CPlusPlus)
+      Builder.defineMacro("_GNU_SOURCE");
+
+    // Emscripten's software environment and the asm.js runtime aren't really
+    // Unix per se, but they're perhaps more Unix-like than what software
+    // expects when "unix" is *not* defined.
+    DefineStd(Builder, "unix", Opts);
+  }
+
+public:
+  explicit EmscriptenTargetInfo(const llvm::Triple &Triple)
+      : OSTargetInfo<Target>(Triple) {
+    // Emcripten currently does prepend a prefix to user labels, but this is
+    // handled outside of clang. TODO: Handling this within clang may be
+    // beneficial.
+    this->UserLabelPrefix = "";
+    this->MaxAtomicPromoteWidth = this->MaxAtomicInlineWidth = 32;
+
+    // Emscripten uses the Itanium ABI mostly, but it uses ARM-style pointers
+    // to member functions so that it can avoid having to align function
+    // addresses.
+    this->TheCXXABI.set(TargetCXXABI::Emscripten);
+  }
+};
+// @LOCALMOD-END Emscripten
+
 // FreeBSD Target
 template<typename Target>
 class FreeBSDTargetInfo : public OSTargetInfo<Target> {
@@ -5988,6 +6030,72 @@ public:
 };
 } // end anonymous namespace.
 
+// @LOCALMOD-START Emscripten
+namespace {
+class AsmJSTargetInfo : public TargetInfo {
+public:
+  explicit AsmJSTargetInfo(const llvm::Triple &T) : TargetInfo(T) {
+    BigEndian = false;
+    NoAsmVariants = true;
+    LongAlign = LongWidth = 32;
+    PointerAlign = PointerWidth = 32;
+    IntMaxType = Int64Type = TargetInfo::SignedLongLong;
+    DoubleAlign = 64;
+    LongDoubleWidth = LongDoubleAlign = 64;
+    SizeType = TargetInfo::UnsignedInt;
+    PtrDiffType = TargetInfo::SignedInt;
+    IntPtrType = TargetInfo::SignedInt;
+    RegParmMax = 0; // Disallow regparm
+
+    // Set the native integer widths set to just i32, since that's currently the
+    // only integer type we can do arithmetic on without masking or splitting.
+    //
+    // Set the required alignment for 128-bit vectors to just 4 bytes, based on
+    // the direction suggested here:
+    //   https://bugzilla.mozilla.org/show_bug.cgi?id=904913#c21
+    // We can still set the preferred alignment to 16 bytes though.
+    //
+    // Set the natural stack alignment to 16 bytes to accomodate 128-bit aligned
+    // vectors.
+    DescriptionString = "e-p:32:32-i64:64-v128:32:128-n32-S128";
+  }
+
+  void getDefaultFeatures(llvm::StringMap<bool> &Features) const override {}
+  void getTargetDefines(const LangOptions &Opts,
+                        MacroBuilder &Builder) const override {
+    defineCPUMacros(Builder, "asmjs", /*Tuning=*/false);
+  }
+  void getTargetBuiltins(const Builtin::Info *&Records,
+                         unsigned &NumRecords) const override {}
+  BuiltinVaListKind getBuiltinVaListKind() const override {
+    // Reuse PNaCl's va_list lowering.
+    return TargetInfo::PNaClABIBuiltinVaList;
+  }
+  void getGCCRegNames(const char *const *&Names,
+                      unsigned &NumNames) const override {
+    Names = nullptr;
+    NumNames = 0;
+  }
+  void getGCCRegAliases(const GCCRegAlias *&Aliases,
+                        unsigned &NumAliases) const override {
+    Aliases = nullptr;
+    NumAliases = 0;
+  }
+  bool validateAsmConstraint(const char *&Name,
+                             TargetInfo::ConstraintInfo &Info) const override {
+    return false;
+  }
+  const char *getClobbers() const override { return ""; }
+  bool isCLZForZeroUndef() const override {
+    // Today we do clz in software, so we just do the right thing. With ES6,
+    // we'll get Math.clz32, which is to be defined to do the right thing:
+    // http://esdiscuss.org/topic/rename-number-prototype-clz-to-math-clz#content-36
+    return false;
+  }
+};
+} // end anonymous namespace.
+// @LOCALMOD-END Emscripten
+
 namespace {
 class PNaClTargetInfo : public TargetInfo {
 public:
@@ -6427,6 +6535,16 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple) {
     default:
       return new Mips64ELTargetInfo(Triple);
     }
+
+  // @LOCALMOD-START Emscripten
+  case llvm::Triple::asmjs:
+    switch (os) {
+      case llvm::Triple::Emscripten:
+        return new EmscriptenTargetInfo<AsmJSTargetInfo>(Triple);
+      default:
+        return nullptr;
+    }
+  // @LOCALMOD-END Emscripten
 
   case llvm::Triple::le32:
     switch (os) {

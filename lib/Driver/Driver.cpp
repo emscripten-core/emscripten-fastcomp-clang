@@ -2014,6 +2014,11 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
       else
         TC = new toolchains::Linux(*this, Target, Args);
       break;
+    // @LOCALMOD-START Emscripten
+    case llvm::Triple::Emscripten:
+      TC = new toolchains::EmscriptenToolChain(*this, Target, Args);
+      break;
+    // @LOCALMOD-END Emscripten
     // @LOCALMOD-START
     case llvm::Triple::NaCl:
       TC = new toolchains::NaCl_TC(*this, Target, Args);
