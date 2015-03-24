@@ -7,8 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CLANG_CODEGEN_ABIINFO_H
-#define CLANG_CODEGEN_ABIINFO_H
+#ifndef LLVM_CLANG_LIB_CODEGEN_ABIINFO_H
+#define LLVM_CLANG_LIB_CODEGEN_ABIINFO_H
 
 #include "clang/AST/Type.h"
 #include "llvm/IR/CallingConv.h"
@@ -73,6 +73,15 @@ namespace clang {
     // abstract this out.
     virtual llvm::Value *EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
                                    CodeGen::CodeGenFunction &CGF) const = 0;
+
+    virtual bool isHomogeneousAggregateBaseType(QualType Ty) const;
+
+    virtual bool isHomogeneousAggregateSmallEnough(const Type *Base,
+                                                   uint64_t Members) const;
+
+    bool isHomogeneousAggregate(QualType Ty, const Type *&Base,
+                                uint64_t &Members) const;
+
   };
 }  // end namespace clang
 

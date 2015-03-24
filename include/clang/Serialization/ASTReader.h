@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_FRONTEND_AST_READER_H
-#define LLVM_CLANG_FRONTEND_AST_READER_H
+#ifndef LLVM_CLANG_SERIALIZATION_ASTREADER_H
+#define LLVM_CLANG_SERIALIZATION_ASTREADER_H
 
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclarationName.h"
@@ -115,7 +115,8 @@ public:
   ///
   /// \returns true to indicate the options are invalid or false otherwise.
   virtual bool ReadLanguageOptions(const LangOptions &LangOpts,
-                                   bool Complain) {
+                                   bool Complain,
+                                   bool AllowCompatibleDifferences) {
     return false;
   }
 
@@ -193,6 +194,13 @@ public:
                               bool isOverridden) {
     return true;
   }
+
+  /// \brief Returns true if this \c ASTReaderListener wants to receive the
+  /// imports of the AST file via \c visitImport, false otherwise.
+  virtual bool needsImportVisitation() const { return false; }
+  /// \brief If needsImportVisitation returns \c true, this is called for each
+  /// AST file imported by this AST file.
+  virtual void visitImport(StringRef Filename) {}
 };
 
 /// \brief Simple wrapper class for chaining listeners.
@@ -202,13 +210,18 @@ class ChainedASTReaderListener : public ASTReaderListener {
 
 public:
   /// Takes ownership of \p First and \p Second.
-  ChainedASTReaderListener(ASTReaderListener *First, ASTReaderListener *Second)
-      : First(First), Second(Second) { }
+  ChainedASTReaderListener(std::unique_ptr<ASTReaderListener> First,
+                           std::unique_ptr<ASTReaderListener> Second)
+      : First(std::move(First)), Second(std::move(Second)) {}
+
+  std::unique_ptr<ASTReaderListener> takeFirst() { return std::move(First); }
+  std::unique_ptr<ASTReaderListener> takeSecond() { return std::move(Second); }
 
   bool ReadFullVersionInformation(StringRef FullVersion) override;
   void ReadModuleName(StringRef ModuleName) override;
   void ReadModuleMapFile(StringRef ModuleMapPath) override;
-  bool ReadLanguageOptions(const LangOptions &LangOpts, bool Complain) override;
+  bool ReadLanguageOptions(const LangOptions &LangOpts, bool Complain,
+                           bool AllowCompatibleDifferences) override;
   bool ReadTargetOptions(const TargetOptions &TargetOpts,
                          bool Complain) override;
   bool ReadDiagnosticOptions(IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts,
@@ -240,8 +253,8 @@ public:
   PCHValidator(Preprocessor &PP, ASTReader &Reader)
     : PP(PP), Reader(Reader) {}
 
-  bool ReadLanguageOptions(const LangOptions &LangOpts,
-                           bool Complain) override;
+  bool ReadLanguageOptions(const LangOptions &LangOpts, bool Complain,
+                           bool AllowCompatibleDifferences) override;
   bool ReadTargetOptions(const TargetOptions &TargetOpts,
                          bool Complain) override;
   bool ReadDiagnosticOptions(IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts,
@@ -436,6 +449,16 @@ private:
       DeclReplacementMap;
   /// \brief Declarations that have been replaced in a later file in the chain.
   DeclReplacementMap ReplacedDecls;
+
+  /// \brief Declarations that have been imported and have typedef names for
+  /// linkage purposes.
+  llvm::DenseMap<std::pair<DeclContext*, IdentifierInfo*>, NamedDecl*>
+      ImportedTypedefNamesForLinkage;
+
+  /// \brief Mergeable declaration contexts that have anonymous declarations
+  /// within them, and those anonymous declarations.
+  llvm::DenseMap<DeclContext*, llvm::SmallVector<NamedDecl*, 2>>
+    AnonymousDeclarationsForMerging;
 
   struct FileDeclsInfo {
     ModuleFile *Mod;
@@ -747,6 +770,11 @@ private:
   /// Sema tracks these because it checks for the key functions being defined
   /// at the end of the TU, in which case it directs CodeGen to emit the VTable.
   SmallVector<uint64_t, 16> DynamicClasses;
+
+  /// \brief The IDs of all potentially unused typedef names in the chain.
+  ///
+  /// Sema tracks these to emit warnings.
+  SmallVector<uint64_t, 16> UnusedLocalTypedefNameCandidates;
 
   /// \brief The IDs of the declarations Sema stores directly.
   ///
@@ -1106,6 +1134,7 @@ private:
                             SourceLocation ImportLoc, ModuleFile *ImportedBy,
                             SmallVectorImpl<ImportedModule> &Loaded,
                             off_t ExpectedSize, time_t ExpectedModTime,
+                            serialization::ASTFileSignature ExpectedSignature,
                             unsigned ClientLoadCapabilities);
   ASTReadResult ReadControlBlock(ModuleFile &F,
                                  SmallVectorImpl<ImportedModule> &Loaded,
@@ -1116,10 +1145,14 @@ private:
   bool ReadSourceManagerBlock(ModuleFile &F);
   llvm::BitstreamCursor &SLocCursorForID(int ID);
   SourceLocation getImportLocation(ModuleFile *F);
+  ASTReadResult ReadModuleMapFileBlock(RecordData &Record, ModuleFile &F,
+                                       const ModuleFile *ImportedBy,
+                                       unsigned ClientLoadCapabilities);
   ASTReadResult ReadSubmoduleBlock(ModuleFile &F,
                                    unsigned ClientLoadCapabilities);
   static bool ParseLanguageOptions(const RecordData &Record, bool Complain,
-                                   ASTReaderListener &Listener);
+                                   ASTReaderListener &Listener,
+                                   bool AllowCompatibleDifferences);
   static bool ParseTargetOptions(const RecordData &Record, bool Complain,
                                  ASTReaderListener &Listener);
   static bool ParseDiagnosticOptions(const RecordData &Record, bool Complain,
@@ -1142,7 +1175,7 @@ private:
   QualType readTypeRecord(unsigned Index);
   void readExceptionSpec(ModuleFile &ModuleFile,
                          SmallVectorImpl<QualType> &ExceptionStorage,
-                         FunctionProtoType::ExtProtoInfo &EPI,
+                         FunctionProtoType::ExceptionSpecInfo &ESI,
                          const RecordData &Record, unsigned &Index);
   RecordLocation TypeCursorForIndex(unsigned Index);
   void LoadedDecl(unsigned Index, Decl *D);
@@ -1245,6 +1278,7 @@ private:
   void PassInterestingDeclToConsumer(Decl *D);
 
   void finishPendingActions();
+  void diagnoseOdrViolations();
 
   void pushExternalDeclIntoScope(NamedDecl *D, DeclarationName Name);
 
@@ -1369,19 +1403,49 @@ public:
   void makeNamesVisible(const HiddenNames &Names, Module *Owner,
                         bool FromFinalization);
 
-  /// \brief Set the AST callbacks listener.
-  void setListener(ASTReaderListener *listener) {
-    Listener.reset(listener);
+  /// \brief Take the AST callbacks listener.
+  std::unique_ptr<ASTReaderListener> takeListener() {
+    return std::move(Listener);
   }
 
-  /// \brief Add an AST callbak listener.
+  /// \brief Set the AST callbacks listener.
+  void setListener(std::unique_ptr<ASTReaderListener> Listener) {
+    this->Listener = std::move(Listener);
+  }
+
+  /// \brief Add an AST callback listener.
   ///
   /// Takes ownership of \p L.
-  void addListener(ASTReaderListener *L) {
+  void addListener(std::unique_ptr<ASTReaderListener> L) {
     if (Listener)
-      L = new ChainedASTReaderListener(L, Listener.release());
-    Listener.reset(L);
+      L = llvm::make_unique<ChainedASTReaderListener>(std::move(L),
+                                                      std::move(Listener));
+    Listener = std::move(L);
   }
+
+  /// RAII object to temporarily add an AST callback listener.
+  class ListenerScope {
+    ASTReader &Reader;
+    bool Chained;
+
+  public:
+    ListenerScope(ASTReader &Reader, std::unique_ptr<ASTReaderListener> L)
+        : Reader(Reader), Chained(false) {
+      auto Old = Reader.takeListener();
+      if (Old) {
+        Chained = true;
+        L = llvm::make_unique<ChainedASTReaderListener>(std::move(L),
+                                                        std::move(Old));
+      }
+      Reader.setListener(std::move(L));
+    }
+    ~ListenerScope() {
+      auto New = Reader.takeListener();
+      if (Chained)
+        Reader.setListener(static_cast<ChainedASTReaderListener *>(New.get())
+                               ->takeSecond());
+    }
+  };
 
   /// \brief Set the AST deserialization listener.
   void setDeserializationListener(ASTDeserializationListener *Listener,
@@ -1412,8 +1476,9 @@ public:
   void UpdateSema();
 
   /// \brief Add in-memory (virtual file) buffer.
-  void addInMemoryBuffer(StringRef &FileName, llvm::MemoryBuffer *Buffer) {
-    ModuleMgr.addInMemoryBuffer(FileName, Buffer);
+  void addInMemoryBuffer(StringRef &FileName,
+                         std::unique_ptr<llvm::MemoryBuffer> Buffer) {
+    ModuleMgr.addInMemoryBuffer(FileName, std::move(Buffer));
   }
 
   /// \brief Finalizes the AST reader's state before writing an AST file to
@@ -1772,6 +1837,9 @@ public:
 
   void ReadDynamicClasses(SmallVectorImpl<CXXRecordDecl *> &Decls) override;
 
+  void ReadUnusedLocalTypedefNameCandidates(
+      llvm::SmallSetVector<const TypedefNameDecl *, 4> &Decls) override;
+
   void ReadLocallyScopedExternCDecls(
                                   SmallVectorImpl<NamedDecl *> &Decls) override;
 
@@ -1832,17 +1900,18 @@ public:
                                  ModuleFile &M, uint64_t Offset);
 
   void installImportedMacro(IdentifierInfo *II, ModuleMacroInfo *MMI,
-                            Module *Owner, bool FromFinalization);
+                            Module *Owner);
 
   typedef llvm::TinyPtrVector<DefMacroDirective *> AmbiguousMacros;
   llvm::DenseMap<IdentifierInfo*, AmbiguousMacros> AmbiguousMacroDefs;
 
   void
-  removeOverriddenMacros(IdentifierInfo *II, AmbiguousMacros &Ambig,
+  removeOverriddenMacros(IdentifierInfo *II, SourceLocation Loc,
+                         AmbiguousMacros &Ambig,
                          ArrayRef<serialization::SubmoduleID> Overrides);
 
   AmbiguousMacros *
-  removeOverriddenMacros(IdentifierInfo *II,
+  removeOverriddenMacros(IdentifierInfo *II, SourceLocation Loc,
                          ArrayRef<serialization::SubmoduleID> Overrides);
 
   /// \brief Retrieve the macro with the given ID.
@@ -2050,9 +2119,9 @@ public:
   /// \brief Retrieve the AST context that this AST reader supplements.
   ASTContext &getContext() { return Context; }
 
-  // \brief Contains declarations that were loaded before we have
+  // \brief Contains the IDs for declarations that were requested before we have
   // access to a Sema object.
-  SmallVector<NamedDecl *, 16> PreloadedDecls;
+  SmallVector<uint64_t, 16> PreloadedDeclIDs;
 
   /// \brief Retrieve the semantic analysis object used to analyze the
   /// translation unit in which the precompiled header is being
@@ -2078,6 +2147,10 @@ public:
 
   //RIDErief Loads comments ranges.
   void ReadComments() override;
+
+  /// Return all input files for the given module file.
+  void getInputFiles(ModuleFile &F,
+                     SmallVectorImpl<serialization::InputFile> &Files);
 };
 
 /// \brief Helper class that saves the current stream position and

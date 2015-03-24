@@ -48,7 +48,7 @@ llvm::Constant *CodeGenModule::GetAddrOfThunk(GlobalDecl GD,
 
   llvm::Type *Ty = getTypes().GetFunctionTypeForVTable(GD);
   return GetOrCreateLLVMFunction(Name, Ty, GD, /*ForVTable=*/true,
-                                 /*DontDefer*/ true);
+                                 /*DontDefer=*/true, /*IsThunk=*/true);
 }
 
 static void setThunkVisibility(CodeGenModule &CGM, const CXXMethodDecl *MD,
@@ -194,23 +194,24 @@ void CodeGenFunction::StartThunk(llvm::Function *Fn, GlobalDecl GD,
                                  const CGFunctionInfo &FnInfo) {
   assert(!CurGD.getDecl() && "CurGD was already set!");
   CurGD = GD;
+  CurFuncIsThunk = true;
 
   // Build FunctionArgs.
   const CXXMethodDecl *MD = cast<CXXMethodDecl>(GD.getDecl());
   QualType ThisType = MD->getThisType(getContext());
   const FunctionProtoType *FPT = MD->getType()->getAs<FunctionProtoType>();
-  QualType ResultType =
-      CGM.getCXXABI().HasThisReturn(GD) ? ThisType : FPT->getReturnType();
+  QualType ResultType = CGM.getCXXABI().HasThisReturn(GD)
+                            ? ThisType
+                            : CGM.getCXXABI().hasMostDerivedReturn(GD)
+                                  ? CGM.getContext().VoidPtrTy
+                                  : FPT->getReturnType();
   FunctionArgList FunctionArgs;
 
   // Create the implicit 'this' parameter declaration.
   CGM.getCXXABI().buildThisParam(*this, FunctionArgs);
 
   // Add the rest of the parameters.
-  for (FunctionDecl::param_const_iterator I = MD->param_begin(),
-                                          E = MD->param_end();
-       I != E; ++I)
-    FunctionArgs.push_back(*I);
+  FunctionArgs.append(MD->param_begin(), MD->param_end());
 
   if (isa<CXXDestructorDecl>(MD))
     CGM.getCXXABI().addImplicitStructorParams(*this, ResultType, FunctionArgs);
@@ -224,17 +225,28 @@ void CodeGenFunction::StartThunk(llvm::Function *Fn, GlobalDecl GD,
   CXXThisValue = CXXABIThisValue;
 }
 
-void CodeGenFunction::EmitCallAndReturnForThunk(GlobalDecl GD,
-                                                llvm::Value *Callee,
+void CodeGenFunction::EmitCallAndReturnForThunk(llvm::Value *Callee,
                                                 const ThunkInfo *Thunk) {
   assert(isa<CXXMethodDecl>(CurGD.getDecl()) &&
          "Please use a new CGF for this thunk");
-  const CXXMethodDecl *MD = cast<CXXMethodDecl>(GD.getDecl());
+  const CXXMethodDecl *MD = cast<CXXMethodDecl>(CurGD.getDecl());
 
   // Adjust the 'this' pointer if necessary
   llvm::Value *AdjustedThisPtr = Thunk ? CGM.getCXXABI().performThisAdjustment(
                                              *this, LoadCXXThis(), Thunk->This)
                                        : LoadCXXThis();
+
+  if (CurFnInfo->usesInAlloca()) {
+    // We don't handle return adjusting thunks, because they require us to call
+    // the copy constructor.  For now, fall through and pretend the return
+    // adjustment was empty so we don't crash.
+    if (Thunk && !Thunk->Return.isEmpty()) {
+      CGM.ErrorUnsupported(
+          MD, "non-trivial argument copy for return-adjusting thunk");
+    }
+    EmitMustTailThunk(MD, AdjustedThisPtr, Callee);
+    return;
+  }
 
   // Start building CallArgs.
   CallArgList CallArgs;
@@ -242,12 +254,11 @@ void CodeGenFunction::EmitCallAndReturnForThunk(GlobalDecl GD,
   CallArgs.add(RValue::get(AdjustedThisPtr), ThisType);
 
   if (isa<CXXDestructorDecl>(MD))
-    CGM.getCXXABI().adjustCallArgsForDestructorThunk(*this, GD, CallArgs);
+    CGM.getCXXABI().adjustCallArgsForDestructorThunk(*this, CurGD, CallArgs);
 
   // Add the rest of the arguments.
-  for (FunctionDecl::param_const_iterator I = MD->param_begin(),
-       E = MD->param_end(); I != E; ++I)
-    EmitDelegateCallArg(CallArgs, *I, (*I)->getLocStart());
+  for (const ParmVarDecl *PD : MD->params())
+    EmitDelegateCallArg(CallArgs, PD, PD->getLocStart());
 
   const FunctionProtoType *FPT = MD->getType()->getAs<FunctionProtoType>();
 
@@ -270,8 +281,11 @@ void CodeGenFunction::EmitCallAndReturnForThunk(GlobalDecl GD,
 #endif
 
   // Determine whether we have a return value slot to use.
-  QualType ResultType =
-      CGM.getCXXABI().HasThisReturn(GD) ? ThisType : FPT->getReturnType();
+  QualType ResultType = CGM.getCXXABI().HasThisReturn(CurGD)
+                            ? ThisType
+                            : CGM.getCXXABI().hasMostDerivedReturn(CurGD)
+                                  ? CGM.getContext().VoidPtrTy
+                                  : FPT->getReturnType();
   ReturnValueSlot Slot;
   if (!ResultType->isVoidType() &&
       CurFnInfo->getReturnInfo().getKind() == ABIArgInfo::Indirect &&
@@ -279,8 +293,9 @@ void CodeGenFunction::EmitCallAndReturnForThunk(GlobalDecl GD,
     Slot = ReturnValueSlot(ReturnValue, ResultType.isVolatileQualified());
   
   // Now emit our call.
-  RValue RV = EmitCall(*CurFnInfo, Callee, Slot, CallArgs, MD);
-  
+  llvm::Instruction *CallOrInvoke;
+  RValue RV = EmitCall(*CurFnInfo, Callee, Slot, CallArgs, MD, &CallOrInvoke);
+
   // Consider return adjustment if we have ThunkInfo.
   if (Thunk && !Thunk->Return.isEmpty())
     RV = PerformReturnAdjustment(*this, ResultType, RV, *Thunk);
@@ -295,6 +310,62 @@ void CodeGenFunction::EmitCallAndReturnForThunk(GlobalDecl GD,
   FinishFunction();
 }
 
+void CodeGenFunction::EmitMustTailThunk(const CXXMethodDecl *MD,
+                                        llvm::Value *AdjustedThisPtr,
+                                        llvm::Value *Callee) {
+  // Emitting a musttail call thunk doesn't use any of the CGCall.cpp machinery
+  // to translate AST arguments into LLVM IR arguments.  For thunks, we know
+  // that the caller prototype more or less matches the callee prototype with
+  // the exception of 'this'.
+  SmallVector<llvm::Value *, 8> Args;
+  for (llvm::Argument &A : CurFn->args())
+    Args.push_back(&A);
+
+  // Set the adjusted 'this' pointer.
+  const ABIArgInfo &ThisAI = CurFnInfo->arg_begin()->info;
+  if (ThisAI.isDirect()) {
+    const ABIArgInfo &RetAI = CurFnInfo->getReturnInfo();
+    int ThisArgNo = RetAI.isIndirect() && !RetAI.isSRetAfterThis() ? 1 : 0;
+    llvm::Type *ThisType = Args[ThisArgNo]->getType();
+    if (ThisType != AdjustedThisPtr->getType())
+      AdjustedThisPtr = Builder.CreateBitCast(AdjustedThisPtr, ThisType);
+    Args[ThisArgNo] = AdjustedThisPtr;
+  } else {
+    assert(ThisAI.isInAlloca() && "this is passed directly or inalloca");
+    llvm::Value *ThisAddr = GetAddrOfLocalVar(CXXABIThisDecl);
+    llvm::Type *ThisType =
+        cast<llvm::PointerType>(ThisAddr->getType())->getElementType();
+    if (ThisType != AdjustedThisPtr->getType())
+      AdjustedThisPtr = Builder.CreateBitCast(AdjustedThisPtr, ThisType);
+    Builder.CreateStore(AdjustedThisPtr, ThisAddr);
+  }
+
+  // Emit the musttail call manually.  Even if the prologue pushed cleanups, we
+  // don't actually want to run them.
+  llvm::CallInst *Call = Builder.CreateCall(Callee, Args);
+  Call->setTailCallKind(llvm::CallInst::TCK_MustTail);
+
+  // Apply the standard set of call attributes.
+  unsigned CallingConv;
+  CodeGen::AttributeListType AttributeList;
+  CGM.ConstructAttributeList(*CurFnInfo, MD, AttributeList, CallingConv,
+                             /*AttrOnCallSite=*/true);
+  llvm::AttributeSet Attrs =
+      llvm::AttributeSet::get(getLLVMContext(), AttributeList);
+  Call->setAttributes(Attrs);
+  Call->setCallingConv(static_cast<llvm::CallingConv::ID>(CallingConv));
+
+  if (Call->getType()->isVoidTy())
+    Builder.CreateRetVoid();
+  else
+    Builder.CreateRet(Call);
+
+  // Finish the function to maintain CodeGenFunction invariants.
+  // FIXME: Don't emit unreachable code.
+  EmitBlock(createBasicBlock());
+  FinishFunction();
+}
+
 void CodeGenFunction::GenerateThunk(llvm::Function *Fn,
                                     const CGFunctionInfo &FnInfo,
                                     GlobalDecl GD, const ThunkInfo &Thunk) {
@@ -306,7 +377,7 @@ void CodeGenFunction::GenerateThunk(llvm::Function *Fn,
   llvm::Value *Callee = CGM.GetAddrOfFunction(GD, Ty, /*ForVTable=*/true);
 
   // Make the call and return the result.
-  EmitCallAndReturnForThunk(GD, Callee, &Thunk);
+  EmitCallAndReturnForThunk(Callee, &Thunk);
 
   // Set the right linkage.
   CGM.setFunctionLinkage(GD, Fn);
@@ -612,7 +683,8 @@ CodeGenModule::getVTableLinkage(const CXXRecordDecl *RD) {
 
   // We're at the end of the translation unit, so the current key
   // function is fully correct.
-  if (const CXXMethodDecl *keyFunction = Context.getCurrentKeyFunction(RD)) {
+  const CXXMethodDecl *keyFunction = Context.getCurrentKeyFunction(RD);
+  if (keyFunction && !RD->hasAttr<DLLImportAttr>()) {
     // If this class has a key function, use that to determine the
     // linkage of the vtable.
     const FunctionDecl *def = nullptr;

@@ -25,7 +25,7 @@
 #include "clang/Lex/Pragma.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/SaveAndRestore.h"
 using namespace clang;
 
@@ -34,23 +34,10 @@ using namespace clang;
 //===----------------------------------------------------------------------===//
 
 MacroInfo *Preprocessor::AllocateMacroInfo() {
-  MacroInfoChain *MIChain;
-
-  if (MICache) {
-    MIChain = MICache;
-    MICache = MICache->Next;
-  }
-  else {
-    MIChain = BP.Allocate<MacroInfoChain>();
-  }
-
+  MacroInfoChain *MIChain = BP.Allocate<MacroInfoChain>();
   MIChain->Next = MIChainHead;
-  MIChain->Prev = nullptr;
-  if (MIChainHead)
-    MIChainHead->Prev = MIChain;
   MIChainHead = MIChain;
-
-  return &(MIChain->MI);
+  return &MIChain->MI;
 }
 
 MacroInfo *Preprocessor::AllocateMacroInfo(SourceLocation L) {
@@ -77,45 +64,30 @@ MacroInfo *Preprocessor::AllocateDeserializedMacroInfo(SourceLocation L,
 
 DefMacroDirective *
 Preprocessor::AllocateDefMacroDirective(MacroInfo *MI, SourceLocation Loc,
-                                        bool isImported) {
-  DefMacroDirective *MD = BP.Allocate<DefMacroDirective>();
-  new (MD) DefMacroDirective(MI, Loc, isImported);
-  return MD;
+                                        unsigned ImportedFromModuleID,
+                                        ArrayRef<unsigned> Overrides) {
+  unsigned NumExtra = (ImportedFromModuleID ? 1 : 0) + Overrides.size();
+  return new (BP.Allocate(sizeof(DefMacroDirective) +
+                              sizeof(unsigned) * NumExtra,
+                          llvm::alignOf<DefMacroDirective>()))
+      DefMacroDirective(MI, Loc, ImportedFromModuleID, Overrides);
 }
 
 UndefMacroDirective *
-Preprocessor::AllocateUndefMacroDirective(SourceLocation UndefLoc) {
-  UndefMacroDirective *MD = BP.Allocate<UndefMacroDirective>();
-  new (MD) UndefMacroDirective(UndefLoc);
-  return MD;
+Preprocessor::AllocateUndefMacroDirective(SourceLocation UndefLoc,
+                                          unsigned ImportedFromModuleID,
+                                          ArrayRef<unsigned> Overrides) {
+  unsigned NumExtra = (ImportedFromModuleID ? 1 : 0) + Overrides.size();
+  return new (BP.Allocate(sizeof(UndefMacroDirective) +
+                              sizeof(unsigned) * NumExtra,
+                          llvm::alignOf<UndefMacroDirective>()))
+      UndefMacroDirective(UndefLoc, ImportedFromModuleID, Overrides);
 }
 
 VisibilityMacroDirective *
 Preprocessor::AllocateVisibilityMacroDirective(SourceLocation Loc,
                                                bool isPublic) {
-  VisibilityMacroDirective *MD = BP.Allocate<VisibilityMacroDirective>();
-  new (MD) VisibilityMacroDirective(Loc, isPublic);
-  return MD;
-}
-
-/// \brief Release the specified MacroInfo to be reused for allocating
-/// new MacroInfo objects.
-void Preprocessor::ReleaseMacroInfo(MacroInfo *MI) {
-  MacroInfoChain *MIChain = (MacroInfoChain *)MI;
-  if (MacroInfoChain *Prev = MIChain->Prev) {
-    MacroInfoChain *Next = MIChain->Next;
-    Prev->Next = Next;
-    if (Next)
-      Next->Prev = Prev;
-  } else {
-    assert(MIChainHead == MIChain);
-    MIChainHead = MIChain->Next;
-    MIChainHead->Prev = nullptr;
-  }
-  MIChain->Next = MICache;
-  MICache = MIChain;
-
-  MI->Destroy();
+  return new (BP) VisibilityMacroDirective(Loc, isPublic);
 }
 
 /// \brief Read and discard all tokens remaining on the current line until
@@ -128,7 +100,7 @@ void Preprocessor::DiscardUntilEndOfDirective() {
   } while (Tmp.isNot(tok::eod));
 }
 
-bool Preprocessor::CheckMacroName(Token &MacroNameTok, char isDefineUndef) {
+bool Preprocessor::CheckMacroName(Token &MacroNameTok, MacroUse isDefineUndef) {
   // Missing macro name?
   if (MacroNameTok.is(tok::eod))
     return Diag(MacroNameTok, diag::err_pp_missing_macro_name);
@@ -156,12 +128,12 @@ bool Preprocessor::CheckMacroName(Token &MacroNameTok, char isDefineUndef) {
     MacroNameTok.setIdentifierInfo(II);
   }
 
-  if (isDefineUndef && II->getPPKeywordID() == tok::pp_defined) {
+  if ((isDefineUndef != MU_Other) && II->getPPKeywordID() == tok::pp_defined) {
     // Error if defining "defined": C99 6.10.8/4, C++ [cpp.predefined]p4.
     return Diag(MacroNameTok, diag::err_defined_macro_name);
   }
 
-  if (isDefineUndef == 2 && II->hasMacroDefinition() &&
+  if (isDefineUndef == MU_Undef && II->hasMacroDefinition() &&
       getMacroInfo(II)->isBuiltinMacro()) {
     // Warn if undefining "__LINE__" and other builtins, per C99 6.10.8/4
     // and C++ [cpp.predefined]p4], but allow it as an extension.
@@ -175,17 +147,18 @@ bool Preprocessor::CheckMacroName(Token &MacroNameTok, char isDefineUndef) {
 /// \brief Lex and validate a macro name, which occurs after a
 /// \#define or \#undef.
 ///
-/// This sets the token kind to eod and discards the rest
-/// of the macro line if the macro name is invalid.  \p isDefineUndef is 1 if
-/// this is due to a a \#define, 2 if \#undef directive, 0 if it is something
-/// else (e.g. \#ifdef).
-void Preprocessor::ReadMacroName(Token &MacroNameTok, char isDefineUndef) {
+/// This sets the token kind to eod and discards the rest of the macro line if
+/// the macro name is invalid.
+///
+/// \param MacroNameTok Token that is expected to be a macro name.
+/// \papam isDefineUndef Context in which macro is used.
+void Preprocessor::ReadMacroName(Token &MacroNameTok, MacroUse isDefineUndef) {
   // Read the token, don't allow macro expansion on it.
   LexUnexpandedToken(MacroNameTok);
 
   if (MacroNameTok.is(tok::code_completion)) {
     if (CodeComplete)
-      CodeComplete->CodeCompleteMacroName(isDefineUndef == 1);
+      CodeComplete->CodeCompleteMacroName(isDefineUndef == MU_Define);
     setCodeCompletionReached();
     LexUnexpandedToken(MacroNameTok);
   }
@@ -562,6 +535,7 @@ const FileEntry *Preprocessor::LookupFile(
     StringRef Filename,
     bool isAngled,
     const DirectoryLookup *FromDir,
+    const FileEntry *FromFile,
     const DirectoryLookup *&CurDir,
     SmallVectorImpl<char> *SearchPath,
     SmallVectorImpl<char> *RelativePath,
@@ -569,22 +543,33 @@ const FileEntry *Preprocessor::LookupFile(
     bool SkipCache) {
   // If the header lookup mechanism may be relative to the current inclusion
   // stack, record the parent #includes.
-  SmallVector<const FileEntry *, 16> Includers;
-  if (!FromDir) {
+  SmallVector<std::pair<const FileEntry *, const DirectoryEntry *>, 16>
+      Includers;
+  if (!FromDir && !FromFile) {
     FileID FID = getCurrentFileLexer()->getFileID();
     const FileEntry *FileEnt = SourceMgr.getFileEntryForID(FID);
 
     // If there is no file entry associated with this file, it must be the
-    // predefines buffer.  Any other file is not lexed with a normal lexer, so
-    // it won't be scanned for preprocessor directives.   If we have the
-    // predefines buffer, resolve #include references (which come from the
-    // -include command line argument) as if they came from the main file, this
-    // affects file lookup etc.
-    if (!FileEnt)
-      FileEnt = SourceMgr.getFileEntryForID(SourceMgr.getMainFileID());
-
-    if (FileEnt)
-      Includers.push_back(FileEnt);
+    // predefines buffer or the module includes buffer. Any other file is not
+    // lexed with a normal lexer, so it won't be scanned for preprocessor
+    // directives.
+    //
+    // If we have the predefines buffer, resolve #include references (which come
+    // from the -include command line argument) from the current working
+    // directory instead of relative to the main file.
+    //
+    // If we have the module includes buffer, resolve #include references (which
+    // come from header declarations in the module map) relative to the module
+    // map file.
+    if (!FileEnt) {
+      if (FID == SourceMgr.getMainFileID() && MainFileDir)
+        Includers.push_back(std::make_pair(nullptr, MainFileDir));
+      else if ((FileEnt =
+                    SourceMgr.getFileEntryForID(SourceMgr.getMainFileID())))
+        Includers.push_back(std::make_pair(FileEnt, FileMgr.getDirectory(".")));
+    } else {
+      Includers.push_back(std::make_pair(FileEnt, FileEnt->getDir()));
+    }
 
     // MSVC searches the current include stack from top to bottom for
     // headers included by quoted include directives.
@@ -595,13 +580,35 @@ const FileEntry *Preprocessor::LookupFile(
         if (IsFileLexer(ISEntry))
           if ((FileEnt = SourceMgr.getFileEntryForID(
                    ISEntry.ThePPLexer->getFileID())))
-            Includers.push_back(FileEnt);
+            Includers.push_back(std::make_pair(FileEnt, FileEnt->getDir()));
+      }
+    }
+  }
+
+  CurDir = CurDirLookup;
+
+  if (FromFile) {
+    // We're supposed to start looking from after a particular file. Search
+    // the include path until we find that file or run out of files.
+    const DirectoryLookup *TmpCurDir = CurDir;
+    const DirectoryLookup *TmpFromDir = nullptr;
+    while (const FileEntry *FE = HeaderInfo.LookupFile(
+               Filename, FilenameLoc, isAngled, TmpFromDir, TmpCurDir,
+               Includers, SearchPath, RelativePath, SuggestedModule,
+               SkipCache)) {
+      // Keep looking as if this file did a #include_next.
+      TmpFromDir = TmpCurDir;
+      ++TmpFromDir;
+      if (FE == FromFile) {
+        // Found it.
+        FromDir = TmpFromDir;
+        CurDir = TmpCurDir;
+        break;
       }
     }
   }
 
   // Do a standard file entry lookup.
-  CurDir = CurDirLookup;
   const FileEntry *FE = HeaderInfo.LookupFile(
       Filename, FilenameLoc, isAngled, FromDir, CurDir, Includers, SearchPath,
       RelativePath, SuggestedModule, SkipCache);
@@ -1196,7 +1203,7 @@ void Preprocessor::HandleIdentSCCSDirective(Token &Tok) {
 /// \brief Handle a #public directive.
 void Preprocessor::HandleMacroPublicDirective(Token &Tok) {
   Token MacroNameTok;
-  ReadMacroName(MacroNameTok, 2);
+  ReadMacroName(MacroNameTok, MU_Undef);
   
   // Error reading macro name?  If so, diagnostic already issued.
   if (MacroNameTok.is(tok::eod))
@@ -1223,7 +1230,7 @@ void Preprocessor::HandleMacroPublicDirective(Token &Tok) {
 /// \brief Handle a #private directive.
 void Preprocessor::HandleMacroPrivateDirective(Token &Tok) {
   Token MacroNameTok;
-  ReadMacroName(MacroNameTok, 2);
+  ReadMacroName(MacroNameTok, MU_Undef);
   
   // Error reading macro name?  If so, diagnostic already issued.
   if (MacroNameTok.is(tok::eod))
@@ -1378,6 +1385,7 @@ static void EnterAnnotationToken(Preprocessor &PP,
 void Preprocessor::HandleIncludeDirective(SourceLocation HashLoc, 
                                           Token &IncludeTok,
                                           const DirectoryLookup *LookupFrom,
+                                          const FileEntry *LookupFromFile,
                                           bool isImport) {
 
   Token FilenameTok;
@@ -1469,12 +1477,14 @@ void Preprocessor::HandleIncludeDirective(SourceLocation HashLoc,
   SmallString<128> NormalizedPath;
   if (LangOpts.MSVCCompat) {
     NormalizedPath = Filename.str();
-    llvm::sys::fs::normalize_separators(NormalizedPath);
+#ifndef LLVM_ON_WIN32
+    llvm::sys::path::native(NormalizedPath);
+#endif
   }
   const FileEntry *File = LookupFile(
       FilenameLoc, LangOpts.MSVCCompat ? NormalizedPath.c_str() : Filename,
-      isAngled, LookupFrom, CurDir, Callbacks ? &SearchPath : nullptr,
-      Callbacks ? &RelativePath : nullptr,
+      isAngled, LookupFrom, LookupFromFile, CurDir,
+      Callbacks ? &SearchPath : nullptr, Callbacks ? &RelativePath : nullptr,
       HeaderInfo.getHeaderSearchOpts().ModuleMaps ? &SuggestedModule : nullptr);
 
   if (Callbacks) {
@@ -1488,14 +1498,13 @@ void Preprocessor::HandleIncludeDirective(SourceLocation HashLoc,
           HeaderInfo.AddSearchPath(DL, isAngled);
           
           // Try the lookup again, skipping the cache.
-          File = LookupFile(FilenameLoc,
-                            LangOpts.MSVCCompat ? NormalizedPath.c_str()
-                                                : Filename,
-                            isAngled, LookupFrom, CurDir, nullptr, nullptr,
-                            HeaderInfo.getHeaderSearchOpts().ModuleMaps
-                                      ? &SuggestedModule
-                                      : nullptr,
-                            /*SkipCache*/ true);
+          File = LookupFile(
+              FilenameLoc,
+              LangOpts.MSVCCompat ? NormalizedPath.c_str() : Filename, isAngled,
+              LookupFrom, LookupFromFile, CurDir, nullptr, nullptr,
+              HeaderInfo.getHeaderSearchOpts().ModuleMaps ? &SuggestedModule
+                                                          : nullptr,
+              /*SkipCache*/ true);
         }
       }
     }
@@ -1517,8 +1526,10 @@ void Preprocessor::HandleIncludeDirective(SourceLocation HashLoc,
       // provide the user with a possible fixit.
       if (isAngled) {
         File = LookupFile(
-            FilenameLoc, LangOpts.MSVCCompat ? NormalizedPath.c_str() : Filename,
-            false, LookupFrom, CurDir, Callbacks ? &SearchPath : nullptr,
+            FilenameLoc,
+            LangOpts.MSVCCompat ? NormalizedPath.c_str() : Filename, false,
+            LookupFrom, LookupFromFile, CurDir,
+            Callbacks ? &SearchPath : nullptr,
             Callbacks ? &RelativePath : nullptr,
             HeaderInfo.getHeaderSearchOpts().ModuleMaps ? &SuggestedModule
                                                         : nullptr);
@@ -1539,7 +1550,9 @@ void Preprocessor::HandleIncludeDirective(SourceLocation HashLoc,
 
   // If we are supposed to import a module rather than including the header,
   // do so now.
-  if (SuggestedModule && getLangOpts().Modules) {
+  if (SuggestedModule && getLangOpts().Modules &&
+      SuggestedModule.getModule()->getTopLevelModuleName() !=
+      getLangOpts().ImplementationOfModule) {
     // Compute the module access path corresponding to this module.
     // FIXME: Should we have a second loadModule() overload to avoid this
     // extra lookup step?
@@ -1713,9 +1726,16 @@ void Preprocessor::HandleIncludeNextDirective(SourceLocation HashLoc,
   // the current found directory.  If we can't do this, issue a
   // diagnostic.
   const DirectoryLookup *Lookup = CurDirLookup;
+  const FileEntry *LookupFromFile = nullptr;
   if (isInPrimaryFile()) {
     Lookup = nullptr;
     Diag(IncludeNextTok, diag::pp_include_next_in_primary);
+  } else if (CurSubmodule) {
+    // Start looking up in the directory *after* the one in which the current
+    // file would be found, if any.
+    assert(CurPPLexer && "#include_next directive in macro?");
+    LookupFromFile = CurPPLexer->getFileEntry();
+    Lookup = nullptr;
   } else if (!Lookup) {
     Diag(IncludeNextTok, diag::pp_include_next_absolute_path);
   } else {
@@ -1723,7 +1743,8 @@ void Preprocessor::HandleIncludeNextDirective(SourceLocation HashLoc,
     ++Lookup;
   }
 
-  return HandleIncludeDirective(HashLoc, IncludeNextTok, Lookup);
+  return HandleIncludeDirective(HashLoc, IncludeNextTok, Lookup,
+                                LookupFromFile);
 }
 
 /// HandleMicrosoftImportDirective - Implements \#import for Microsoft Mode
@@ -1749,7 +1770,7 @@ void Preprocessor::HandleImportDirective(SourceLocation HashLoc,
       return HandleMicrosoftImportDirective(ImportTok);
     Diag(ImportTok, diag::ext_pp_import_directive);
   }
-  return HandleIncludeDirective(HashLoc, ImportTok, nullptr, true);
+  return HandleIncludeDirective(HashLoc, ImportTok, nullptr, nullptr, true);
 }
 
 /// HandleIncludeMacrosDirective - The -imacros command line option turns into a
@@ -1770,7 +1791,7 @@ void Preprocessor::HandleIncludeMacrosDirective(SourceLocation HashLoc,
 
   // Treat this as a normal #include for checking purposes.  If this is
   // successful, it will push a new lexer onto the include stack.
-  HandleIncludeDirective(HashLoc, IncludeMacrosTok, nullptr, false);
+  HandleIncludeDirective(HashLoc, IncludeMacrosTok);
 
   Token TmpTok;
   do {
@@ -1885,7 +1906,7 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok,
   ++NumDefined;
 
   Token MacroNameTok;
-  ReadMacroName(MacroNameTok, 1);
+  ReadMacroName(MacroNameTok, MU_Define);
 
   // Error reading macro name?  If so, diagnostic already issued.
   if (MacroNameTok.is(tok::eod))
@@ -1921,8 +1942,6 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok,
     // This is a function-like macro definition.  Read the argument list.
     MI->setIsFunctionLike();
     if (ReadMacroDefinitionArgList(MI, LastTok)) {
-      // Forget about MI.
-      ReleaseMacroInfo(MI);
       // Throw away the rest of the line.
       if (CurPPLexer->ParsingPreprocessorDirective)
         DiscardUntilEndOfDirective();
@@ -2047,7 +2066,6 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok,
           continue;
         } else {
           Diag(Tok, diag::err_pp_stringize_not_parameter);
-          ReleaseMacroInfo(MI);
 
           // Disable __VA_ARGS__ again.
           Ident__VA_ARGS__->setIsPoisoned(true);
@@ -2075,12 +2093,10 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok,
   if (NumTokens != 0) {
     if (MI->getReplacementToken(0).is(tok::hashhash)) {
       Diag(MI->getReplacementToken(0), diag::err_paste_at_start);
-      ReleaseMacroInfo(MI);
       return;
     }
     if (MI->getReplacementToken(NumTokens-1).is(tok::hashhash)) {
       Diag(MI->getReplacementToken(NumTokens-1), diag::err_paste_at_end);
-      ReleaseMacroInfo(MI);
       return;
     }
   }
@@ -2138,7 +2154,7 @@ void Preprocessor::HandleUndefDirective(Token &UndefTok) {
   ++NumUndefined;
 
   Token MacroNameTok;
-  ReadMacroName(MacroNameTok, 2);
+  ReadMacroName(MacroNameTok, MU_Undef);
 
   // Error reading macro name?  If so, diagnostic already issued.
   if (MacroNameTok.is(tok::eod))
