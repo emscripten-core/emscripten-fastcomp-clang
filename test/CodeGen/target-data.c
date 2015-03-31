@@ -78,6 +78,10 @@
 // RUN: FileCheck %s -check-prefix=LE32-NACL
 // LE32-NACL: target datalayout = "e-p:32:32-i64:64-n32"
 
+// RUN: %clang_cc1 -triple asmjs-emscripten -o - -emit-llvm %s | \
+// RUN: FileCheck %s -check-prefix=ASMJS-EMSCRIPTEN
+// ASMJS-EMSCRIPTEN: target datalayout = "e-p:32:32-i64:64-v128:32:128-n32-S128"
+
 // RUN: %clang_cc1 -triple powerpc-unknown -o - -emit-llvm %s | \
 // RUN: FileCheck %s -check-prefix=PPC
 // PPC: target datalayout = "E-m:e-p:32:32-i64:64-n32"

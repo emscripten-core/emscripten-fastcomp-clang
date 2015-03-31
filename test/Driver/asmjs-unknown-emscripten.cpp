@@ -1,12 +1,12 @@
-// RUN: %clang -target asmjs-unknown-emscripten -ccc-echo %s -emit-llvm-only -c 2>&1 | FileCheck %s -check-prefix=ECHO
+// RUN: %clang -target asmjs-unknown-emscripten -### %s -emit-llvm-only -c 2>&1 | FileCheck %s -check-prefix=ECHO
 // RUN: %clang -target asmjs-unknown-emscripten %s -emit-llvm -S -c -o - | FileCheck %s
 // RUN: %clang -target asmjs-unknown-emscripten %s -emit-llvm -S -c -pthread -o - | FileCheck %s -check-prefix=THREADS
 
-// ECHO: {{.*}} -cc1 {{.*}}asmjs-unknown-emscripten.c
+// ECHO: {{.*}} "-cc1" {{.*}}asmjs-unknown-emscripten.c
 
-// Check platform defines
-#include <stdarg.h>
-#include <stddef.h>
+typedef __builtin_va_list va_list;
+typedef __SIZE_TYPE__ size_t;
+typedef __PTRDIFF_TYPE__ ptrdiff_t;
 
 extern "C" {
 
@@ -48,6 +48,11 @@ void __LITTLE_ENDIAN__defined() {}
 // CHECK: __asmjs__defined
 #ifdef __asmjs__
 void __asmjs__defined() {}
+#endif
+
+// CHECK: EMSCRIPTENdefined
+#ifdef EMSCRIPTEN
+void EMSCRIPTENdefined() {}
 #endif
 
 // CHECK: __EMSCRIPTEN__defined

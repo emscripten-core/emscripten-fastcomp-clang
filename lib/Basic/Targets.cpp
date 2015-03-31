@@ -252,12 +252,13 @@ public:
   }
 };
 
+// @LOCALMOD-START Emscripten
 // Emscripten target
-template<typename Target>
+template <typename Target>
 class EmscriptenTargetInfo : public OSTargetInfo<Target> {
 protected:
-  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
-                            MacroBuilder &Builder) const {
+  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                    MacroBuilder &Builder) const override {
     // A macro for the platform.
     Builder.defineMacro("__EMSCRIPTEN__");
     // Earlier versions of Emscripten defined this, so we continue to define it
@@ -275,9 +276,10 @@ protected:
     // expects when "unix" is *not* defined.
     DefineStd(Builder, "unix", Opts);
   }
+
 public:
   explicit EmscriptenTargetInfo(const llvm::Triple &Triple)
-    : OSTargetInfo<Target>(Triple) {
+      : OSTargetInfo<Target>(Triple) {
     // Emcripten currently does prepend a prefix to user labels, but this is
     // handled outside of clang. TODO: Handling this within clang may be
     // beneficial.
@@ -290,6 +292,7 @@ public:
     this->TheCXXABI.set(TargetCXXABI::Emscripten);
   }
 };
+// @LOCALMOD-END Emscripten
 
 // FreeBSD Target
 template<typename Target>
@@ -6027,75 +6030,63 @@ public:
 };
 } // end anonymous namespace.
 
+// @LOCALMOD-START Emscripten
 namespace {
 class AsmJSTargetInfo : public TargetInfo {
 public:
   explicit AsmJSTargetInfo(const llvm::Triple &T) : TargetInfo(T) {
     BigEndian = false;
-    this->LongAlign = 32;
-    this->LongWidth = 32;
-    this->PointerAlign = 32;
-    this->PointerWidth = 32;
-    this->IntMaxType = TargetInfo::SignedLongLong;
-    this->Int64Type = TargetInfo::SignedLongLong;
-    this->DoubleAlign = 64;
-    this->LongDoubleWidth = 64;
-    this->LongDoubleAlign = 64;
-    this->SizeType = TargetInfo::UnsignedInt;
-    this->PtrDiffType = TargetInfo::SignedInt;
-    this->IntPtrType = TargetInfo::SignedInt;
-    this->RegParmMax = 0; // Disallow regparm
+    NoAsmVariants = true;
+    LongAlign = LongWidth = 32;
+    PointerAlign = PointerWidth = 32;
+    IntMaxType = Int64Type = TargetInfo::SignedLongLong;
+    DoubleAlign = 64;
+    LongDoubleWidth = LongDoubleAlign = 64;
+    SizeType = TargetInfo::UnsignedInt;
+    PtrDiffType = TargetInfo::SignedInt;
+    IntPtrType = TargetInfo::SignedInt;
+    RegParmMax = 0; // Disallow regparm
 
-    // Set the native integer widths set to just i32, since that's currently
-    // the only integer type we can do arithmetic on without masking or
-    // splitting.
+    // Set the native integer widths set to just i32, since that's currently the
+    // only integer type we can do arithmetic on without masking or splitting.
     //
     // Set the required alignment for 128-bit vectors to just 4 bytes, based on
     // the direction suggested here:
     //   https://bugzilla.mozilla.org/show_bug.cgi?id=904913#c21
     // We can still set the preferred alignment to 16 bytes though.
     //
-    // Set the natural stack alignment to 16 bytes to accomodate 128-bit
-    // aligned vectors.
+    // Set the natural stack alignment to 16 bytes to accomodate 128-bit aligned
+    // vectors.
     DescriptionString = "e-p:32:32-i64:64-v128:32:128-n32-S128";
   }
 
-  void getDefaultFeatures(llvm::StringMap<bool> &Features) const {
+  void getDefaultFeatures(llvm::StringMap<bool> &Features) const override {}
+  void getTargetDefines(const LangOptions &Opts,
+                        MacroBuilder &Builder) const override {
+    defineCPUMacros(Builder, "asmjs", /*Tuning=*/false);
   }
-  virtual void getArchDefines(const LangOptions &Opts,
-                              MacroBuilder &Builder) const {
-    Builder.defineMacro("__asmjs__");
-  }
-  virtual void getTargetDefines(const LangOptions &Opts,
-                                MacroBuilder &Builder) const {
-    Builder.defineMacro("__LITTLE_ENDIAN__");
-    getArchDefines(Opts, Builder);
-  }
-  virtual void getTargetBuiltins(const Builtin::Info *&Records,
-                                 unsigned &NumRecords) const {
-  }
-  virtual BuiltinVaListKind getBuiltinVaListKind() const {
+  void getTargetBuiltins(const Builtin::Info *&Records,
+                         unsigned &NumRecords) const override {}
+  BuiltinVaListKind getBuiltinVaListKind() const override {
     // Reuse PNaCl's va_list lowering.
     return TargetInfo::PNaClABIBuiltinVaList;
   }
-  virtual void getGCCRegNames(const char * const *&Names,
-                              unsigned &NumNames) const {
-    Names = NULL;
+  void getGCCRegNames(const char *const *&Names,
+                      unsigned &NumNames) const override {
+    Names = nullptr;
     NumNames = 0;
   }
-  virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
-                                unsigned &NumAliases) const {
-    Aliases = NULL;
+  void getGCCRegAliases(const GCCRegAlias *&Aliases,
+                        unsigned &NumAliases) const override {
+    Aliases = nullptr;
     NumAliases = 0;
   }
-  virtual bool validateAsmConstraint(const char *&Name,
-                                     TargetInfo::ConstraintInfo &Info) const {
+  bool validateAsmConstraint(const char *&Name,
+                             TargetInfo::ConstraintInfo &Info) const override {
     return false;
   }
-  virtual const char *getClobbers() const {
-    return "";
-  }
-  virtual bool isCLZForZeroUndef() const {
+  const char *getClobbers() const override { return ""; }
+  bool isCLZForZeroUndef() const override {
     // Today we do clz in software, so we just do the right thing. With ES6,
     // we'll get Math.clz32, which is to be defined to do the right thing:
     // http://esdiscuss.org/topic/rename-number-prototype-clz-to-math-clz#content-36
@@ -6103,6 +6094,7 @@ public:
   }
 };
 } // end anonymous namespace.
+// @LOCALMOD-END Emscripten
 
 namespace {
 class PNaClTargetInfo : public TargetInfo {
@@ -6544,13 +6536,15 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple) {
       return new Mips64ELTargetInfo(Triple);
     }
 
+  // @LOCALMOD-START Emscripten
   case llvm::Triple::asmjs:
     switch (os) {
       case llvm::Triple::Emscripten:
         return new EmscriptenTargetInfo<AsmJSTargetInfo>(Triple);
       default:
-        return NULL;
+        return nullptr;
     }
+  // @LOCALMOD-END Emscripten
 
   case llvm::Triple::le32:
     switch (os) {

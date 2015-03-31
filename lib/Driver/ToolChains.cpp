@@ -2490,36 +2490,6 @@ bool TCEToolChain::isPICDefaultForced() const {
   return false;
 }
 
-/// EmscriptenToolChain - A tool chain for the Emscripten C/C++ to JS compiler.
-
-EmscriptenToolChain::EmscriptenToolChain(const Driver &D, const llvm::Triple& Triple,
-                           const ArgList &Args)
-  : ToolChain(D, Triple, Args) {
-}
-
-EmscriptenToolChain::~EmscriptenToolChain() {
-}
-
-bool EmscriptenToolChain::IsMathErrnoDefault() const {
-  return false;
-}
-
-bool EmscriptenToolChain::IsObjCNonFragileABIDefault() const {
-  return true;
-}
-
-bool EmscriptenToolChain::isPICDefault() const {
-  return false;
-}
-
-bool EmscriptenToolChain::isPIEDefault() const {
-  return false;
-}
-
-bool EmscriptenToolChain::isPICDefaultForced() const {
-  return false;
-}
-
 /// OpenBSD - OpenBSD tool chain which can call as(1) and ld(1) directly.
 
 OpenBSD::OpenBSD(const Driver &D, const llvm::Triple& Triple, const ArgList &Args)
