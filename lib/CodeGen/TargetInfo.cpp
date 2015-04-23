@@ -432,6 +432,63 @@ ABIArgInfo DefaultABIInfo::classifyReturnType(QualType RetTy) const {
           ABIArgInfo::getExtend() : ABIArgInfo::getDirect());
 }
 
+// @LOCALMOD-START Emscripten
+//===----------------------------------------------------------------------===//
+// Emscripten ABI Implementation
+//
+// This is a very simple ABI that relies a lot on DefaultABIInfo.
+//===----------------------------------------------------------------------===//
+
+class EmscriptenABIInfo : public DefaultABIInfo {
+public:
+  explicit EmscriptenABIInfo(CodeGen::CodeGenTypes &CGT)
+      : DefaultABIInfo(CGT) {}
+
+  ABIArgInfo classifyReturnType(QualType RetTy) const;
+  ABIArgInfo classifyArgumentType(QualType Ty) const;
+
+  // DefaultABIInfo's classifyReturnType and classifyArgumentType are
+  // non-virtual, but computeInfo is virtual, so we overload that.
+  void computeInfo(CGFunctionInfo &FI) const override {
+    FI.getReturnInfo() = classifyReturnType(FI.getReturnType());
+    for (auto &Arg : FI.arguments())
+      Arg.info = classifyArgumentType(Arg.type);
+  }
+};
+
+class EmscriptenTargetCodeGenInfo : public TargetCodeGenInfo {
+public:
+  explicit EmscriptenTargetCodeGenInfo(CodeGen::CodeGenTypes &CGT)
+      : TargetCodeGenInfo(new EmscriptenABIInfo(CGT)) {}
+};
+
+/// \brief Classify argument of given type \p Ty.
+ABIArgInfo EmscriptenABIInfo::classifyArgumentType(QualType Ty) const {
+  if (isAggregateTypeForABI(Ty)) {
+    unsigned TypeAlign = getContext().getTypeAlignInChars(Ty).getQuantity();
+    if (auto RAA = getRecordArgABI(Ty, getCXXABI()))
+      return ABIArgInfo::getIndirect(TypeAlign,
+                                     RAA == CGCXXABI::RAA_DirectInMemory);
+    return ABIArgInfo::getIndirect(TypeAlign);
+  }
+
+  // Otherwise just do the default thing.
+  return DefaultABIInfo::classifyArgumentType(Ty);
+}
+
+ABIArgInfo EmscriptenABIInfo::classifyReturnType(QualType RetTy) const {
+  if (isAggregateTypeForABI(RetTy)) {
+    // As an optimization, lower single-element structs to just return a regular
+    // value.
+    if (const Type *SeltTy = isSingleElementStruct(RetTy, getContext()))
+      return ABIArgInfo::getDirect(CGT.ConvertType(QualType(SeltTy, 0)));
+  }
+
+  // Otherwise just do the default thing.
+  return DefaultABIInfo::classifyReturnType(RetTy);
+}
+// @LOCALMOD-END Emscripten
+
 //===----------------------------------------------------------------------===//
 // le32/PNaCl bitcode ABI Implementation
 //
@@ -6985,6 +7042,11 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
   switch (Triple.getArch()) {
   default:
     return *(TheTargetCodeGenInfo = new DefaultTargetCodeGenInfo(Types));
+
+  // @LOCALMOD-START Emscripten
+  case llvm::Triple::asmjs:
+    return *(TheTargetCodeGenInfo = new EmscriptenTargetCodeGenInfo(Types));
+  // @LOCALMOD-END Emscripten
 
   case llvm::Triple::le32:
     return *(TheTargetCodeGenInfo = new PNaClTargetCodeGenInfo(Types));

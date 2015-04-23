@@ -716,6 +716,23 @@ public:
   static StringRef GetTargetCPU(const llvm::opt::ArgList &Args);
 };
 
+// @LOCALMOD-START Emscripten
+/// EmscriptenToolChain - A toolchain for the Emscripten C/C++ to JS compiler.
+class LLVM_LIBRARY_VISIBILITY EmscriptenToolChain : public ToolChain {
+public:
+  EmscriptenToolChain(const Driver &D, const llvm::Triple &Triple,
+                      const llvm::opt::ArgList &Args)
+      : ToolChain(D, Triple, Args) {}
+  ~EmscriptenToolChain() override {}
+
+  bool IsMathErrnoDefault() const override { return false; }
+  bool IsObjCNonFragileABIDefault() const override { return true; }
+  bool isPICDefault() const override { return false; }
+  bool isPIEDefault() const override { return false; }
+  bool isPICDefaultForced() const override { return false; }
+};
+// @LOCALMOD-END Emscripten
+
 class LLVM_LIBRARY_VISIBILITY NaCl_TC : public Generic_ELF {
 public:
   NaCl_TC(const Driver &D, const llvm::Triple &Triple,

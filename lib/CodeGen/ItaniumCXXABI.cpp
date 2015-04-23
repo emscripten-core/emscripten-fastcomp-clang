@@ -358,6 +358,14 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
   case TargetCXXABI::GenericMIPS:
     return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true);
 
+  // @LOCALMOD-START Emscripten
+  case TargetCXXABI::Emscripten:
+    // Use ARM-style method pointers so that generated code does not assume
+    // anything about the alignment of function pointers.
+    return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true,
+                             /* UseARMGuardVarABI = */ false);
+  // @LOCALMOD-END Emscripten
+
   case TargetCXXABI::GenericItanium:
     if (CGM.getContext().getTargetInfo().getTriple().getArch()
         == llvm::Triple::le32) {
