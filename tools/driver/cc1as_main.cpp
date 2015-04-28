@@ -392,7 +392,6 @@ static bool ExecuteAssembler(AssemblerInvocation &Opts,
                                                 /*DWARFMustBeAtTheEnd*/ true));
     Str.get()->InitSections(Opts.NoExecStack);
     // @LOCALMOD-BEGIN
-    Triple T(Opts.Triple);
     if (T.isOSNaCl())
       initializeNaClMCStreamer(*Str.get(), Ctx, T);
     // @LOCALMOD-END

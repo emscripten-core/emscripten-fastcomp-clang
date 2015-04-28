@@ -167,6 +167,7 @@ public:
       //       the this adjustment, so they don't require functions to have any
       //       special alignment and could therefore also return false.
     case GenericItanium:
+    case GenericMIPS:
     case iOS:
     case iOS64:
     case Microsoft:
