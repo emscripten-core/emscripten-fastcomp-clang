@@ -54,14 +54,15 @@ const char *const CommonOptionsParser::HelpMessage =
     "\tsuffix of a path in the compile command database.\n"
     "\n";
 
+namespace {
 class ArgumentsAdjustingCompilations : public CompilationDatabase {
 public:
   ArgumentsAdjustingCompilations(
       std::unique_ptr<CompilationDatabase> Compilations)
       : Compilations(std::move(Compilations)) {}
 
-  void appendArgumentsAdjuster(std::unique_ptr<ArgumentsAdjuster> Adjuster) {
-    Adjusters.push_back(std::move(Adjuster));
+  void appendArgumentsAdjuster(ArgumentsAdjuster Adjuster) {
+    Adjusters.push_back(Adjuster);
   }
 
   std::vector<CompileCommand>
@@ -79,16 +80,17 @@ public:
 
 private:
   std::unique_ptr<CompilationDatabase> Compilations;
-  std::vector<std::unique_ptr<ArgumentsAdjuster>> Adjusters;
+  std::vector<ArgumentsAdjuster> Adjusters;
 
   std::vector<CompileCommand>
   adjustCommands(std::vector<CompileCommand> Commands) const {
     for (CompileCommand &Command : Commands)
       for (const auto &Adjuster : Adjusters)
-        Command.CommandLine = Adjuster->Adjust(Command.CommandLine);
+        Command.CommandLine = Adjuster(Command.CommandLine);
     return Commands;
   }
 };
+} // namespace
 
 CommonOptionsParser::CommonOptionsParser(int &argc, const char **argv,
                                          cl::OptionCategory &Category,
@@ -112,15 +114,7 @@ CommonOptionsParser::CommonOptionsParser(int &argc, const char **argv,
       cl::desc("Additional argument to prepend to the compiler command line"),
       cl::cat(Category));
 
-  // Hide unrelated options.
-  StringMap<cl::Option*> Options;
-  cl::getRegisteredOptions(Options);
-  for (StringMap<cl::Option *>::iterator I = Options.begin(), E = Options.end();
-       I != E; ++I) {
-    if (I->second->Category != &Category && I->first() != "help" &&
-        I->first() != "version")
-      I->second->setHiddenFlag(cl::ReallyHidden);
-  }
+  cl::HideUnrelatedOptions(Category);
 
   Compilations.reset(FixedCompilationDatabase::loadFromCommandLine(argc,
                                                                    argv));
@@ -142,10 +136,8 @@ CommonOptionsParser::CommonOptionsParser(int &argc, const char **argv,
       llvm::make_unique<ArgumentsAdjustingCompilations>(
           std::move(Compilations));
   AdjustingCompilations->appendArgumentsAdjuster(
-      llvm::make_unique<InsertArgumentAdjuster>(ArgsBefore,
-                                                InsertArgumentAdjuster::BEGIN));
+      getInsertArgumentAdjuster(ArgsBefore, ArgumentInsertPosition::BEGIN));
   AdjustingCompilations->appendArgumentsAdjuster(
-      llvm::make_unique<InsertArgumentAdjuster>(ArgsAfter,
-                                                InsertArgumentAdjuster::END));
+      getInsertArgumentAdjuster(ArgsAfter, ArgumentInsertPosition::END));
   Compilations = std::move(AdjustingCompilations);
 }

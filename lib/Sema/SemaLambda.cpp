@@ -617,7 +617,7 @@ void Sema::deduceClosureReturnType(CapturingScopeInfo &CSI) {
   // If it was ever a placeholder, it had to been deduced to DependentTy.
   assert(CSI.ReturnType.isNull() || !CSI.ReturnType->isUndeducedType()); 
 
-  // C++ Core Issue #975, proposed resolution:
+  // C++ core issue 975:
   //   If a lambda-expression does not include a trailing-return-type,
   //   it is as if the trailing-return-type denotes the following type:
   //     - if there are no return statements in the compound-statement,
@@ -630,6 +630,10 @@ void Sema::deduceClosureReturnType(CapturingScopeInfo &CSI) {
   //       function-to-pointer conversion (4.3 [conv.func]) are the
   //       same, that common type;
   //     - otherwise, the program is ill-formed.
+  //
+  // C++ core issue 1048 additionally removes top-level cv-qualifiers
+  // from the types of returned expressions to match the C++14 auto
+  // deduction rules.
   //
   // In addition, in blocks in non-C++ modes, if all of the return
   // statements are enumerator-like expressions of some type T, where
@@ -679,7 +683,8 @@ void Sema::deduceClosureReturnType(CapturingScopeInfo &CSI) {
     const ReturnStmt *RS = *I;
     const Expr *RetE = RS->getRetValue();
 
-    QualType ReturnType = (RetE ? RetE->getType() : Context.VoidTy);
+    QualType ReturnType =
+        (RetE ? RetE->getType() : Context.VoidTy).getUnqualifiedType();
     if (Context.hasSameType(ReturnType, CSI.ReturnType))
       continue;
 
@@ -1335,22 +1340,27 @@ static void addBlockPointerConversion(Sema &S,
                                       SourceRange IntroducerRange,
                                       CXXRecordDecl *Class,
                                       CXXMethodDecl *CallOperator) {
-  const FunctionProtoType *Proto
-    = CallOperator->getType()->getAs<FunctionProtoType>(); 
-  QualType BlockPtrTy;
-  {
-    FunctionProtoType::ExtProtoInfo ExtInfo = Proto->getExtProtoInfo();
-    ExtInfo.TypeQuals = 0;
-    QualType FunctionTy = S.Context.getFunctionType(
-        Proto->getReturnType(), Proto->getParamTypes(), ExtInfo);
-    BlockPtrTy = S.Context.getBlockPointerType(FunctionTy);
-  }
+  const FunctionProtoType *Proto =
+      CallOperator->getType()->getAs<FunctionProtoType>();
 
-  FunctionProtoType::ExtProtoInfo ExtInfo(S.Context.getDefaultCallingConvention(
-      /*IsVariadic=*/false, /*IsCXXMethod=*/true));
-  ExtInfo.TypeQuals = Qualifiers::Const;
-  QualType ConvTy = S.Context.getFunctionType(BlockPtrTy, None, ExtInfo);
-  
+  // The function type inside the block pointer type is the same as the call
+  // operator with some tweaks. The calling convention is the default free
+  // function convention, and the type qualifications are lost.
+  FunctionProtoType::ExtProtoInfo BlockEPI = Proto->getExtProtoInfo();
+  BlockEPI.ExtInfo =
+      BlockEPI.ExtInfo.withCallingConv(S.Context.getDefaultCallingConvention(
+          Proto->isVariadic(), /*IsCXXMethod=*/false));
+  BlockEPI.TypeQuals = 0;
+  QualType FunctionTy = S.Context.getFunctionType(
+      Proto->getReturnType(), Proto->getParamTypes(), BlockEPI);
+  QualType BlockPtrTy = S.Context.getBlockPointerType(FunctionTy);
+
+  FunctionProtoType::ExtProtoInfo ConversionEPI(
+      S.Context.getDefaultCallingConvention(
+          /*IsVariadic=*/false, /*IsCXXMethod=*/true));
+  ConversionEPI.TypeQuals = Qualifiers::Const;
+  QualType ConvTy = S.Context.getFunctionType(BlockPtrTy, None, ConversionEPI);
+
   SourceLocation Loc = IntroducerRange.getBegin();
   DeclarationName Name
     = S.Context.DeclarationNames.getCXXConversionFunctionName(

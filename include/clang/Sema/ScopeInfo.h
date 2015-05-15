@@ -124,6 +124,12 @@ public:
   /// false if there is an invocation of an initializer on 'self'.
   bool ObjCWarnForNoInitDelegation;
 
+  /// First C++ 'try' statement in the current function.
+  SourceLocation FirstCXXTryLoc;
+
+  /// First SEH '__try' statement in the current function.
+  SourceLocation FirstSEHTryLoc;
+
   /// \brief Used to determine if errors occurred in this function or block.
   DiagnosticErrorTrap ErrorTrap;
 
@@ -319,6 +325,16 @@ public:
 
   void setHasDroppedStmt() {
     HasDroppedStmt = true;
+  }
+
+  void setHasCXXTry(SourceLocation TryLoc) {
+    setHasBranchProtectedScope();
+    FirstCXXTryLoc = TryLoc;
+  }
+
+  void setHasSEHTry(SourceLocation TryLoc) {
+    setHasBranchProtectedScope();
+    FirstSEHTryLoc = TryLoc;
   }
 
   bool NeedsScopeChecking() const {
@@ -552,7 +568,7 @@ public:
     Kind = SK_Block;
   }
 
-  virtual ~BlockScopeInfo();
+  ~BlockScopeInfo() override;
 
   static bool classof(const FunctionScopeInfo *FSI) { 
     return FSI->Kind == SK_Block; 
@@ -583,7 +599,7 @@ public:
     Kind = SK_CapturedRegion;
   }
 
-  virtual ~CapturedRegionScopeInfo();
+  ~CapturedRegionScopeInfo() override;
 
   /// \brief A descriptive name for the kind of captured region this is.
   StringRef getRegionName() const {
@@ -682,13 +698,13 @@ public:
   LambdaScopeInfo(DiagnosticsEngine &Diag)
     : CapturingScopeInfo(Diag, ImpCap_None), Lambda(nullptr),
       CallOperator(nullptr), NumExplicitCaptures(0), Mutable(false),
-      ExprNeedsCleanups(false), ContainsUnexpandedParameterPack(false),
-      AutoTemplateParameterDepth(0), GLTemplateParameterList(nullptr)
-  {
+      ExplicitParams(false), ExprNeedsCleanups(false),
+      ContainsUnexpandedParameterPack(false), AutoTemplateParameterDepth(0),
+      GLTemplateParameterList(nullptr) {
     Kind = SK_Lambda;
   }
 
-  virtual ~LambdaScopeInfo();
+  ~LambdaScopeInfo() override;
 
   /// \brief Note when all explicit captures have been added.
   void finishedExplicitCaptures() {

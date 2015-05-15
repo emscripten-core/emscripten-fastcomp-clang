@@ -109,7 +109,7 @@ class MacroInfo {
 
   // Only the Preprocessor gets to create and destroy these.
   MacroInfo(SourceLocation DefLoc);
-  ~MacroInfo() {}
+  ~MacroInfo() = default;
 
 public:
   /// \brief Return the location that the macro was defined at.
@@ -444,7 +444,7 @@ public:
     bool isValid() const { return DefDirective != nullptr; }
     bool isInvalid() const { return !isValid(); }
 
-    LLVM_EXPLICIT operator bool() const { return isValid(); }
+    explicit operator bool() const { return isValid(); }
 
     inline DefInfo getPreviousDefinition();
     const DefInfo getPreviousDefinition() const {

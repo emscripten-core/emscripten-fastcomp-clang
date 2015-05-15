@@ -150,6 +150,8 @@ struct CodeGenTypeCache {
 
   llvm::CallingConv::ID RuntimeCC;
   llvm::CallingConv::ID getRuntimeCC() const { return RuntimeCC; }
+  llvm::CallingConv::ID BuiltinCC;
+  llvm::CallingConv::ID getBuiltinCC() const { return BuiltinCC; }
 };
 
 struct RREntrypoints {
@@ -256,9 +258,10 @@ public:
 /// This class organizes the cross-function state that is used while generating
 /// LLVM code.
 class CodeGenModule : public CodeGenTypeCache {
-  CodeGenModule(const CodeGenModule &) LLVM_DELETED_FUNCTION;
-  void operator=(const CodeGenModule &) LLVM_DELETED_FUNCTION;
+  CodeGenModule(const CodeGenModule &) = delete;
+  void operator=(const CodeGenModule &) = delete;
 
+public:
   struct Structor {
     Structor() : Priority(0), Initializer(nullptr), AssociatedData(nullptr) {}
     Structor(int Priority, llvm::Constant *Initializer,
@@ -272,6 +275,7 @@ class CodeGenModule : public CodeGenTypeCache {
 
   typedef std::vector<Structor> CtorList;
 
+private:
   ASTContext &Context;
   const LangOptions &LangOpts;
   const CodeGenOptions &CodeGenOpts;
@@ -320,7 +324,7 @@ class CodeGenModule : public CodeGenTypeCache {
   /// referenced. These get code generated when the module is done.
   struct DeferredGlobal {
     DeferredGlobal(llvm::GlobalValue *GV, GlobalDecl GD) : GV(GV), GD(GD) {}
-    llvm::AssertingVH<llvm::GlobalValue> GV;
+    llvm::TrackingVH<llvm::GlobalValue> GV;
     GlobalDecl GD;
   };
   std::vector<DeferredGlobal> DeferredDeclsToEmit;
@@ -362,7 +366,7 @@ class CodeGenModule : public CodeGenTypeCache {
   /// Map used to get unique annotation strings.
   llvm::StringMap<llvm::Constant*> AnnotationStrings;
 
-  llvm::StringMap<llvm::Constant*> CFConstantStringMap;
+  llvm::StringMap<llvm::GlobalVariable *> CFConstantStringMap;
 
   llvm::DenseMap<llvm::Constant *, llvm::GlobalVariable *> ConstantStringMap;
   llvm::DenseMap<const Decl*, llvm::Constant *> StaticLocalDeclMap;
@@ -396,7 +400,8 @@ class CodeGenModule : public CodeGenTypeCache {
   /// When a C++ decl with an initializer is deferred, null is
   /// appended to CXXGlobalInits, and the index of that null is placed
   /// here so that the initializer will be performed in the correct
-  /// order.
+  /// order. Once the decl is emitted, the index is replaced with ~0U to ensure
+  /// that we don't re-emit the initializer.
   llvm::DenseMap<const Decl*, unsigned> DelayedCXXInitPosition;
   
   typedef std::pair<OrderGlobalInits, llvm::Function*> GlobalInitData;
@@ -419,7 +424,7 @@ class CodeGenModule : public CodeGenTypeCache {
   llvm::SetVector<clang::Module *> ImportedModules;
 
   /// \brief A vector of metadata strings.
-  SmallVector<llvm::Value *, 16> LinkerOptionsMetadata;
+  SmallVector<llvm::Metadata *, 16> LinkerOptionsMetadata;
 
   /// @name Cache for Objective-C runtime types
   /// @{
@@ -589,9 +594,7 @@ public:
 
   llvm::MDNode *getNoObjCARCExceptionsMetadata() {
     if (!NoObjCARCExceptionsMetadata)
-      NoObjCARCExceptionsMetadata =
-        llvm::MDNode::get(getLLVMContext(),
-                          SmallVector<llvm::Value*,1>());
+      NoObjCARCExceptionsMetadata = llvm::MDNode::get(getLLVMContext(), None);
     return NoObjCARCExceptionsMetadata;
   }
 
@@ -604,6 +607,7 @@ public:
   const TargetInfo &getTarget() const { return Target; }
   const llvm::Triple &getTriple() const;
   bool supportsCOMDAT() const;
+  void maybeSetTrivialComdat(const Decl &D, llvm::GlobalObject &GO);
 
   CGCXXABI &getCXXABI() const { return *ABI; }
   llvm::LLVMContext &getLLVMContext() { return VMContext; }
@@ -623,6 +627,9 @@ public:
   MicrosoftVTableContext &getMicrosoftVTableContext() {
     return VTables.getMicrosoftVTableContext();
   }
+
+  CtorList &getGlobalCtors() { return GlobalCtors; }
+  CtorList &getGlobalDtors() { return GlobalDtors; }
 
   llvm::MDNode *getTBAAInfo(QualType QTy);
   llvm::MDNode *getTBAAInfoForVTablePtr();
@@ -713,6 +720,9 @@ public:
   /// Get the address of the RTTI descriptor for the given type.
   llvm::Constant *GetAddrOfRTTIDescriptor(QualType Ty, bool ForEH = false);
 
+  llvm::Constant *getAddrOfCXXCatchHandlerType(QualType Ty,
+                                               QualType CatchHandlerType);
+
   /// Get the address of a uuid descriptor .
   llvm::Constant *GetAddrOfUuidDescriptor(const CXXUuidofExpr* E);
 
@@ -777,7 +787,7 @@ public:
   /// Return a pointer to a constant NSString object for the given string. Or a
   /// user defined String object as defined via
   /// -fconstant-string-class=class_name option.
-  llvm::Constant *GetAddrOfConstantString(const StringLiteral *Literal);
+  llvm::GlobalVariable *GetAddrOfConstantString(const StringLiteral *Literal);
 
   /// Return a constant array for the given string.
   llvm::Constant *GetConstantArrayFromStringLiteral(const StringLiteral *E);
@@ -871,6 +881,11 @@ public:
 
   /// Create a new runtime function with the specified type and name.
   llvm::Constant *CreateRuntimeFunction(llvm::FunctionType *Ty,
+                                        StringRef Name,
+                                        llvm::AttributeSet ExtraAttrs =
+                                          llvm::AttributeSet());
+  /// Create a new compiler builtin function with the specified type and name.
+  llvm::Constant *CreateBuiltinFunction(llvm::FunctionType *Ty,
                                         StringRef Name,
                                         llvm::AttributeSet ExtraAttrs =
                                           llvm::AttributeSet());
@@ -983,7 +998,7 @@ public:
 
   void EmitTentativeDefinition(const VarDecl *D);
 
-  void EmitVTable(CXXRecordDecl *Class, bool DefinitionRequired);
+  void EmitVTable(CXXRecordDecl *Class);
 
   /// Emit the RTTI descriptors for the builtin types.
   void EmitFundamentalRTTIDescriptors();
@@ -1092,6 +1107,14 @@ public:
   /// \param D Threadprivate declaration.
   void EmitOMPThreadPrivateDecl(const OMPThreadPrivateDecl *D);
 
+  /// Emit bit set entries for the given vtable using the given layout if
+  /// vptr CFI is enabled.
+  void EmitVTableBitSetEntries(llvm::GlobalVariable *VTable,
+                               const VTableLayout &VTLayout);
+
+  /// \breif Get the declaration of std::terminate for the platform.
+  llvm::Constant *getTerminateFn();
+
 private:
   llvm::Constant *
   GetOrCreateLLVMFunction(StringRef MangledName, llvm::Type *Ty, GlobalDecl D,
@@ -1190,9 +1213,15 @@ private:
   /// Emits the initializer for a uuidof string.
   llvm::Constant *EmitUuidofInitializer(StringRef uuidstr);
 
-  /// Determine if the given decl can be emitted lazily; this is only relevant
-  /// for definitions. The given decl must be either a function or var decl.
-  bool MayDeferGeneration(const ValueDecl *D);
+  /// Determine whether the definition must be emitted; if this returns \c
+  /// false, the definition can be emitted lazily if it's used.
+  bool MustBeEmitted(const ValueDecl *D);
+
+  /// Determine whether the definition can be emitted eagerly, or should be
+  /// delayed until the end of the translation unit. This is relevant for
+  /// definitions whose linkage can change, e.g. implicit function instantions
+  /// which may later be explicitly instantiated.
+  bool MayBeEmittedEagerly(const ValueDecl *D);
 
   /// Check whether we can use a "simpler", more core exceptions personality
   /// function.

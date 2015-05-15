@@ -79,12 +79,11 @@ public:
     ///   - guard variables  are smaller.
     GenericAArch64,
 
-    // @LOCALMOD-START Emscripten
-    /// Emscripten uses the Itanium C++, with the exception that it uses
-    /// ARM-style pointers to member functions.
-    Emscripten,
-    // @LOCALMOD-END Emscripten
-
+    /// The generic Mips ABI is a modified version of the Itanium ABI.
+    ///
+    /// At the moment, only change from the generic ABI in this case is:
+    ///   - representation of member function pointers adjusted as in ARM.
+    GenericMIPS,
     /// The Microsoft ABI is the ABI used by Microsoft Visual Studio (and
     /// compatible compilers).
     ///
@@ -118,9 +117,9 @@ public:
     case GenericAArch64:
     case GenericItanium:
     case GenericARM:
-    case Emscripten: // @LOCALMOD Emscripten
     case iOS:
     case iOS64:
+    case GenericMIPS:
       return true;
 
     case Microsoft:
@@ -135,9 +134,9 @@ public:
     case GenericAArch64:
     case GenericItanium:
     case GenericARM:
-    case Emscripten: // @LOCALMOD Emscripten
     case iOS:
     case iOS64:
+    case GenericMIPS:
       return false;
 
     case Microsoft:
@@ -145,29 +144,6 @@ public:
     }
     llvm_unreachable("bad ABI kind");
   }
-
-  // @LOCALMOD-START Emscripten
-  /// \brief Are pointers to member functions differently aligned?
-  bool arePointersToMemberFunctionsAligned() const {
-    switch (getKind()) {
-    case Emscripten:
-      // Emscripten uses table indices for function pointers and therefore
-      // doesn't require alignment.
-      return false;
-    case GenericARM:
-    case GenericAArch64:
-      // TODO: ARM-style pointers to member functions put the discriminator in
-      //       the this adjustment, so they don't require functions to have any
-      //       special alignment and could therefore also return false.
-    case GenericItanium:
-    case iOS:
-    case iOS64:
-    case Microsoft:
-      return true;
-    }
-    llvm_unreachable("bad ABI kind");
-  }
-  // @LOCALMOD-END Emscripten
 
   /// \brief Is the default C++ member function calling convention
   /// the same as the default calling convention?
@@ -241,9 +217,9 @@ public:
 
     case GenericAArch64:
     case GenericItanium:
-    case Emscripten: // @LOCALMOD Emscripten
     case iOS:   // old iOS compilers did not follow this rule
     case Microsoft:
+    case GenericMIPS:
       return true;
     }
     llvm_unreachable("bad ABI kind");
@@ -288,8 +264,8 @@ public:
     case GenericItanium:
     case GenericAArch64:
     case GenericARM:
-    case Emscripten: // @LOCALMOD Emscripten
     case iOS:
+    case GenericMIPS:
       return UseTailPaddingUnlessPOD03;
 
     // iOS on ARM64 uses the C++11 POD rules.  It does not honor the

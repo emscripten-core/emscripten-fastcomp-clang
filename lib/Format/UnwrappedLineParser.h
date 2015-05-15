@@ -95,6 +95,7 @@ private:
   void parseCaseLabel();
   void parseSwitch();
   void parseNamespace();
+  void parseNew();
   void parseAccessSpecifier();
   void parseEnum();
   void parseJavaEnumBody();
@@ -103,6 +104,7 @@ private:
   void parseObjCUntilAtEnd();
   void parseObjCInterfaceOrImplementation();
   void parseObjCProtocol();
+  void parseJavaScriptEs6ImportExport();
   bool tryToParseLambda();
   bool tryToParseLambdaIntroducer();
   void tryToParseJSFunction();

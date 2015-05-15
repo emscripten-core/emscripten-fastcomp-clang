@@ -95,6 +95,7 @@ using llvm::opt::ArgStringList;
     bool hasGoodDiagnostics() const override { return true; }
     bool hasIntegratedAssembler() const override { return true; }
     bool hasIntegratedCPP() const override { return true; }
+    bool canEmitIR() const override { return true; }
 
     void ConstructJob(Compilation &C, const JobAction &JA,
                       const InputInfo &Output, const InputInfoList &Inputs,
@@ -108,7 +109,8 @@ using llvm::opt::ArgStringList;
     ClangAs(const ToolChain &TC) : Tool("clang::as",
                                         "clang integrated assembler", TC,
                                         RF_Full) {}
-
+    void AddMIPSTargetArgs(const llvm::opt::ArgList &Args,
+                           llvm::opt::ArgStringList &CmdArgs) const;
     bool hasGoodDiagnostics() const override { return true; }
     bool hasIntegratedAssembler() const override { return false; }
     bool hasIntegratedCPP() const override { return false; }
@@ -227,9 +229,16 @@ namespace arm {
   const char* getARMCPUForMArch(const llvm::opt::ArgList &Args,
                                 const llvm::Triple &Triple);
   const char* getLLVMArchSuffixForARM(StringRef CPU);
+
+  void appendEBLinkFlags(const llvm::opt::ArgList &Args, ArgStringList &CmdArgs, const llvm::Triple &Triple);
 }
 
 namespace mips {
+  typedef enum {
+    NanLegacy = 1,
+    Nan2008 = 2
+  } NanEncoding;
+  NanEncoding getSupportedNanEncoding(StringRef &CPU);
   void getMipsCPUAndABI(const llvm::opt::ArgList &Args,
                         const llvm::Triple &Triple, StringRef &CPUName,
                         StringRef &ABIName);
@@ -243,6 +252,22 @@ namespace mips {
 namespace ppc {
   bool hasPPCAbiArg(const llvm::opt::ArgList &Args, const char *Value);
 }
+
+  /// cloudabi -- Directly call GNU Binutils linker
+namespace cloudabi {
+class LLVM_LIBRARY_VISIBILITY Link : public GnuTool {
+public:
+  Link(const ToolChain &TC) : GnuTool("cloudabi::Link", "linker", TC) {}
+
+  bool hasIntegratedCPP() const override { return false; }
+  bool isLinkJob() const override { return true; }
+
+  void ConstructJob(Compilation &C, const JobAction &JA,
+                    const InputInfo &Output, const InputInfoList &Inputs,
+                    const llvm::opt::ArgList &TCArgs,
+                    const char *LinkingOutput) const override;
+};
+} // end namespace cloudabi
 
 namespace darwin {
   llvm::Triple::ArchType getArchTypeForMachOArchName(StringRef Str);
@@ -488,8 +513,6 @@ namespace gnutools {
   };
 }
 
-// @LOCALMOD-BEGIN
-/// nacltools -- Directly call GNU Binutils' assembler and linker.
 namespace nacltools {
   class LLVM_LIBRARY_VISIBILITY AssembleARM : public gnutools::Assemble  {
   public:
@@ -515,8 +538,6 @@ namespace nacltools {
                               const char *LinkingOutput) const override;
   };
 }
-// @LOCALMOD-END
-
 
   /// minix -- Directly call GNU Binutils assembler and linker
 namespace minix {
