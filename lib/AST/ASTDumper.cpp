@@ -508,6 +508,8 @@ namespace  {
     void VisitCXXFunctionalCastExpr(const CXXFunctionalCastExpr *Node);
     void VisitCXXConstructExpr(const CXXConstructExpr *Node);
     void VisitCXXBindTemporaryExpr(const CXXBindTemporaryExpr *Node);
+    void VisitCXXNewExpr(const CXXNewExpr *Node);
+    void VisitCXXDeleteExpr(const CXXDeleteExpr *Node);
     void VisitMaterializeTemporaryExpr(const MaterializeTemporaryExpr *Node);
     void VisitExprWithCleanups(const ExprWithCleanups *Node);
     void VisitUnresolvedLookupExpr(const UnresolvedLookupExpr *Node);
@@ -516,6 +518,7 @@ namespace  {
       VisitExpr(Node);
       dumpDecl(Node->getLambdaClass());
     }
+    void VisitSizeOfPackExpr(const SizeOfPackExpr *Node);
 
     // ObjC
     void VisitObjCAtCatchStmt(const ObjCAtCatchStmt *Node);
@@ -987,6 +990,10 @@ void ASTDumper::dumpDecl(const Decl *D) {
       OS << " referenced";
     if (D->isInvalidDecl())
       OS << " invalid";
+    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
+      if (FD->isConstexpr())
+        OS << " constexpr";
+
 
     ConstDeclVisitor<ASTDumper>::Visit(D);
 
@@ -1095,10 +1102,13 @@ void ASTDumper::VisitFunctionDecl(const FunctionDecl *D) {
        E = D->getDeclsInPrototypeScope().end(); I != E; ++I)
     dumpDecl(*I);
 
-  for (FunctionDecl::param_const_iterator I = D->param_begin(),
-                                          E = D->param_end();
-       I != E; ++I)
-    dumpDecl(*I);
+  if (!D->param_begin() && D->getNumParams())
+    dumpChild([=] { OS << "<<NULL params x " << D->getNumParams() << ">>"; });
+  else
+    for (FunctionDecl::param_const_iterator I = D->param_begin(),
+                                            E = D->param_end();
+         I != E; ++I)
+      dumpDecl(*I);
 
   if (const CXXConstructorDecl *C = dyn_cast<CXXConstructorDecl>(D))
     for (CXXConstructorDecl::init_const_iterator I = C->init_begin(),
@@ -1909,6 +1919,32 @@ void ASTDumper::VisitCXXBindTemporaryExpr(const CXXBindTemporaryExpr *Node) {
   dumpCXXTemporary(Node->getTemporary());
 }
 
+void ASTDumper::VisitCXXNewExpr(const CXXNewExpr *Node) {
+  VisitExpr(Node);
+  if (Node->isGlobalNew())
+    OS << " global";
+  if (Node->isArray())
+    OS << " array";
+  if (Node->getOperatorNew()) {
+    OS << ' ';
+    dumpBareDeclRef(Node->getOperatorNew());
+  }
+  // We could dump the deallocation function used in case of error, but it's
+  // usually not that interesting.
+}
+
+void ASTDumper::VisitCXXDeleteExpr(const CXXDeleteExpr *Node) {
+  VisitExpr(Node);
+  if (Node->isGlobalDelete())
+    OS << " global";
+  if (Node->isArrayForm())
+    OS << " array";
+  if (Node->getOperatorDelete()) {
+    OS << ' ';
+    dumpBareDeclRef(Node->getOperatorDelete());
+  }
+}
+
 void
 ASTDumper::VisitMaterializeTemporaryExpr(const MaterializeTemporaryExpr *Node) {
   VisitExpr(Node);
@@ -1929,6 +1965,13 @@ void ASTDumper::dumpCXXTemporary(const CXXTemporary *Temporary) {
   dumpPointer(Temporary);
   OS << ")";
 }
+
+void ASTDumper::VisitSizeOfPackExpr(const SizeOfPackExpr *Node) {
+  VisitExpr(Node);
+  dumpPointer(Node->getPack());
+  dumpName(Node->getPack());
+}
+
 
 //===----------------------------------------------------------------------===//
 // Obj-C Expressions
@@ -2248,6 +2291,11 @@ LLVM_DUMP_METHOD void Stmt::dump(SourceManager &SM) const {
 
 LLVM_DUMP_METHOD void Stmt::dump(raw_ostream &OS, SourceManager &SM) const {
   ASTDumper P(OS, nullptr, &SM);
+  P.dumpStmt(this);
+}
+
+LLVM_DUMP_METHOD void Stmt::dump(raw_ostream &OS) const {
+  ASTDumper P(OS, nullptr, nullptr);
   P.dumpStmt(this);
 }
 

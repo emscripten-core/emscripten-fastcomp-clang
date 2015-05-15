@@ -143,14 +143,8 @@ Lexer::Lexer(SourceLocation fileloc, const LangOptions &langOpts,
 /// range will outlive it, so it doesn't take ownership of it.
 Lexer::Lexer(FileID FID, const llvm::MemoryBuffer *FromFile,
              const SourceManager &SM, const LangOptions &langOpts)
-  : FileLoc(SM.getLocForStartOfFile(FID)), LangOpts(langOpts) {
-
-  InitLexer(FromFile->getBufferStart(), FromFile->getBufferStart(),
-            FromFile->getBufferEnd());
-
-  // We *are* in raw mode.
-  LexingRawMode = true;
-}
+    : Lexer(SM.getLocForStartOfFile(FID), langOpts, FromFile->getBufferStart(),
+            FromFile->getBufferStart(), FromFile->getBufferEnd()) {}
 
 /// Create_PragmaLexer: Lexer constructor - Create a new lexer object for
 /// _Pragma expansion.  This has a variety of magic semantics that this method
@@ -2588,8 +2582,8 @@ static const char *FindConflictEnd(const char *CurPtr, const char *BufferEnd,
   size_t Pos = RestOfBuffer.find(Terminator);
   while (Pos != StringRef::npos) {
     // Must occur at start of line.
-    if (RestOfBuffer[Pos-1] != '\r' &&
-        RestOfBuffer[Pos-1] != '\n') {
+    if (Pos == 0 ||
+        (RestOfBuffer[Pos - 1] != '\r' && RestOfBuffer[Pos - 1] != '\n')) {
       RestOfBuffer = RestOfBuffer.substr(Pos+TermLen);
       Pos = RestOfBuffer.find(Terminator);
       continue;

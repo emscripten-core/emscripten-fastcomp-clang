@@ -34,6 +34,7 @@ using namespace CodeGen;
 void CodeGenFunction::EmitDecl(const Decl &D) {
   switch (D.getKind()) {
   case Decl::TranslationUnit:
+  case Decl::ExternCContext:
   case Decl::Namespace:
   case Decl::UnresolvedUsingTypename:
   case Decl::ClassTemplateSpecialization:
@@ -205,6 +206,8 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
                              AddrSpace);
   GV->setAlignment(getContext().getDeclAlign(&D).getQuantity());
   setGlobalVisibility(GV, &D);
+
+  maybeSetTrivialComdat(*GV);
 
   if (D.getTLSKind())
     setTLSMode(GV, D);
@@ -596,10 +599,8 @@ static void drillIntoBlockVariable(CodeGenFunction &CGF,
   lvalue.setAddress(CGF.BuildBlockByrefAddress(lvalue.getAddress(), var));
 }
 
-void CodeGenFunction::EmitScalarInit(const Expr *init,
-                                     const ValueDecl *D,
-                                     LValue lvalue,
-                                     bool capturedByInit) {
+void CodeGenFunction::EmitScalarInit(const Expr *init, const ValueDecl *D,
+                                     LValue lvalue, bool capturedByInit) {
   Qualifiers::ObjCLifetime lifetime = lvalue.getObjCLifetime();
   if (!lifetime) {
     llvm::Value *value = EmitScalarExpr(init);
@@ -633,8 +634,9 @@ void CodeGenFunction::EmitScalarInit(const Expr *init,
     if (capturedByInit) {
       // We can use a simple GEP for this because it can't have been
       // moved yet.
-      tempLV.setAddress(Builder.CreateStructGEP(tempLV.getAddress(),
-                                   getByRefValueLLVMField(cast<VarDecl>(D))));
+      tempLV.setAddress(Builder.CreateStructGEP(
+          nullptr, tempLV.getAddress(),
+          getByRefValueLLVMField(cast<VarDecl>(D)).second));
     }
 
     llvm::PointerType *ty
@@ -795,8 +797,9 @@ static void emitStoresForInitAfterMemset(llvm::Constant *Init, llvm::Value *Loc,
 
       // If necessary, get a pointer to the element and emit it.
       if (!Elt->isNullValue() && !isa<llvm::UndefValue>(Elt))
-        emitStoresForInitAfterMemset(Elt, Builder.CreateConstGEP2_32(Loc, 0, i),
-                                     isVolatile, Builder);
+        emitStoresForInitAfterMemset(
+            Elt, Builder.CreateConstGEP2_32(Init->getType(), Loc, 0, i),
+            isVolatile, Builder);
     }
     return;
   }
@@ -809,8 +812,9 @@ static void emitStoresForInitAfterMemset(llvm::Constant *Init, llvm::Value *Loc,
 
     // If necessary, get a pointer to the element and emit it.
     if (!Elt->isNullValue() && !isa<llvm::UndefValue>(Elt))
-      emitStoresForInitAfterMemset(Elt, Builder.CreateConstGEP2_32(Loc, 0, i),
-                                   isVolatile, Builder);
+      emitStoresForInitAfterMemset(
+          Elt, Builder.CreateConstGEP2_32(Init->getType(), Loc, 0, i),
+          isVolatile, Builder);
   }
 }
 
@@ -1089,6 +1093,7 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
   if (emission.wasEmittedAsGlobal()) return;
 
   const VarDecl &D = *emission.Variable;
+  auto DL = ApplyDebugLocation::CreateDefaultArtificial(*this, D.getLocation());
   QualType type = D.getType();
 
   // If this local has an initializer, emit it now.
@@ -1192,10 +1197,8 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
 /// \param alignment the alignment of the address
 /// \param capturedByInit true if the variable is a __block variable
 ///   whose address is potentially changed by the initializer
-void CodeGenFunction::EmitExprAsInit(const Expr *init,
-                                     const ValueDecl *D,
-                                     LValue lvalue,
-                                     bool capturedByInit) {
+void CodeGenFunction::EmitExprAsInit(const Expr *init, const ValueDecl *D,
+                                     LValue lvalue, bool capturedByInit) {
   QualType type = D->getType();
 
   if (type->isReferenceType()) {

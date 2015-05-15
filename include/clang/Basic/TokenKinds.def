@@ -116,8 +116,6 @@ TOK(eof)                 // End of file.
 TOK(eod)                 // End of preprocessing directive (end of line inside a
                          // directive).
 TOK(code_completion)     // Code completion marker
-TOK(cxx_defaultarg_end)  // C++ default argument end marker
-TOK(cxx_exceptspec_end)  // C++ exception-specification end marker
 
 // C99 6.4.9: Comments.
 TOK(comment)             // Comment (only in -E -C[C] mode)
@@ -227,9 +225,10 @@ PUNCTUATOR(greatergreatergreater, ">>>")
 //   KEYCXX11 - This is a C++ keyword introduced to C++ in C++11
 //   KEYGNU   - This is a keyword if GNU extensions are enabled
 //   KEYMS    - This is a keyword if Microsoft extensions are enabled
-//   KEYNOMS  - This is a keyword that must never be enabled under
-//              Microsoft mode
+//   KEYNOMS18 - This is a keyword that must never be enabled under
+//               MSVC <= v18.
 //   KEYOPENCL  - This is a keyword in OpenCL
+//   KEYNOOPENCL  - This is a keyword that is not supported in OpenCL
 //   KEYALTIVEC - This is a keyword in AltiVec
 //   KEYBORLAND - This is a keyword if Borland extensions are enabled
 //   BOOLSUPPORT - This is a keyword if 'bool' is a built-in type
@@ -272,7 +271,7 @@ KEYWORD(volatile                    , KEYALL)
 KEYWORD(while                       , KEYALL)
 KEYWORD(_Alignas                    , KEYALL)
 KEYWORD(_Alignof                    , KEYALL)
-KEYWORD(_Atomic                     , KEYALL|KEYNOMS)
+KEYWORD(_Atomic                     , KEYALL|KEYNOMS18|KEYNOOPENCL)
 KEYWORD(_Bool                       , KEYNOCXX)
 KEYWORD(_Complex                    , KEYALL)
 KEYWORD(_Generic                    , KEYALL)
@@ -333,8 +332,8 @@ CXX_KEYWORD_OPERATOR(xor_eq  , caretequal)
 // C++11 keywords
 KEYWORD(alignas                     , KEYCXX11)
 KEYWORD(alignof                     , KEYCXX11)
-KEYWORD(char16_t                    , KEYCXX11|KEYNOMS)
-KEYWORD(char32_t                    , KEYCXX11|KEYNOMS)
+KEYWORD(char16_t                    , KEYCXX11|KEYNOMS18)
+KEYWORD(char32_t                    , KEYCXX11|KEYNOMS18)
 KEYWORD(constexpr                   , KEYCXX11)
 KEYWORD(decltype                    , KEYCXX11)
 KEYWORD(noexcept                    , KEYCXX11)
@@ -497,6 +496,7 @@ KEYWORD(__pascal                    , KEYALL)
 // Altivec Extension.
 KEYWORD(__vector                    , KEYALTIVEC)
 KEYWORD(__pixel                     , KEYALTIVEC)
+KEYWORD(__bool                      , KEYALTIVEC)
 
 // ARM NEON extensions.
 ALIAS("__fp16", half                , KEYALL)

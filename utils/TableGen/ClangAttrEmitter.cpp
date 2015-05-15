@@ -12,8 +12,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/TableGen/Error.h"
@@ -28,6 +28,7 @@
 
 using namespace llvm;
 
+namespace {
 class FlattenedSpelling {
   std::string V, N, NS;
   bool K;
@@ -53,8 +54,10 @@ public:
   const std::string &nameSpace() const { return NS; }
   bool knownToGCC() const { return K; }
 };
+} // namespace
 
-std::vector<FlattenedSpelling> GetFlattenedSpellings(const Record &Attr) {
+static std::vector<FlattenedSpelling>
+GetFlattenedSpellings(const Record &Attr) {
   std::vector<Record *> Spellings = Attr.getValueAsListOfDefs("Spellings");
   std::vector<FlattenedSpelling> Ret;
 
@@ -112,11 +115,7 @@ static StringRef NormalizeAttrName(StringRef AttrName) {
 // This is different from NormalizeAttrName in that it also handles names like
 // _pascal and __pascal.
 static StringRef NormalizeNameForSpellingComparison(StringRef Name) {
-  while (Name.startswith("_"))
-    Name = Name.substr(1, Name.size());
-  while (Name.endswith("_"))
-    Name = Name.substr(0, Name.size() - 1);
-  return Name;
+  return Name.trim("_");
 }
 
 // Normalize attribute spelling only if the spelling has both leading
@@ -1162,7 +1161,7 @@ writePrettyPrintFunction(Record &R,
 
     OS <<
       "  case " << I << " : {\n"
-      "    OS << \"" + Prefix.str() + Spelling.str();
+      "    OS << \"" << Prefix << Spelling;
 
     if (Variety == "Pragma") {
       OS << " \";\n";
@@ -1190,7 +1189,7 @@ writePrettyPrintFunction(Record &R,
 
     if (!Args.empty())
       OS << ")";
-    OS << Suffix.str() + "\";\n";
+    OS << Suffix + "\";\n";
 
     OS <<
       "    break;\n"
@@ -1207,7 +1206,7 @@ writePrettyPrintFunction(Record &R,
 static unsigned
 getSpellingListIndex(const std::vector<FlattenedSpelling> &SpellingList,
                      const FlattenedSpelling &Spelling) {
-  assert(SpellingList.size() && "Spelling list is empty!");
+  assert(!SpellingList.empty() && "Spelling list is empty!");
 
   for (unsigned Index = 0; Index < SpellingList.size(); ++Index) {
     const FlattenedSpelling &S = SpellingList[Index];
@@ -1231,7 +1230,7 @@ static void writeAttrAccessorDefinition(const Record &R, raw_ostream &OS) {
     std::vector<FlattenedSpelling> Spellings = 
       GetFlattenedSpellings(*Accessor);
     std::vector<FlattenedSpelling> SpellingList = GetFlattenedSpellings(R);
-    assert(SpellingList.size() &&
+    assert(!SpellingList.empty() &&
            "Attribute with empty spelling list can't have accessors!");
 
     OS << "  bool " << Name << "() const { return SpellingListIndex == ";
@@ -1297,7 +1296,11 @@ CreateSemanticSpellings(const std::vector<FlattenedSpelling> &Spellings,
     Uniques.insert(EnumName);
     if (I != Spellings.begin())
       Ret += ",\n";
-    Ret += "    " + EnumName;
+    // Duplicate spellings are not considered part of the semantic spelling
+    // enumeration, but the spelling index and semantic spelling values are
+    // meant to be equivalent, so we must specify a concrete value for each
+    // enumerator.
+    Ret += "    " + EnumName + " = " + llvm::utostr(Idx);
   }
   Ret += "\n  };\n\n";
   return Ret;
@@ -1387,6 +1390,7 @@ static bool isIdentifierArgument(Record *Arg) {
     llvm::StringSwitch<bool>(Arg->getSuperClasses().back()->getName())
     .Case("IdentifierArgument", true)
     .Case("EnumArgument", true)
+    .Case("VariadicEnumArgument", true)
     .Default(false);
 }
 
@@ -1512,7 +1516,9 @@ void EmitClangAttrClass(RecordKeeper &Records, raw_ostream &OS) {
     OS << "unsigned SI\n";
 
     OS << "             )\n";
-    OS << "    : " << SuperName << "(attr::" << R.getName() << ", R, SI)\n";
+    OS << "    : " << SuperName << "(attr::" << R.getName() << ", R, SI, "
+       << R.getValueAsBit("LateParsed") << ", "
+       << R.getValueAsBit("DuplicatesAllowedWhileMerging") << ")\n";
 
     for (auto const &ai : Args) {
       OS << "              , ";
@@ -1544,7 +1550,9 @@ void EmitClangAttrClass(RecordKeeper &Records, raw_ostream &OS) {
       OS << "unsigned SI\n";
 
       OS << "             )\n";
-      OS << "    : " << SuperName << "(attr::" << R.getName() << ", R, SI)\n";
+      OS << "    : " << SuperName << "(attr::" << R.getName() << ", R, SI, "
+         << R.getValueAsBit("LateParsed") << ", "
+         << R.getValueAsBit("DuplicatesAllowedWhileMerging") << ")\n";
 
       for (auto const &ai : Args) {
         OS << "              , ";
@@ -1563,10 +1571,10 @@ void EmitClangAttrClass(RecordKeeper &Records, raw_ostream &OS) {
       OS << "  }\n\n";
     }
 
-    OS << "  " << R.getName() << "Attr *clone(ASTContext &C) const override;\n";
+    OS << "  " << R.getName() << "Attr *clone(ASTContext &C) const;\n";
     OS << "  void printPretty(raw_ostream &OS,\n"
-       << "                   const PrintingPolicy &Policy) const override;\n";
-    OS << "  const char *getSpelling() const override;\n";
+       << "                   const PrintingPolicy &Policy) const;\n";
+    OS << "  const char *getSpelling() const;\n";
     
     if (!ElideSpelling) {
       assert(!SemanticToSyntacticMap.empty() && "Empty semantic mapping list");
@@ -1594,13 +1602,6 @@ void EmitClangAttrClass(RecordKeeper &Records, raw_ostream &OS) {
 
     OS << "  static bool classof(const Attr *A) { return A->getKind() == "
        << "attr::" << R.getName() << "; }\n";
-
-    bool LateParsed = R.getValueAsBit("LateParsed");
-    OS << "  bool isLateParsed() const override { return "
-       << LateParsed << "; }\n";
-
-    if (R.getValueAsBit("DuplicatesAllowedWhileMerging"))
-      OS << "  bool duplicatesAllowed() const override { return true; }\n\n";
 
     OS << "};\n\n";
   }
@@ -1644,6 +1645,36 @@ void EmitClangAttrImpl(RecordKeeper &Records, raw_ostream &OS) {
     writePrettyPrintFunction(R, Args, OS);
     writeGetSpellingFunction(R, OS);
   }
+
+  // Instead of relying on virtual dispatch we just create a huge dispatch
+  // switch. This is both smaller and faster than virtual functions.
+  auto EmitFunc = [&](const char *Method) {
+    OS << "  switch (getKind()) {\n";
+    for (const auto *Attr : Attrs) {
+      const Record &R = *Attr;
+      if (!R.getValueAsBit("ASTNode"))
+        continue;
+
+      OS << "  case attr::" << R.getName() << ":\n";
+      OS << "    return cast<" << R.getName() << "Attr>(this)->" << Method
+         << ";\n";
+    }
+    OS << "  case attr::NUM_ATTRS:\n";
+    OS << "    break;\n";
+    OS << "  }\n";
+    OS << "  llvm_unreachable(\"Unexpected attribute kind!\");\n";
+    OS << "}\n\n";
+  };
+
+  OS << "const char *Attr::getSpelling() const {\n";
+  EmitFunc("getSpelling()");
+
+  OS << "Attr *Attr::clone(ASTContext &C) const {\n";
+  EmitFunc("clone(C)");
+
+  OS << "void Attr::printPretty(raw_ostream &OS, "
+        "const PrintingPolicy &Policy) const {\n";
+  EmitFunc("printPretty(OS, Policy)");
 }
 
 } // end namespace clang
@@ -1920,9 +1951,6 @@ void EmitClangAttrHasAttrImpl(RecordKeeper &Records, raw_ostream &OS) {
   }
 
   OS << "switch (Syntax) {\n";
-  OS << "case AttrSyntax::Generic:\n";
-  OS << "  return llvm::StringSwitch<int>(Name)\n";
-  GenerateHasAttrSpellingStringSwitch(Attrs, OS);
   OS << "case AttrSyntax::GNU:\n";
   OS << "  return llvm::StringSwitch<int>(Name)\n";
   GenerateHasAttrSpellingStringSwitch(GNU, OS, "GNU");
@@ -2755,17 +2783,9 @@ static void WriteCategoryHeader(const Record *DocCategory,
 
   // If there is content, print that as well.
   std::string ContentStr = DocCategory->getValueAsString("Content");
-  if (!ContentStr.empty()) {
-    // Trim leading and trailing newlines and spaces.
-    StringRef Content(ContentStr);
-    while (Content.startswith("\r") || Content.startswith("\n") ||
-           Content.startswith(" ") || Content.startswith("\t"))
-           Content = Content.substr(1);
-    while (Content.endswith("\r") || Content.endswith("\n") ||
-           Content.endswith(" ") || Content.endswith("\t"))
-           Content = Content.substr(0, Content.size() - 1);
-    OS << Content;
-  }
+  // Trim leading and trailing newlines and spaces.
+  OS << StringRef(ContentStr).trim();
+
   OS << "\n\n";
 }
 
@@ -2887,14 +2907,7 @@ static void WriteDocumentation(const DocumentationData &Doc,
 
   std::string ContentStr = Doc.Documentation->getValueAsString("Content");
   // Trim leading and trailing newlines and spaces.
-  StringRef Content(ContentStr);
-  while (Content.startswith("\r") || Content.startswith("\n") ||
-         Content.startswith(" ") || Content.startswith("\t"))
-    Content = Content.substr(1);
-  while (Content.endswith("\r") || Content.endswith("\n") ||
-         Content.endswith(" ") || Content.endswith("\t"))
-    Content = Content.substr(0, Content.size() - 1);
-  OS << Content;
+  OS << StringRef(ContentStr).trim();
 
   OS << "\n\n\n";
 }

@@ -8,19 +8,19 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoverageMappingGen.h"
-#include "clang/CodeGen/CodeGenAction.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
-#include "clang/AST/DeclGroup.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclGroup.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
-#include "clang/Lex/Preprocessor.h"
 #include "clang/CodeGen/BackendUtil.h"
+#include "clang/CodeGen/CodeGenAction.h"
 #include "clang/CodeGen/ModuleBuilder.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
+#include "clang/Lex/Preprocessor.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/IR/DebugInfo.h"
@@ -46,7 +46,7 @@ namespace clang {
     const CodeGenOptions &CodeGenOpts;
     const TargetOptions &TargetOpts;
     const LangOptions &LangOpts;
-    raw_ostream *AsmOutStream;
+    raw_pwrite_stream *AsmOutStream;
     ASTContext *Context;
 
     Timer LLVMIRGeneration;
@@ -61,13 +61,12 @@ namespace clang {
                     const TargetOptions &targetopts,
                     const LangOptions &langopts, bool TimePasses,
                     const std::string &infile, llvm::Module *LinkModule,
-                    raw_ostream *OS, LLVMContext &C,
+                    raw_pwrite_stream *OS, LLVMContext &C,
                     CoverageSourceInfo *CoverageInfo = nullptr)
         : Diags(_Diags), Action(action), CodeGenOpts(compopts),
           TargetOpts(targetopts), LangOpts(langopts), AsmOutStream(OS),
-          Context(), LLVMIRGeneration("LLVM IR Generation Time"),
-          Gen(CreateLLVMCodeGen(Diags, infile, compopts,
-                                targetopts, C, CoverageInfo)),
+          Context(nullptr), LLVMIRGeneration("LLVM IR Generation Time"),
+          Gen(CreateLLVMCodeGen(Diags, infile, compopts, C, CoverageInfo)),
           LinkModule(LinkModule) {
       llvm::TimePassesIsEnabled = TimePasses;
     }
@@ -196,8 +195,8 @@ namespace clang {
       Gen->CompleteTentativeDefinition(D);
     }
 
-    void HandleVTable(CXXRecordDecl *RD, bool DefinitionRequired) override {
-      Gen->HandleVTable(RD, DefinitionRequired);
+    void HandleVTable(CXXRecordDecl *RD) override {
+      Gen->HandleVTable(RD);
     }
 
     void HandleLinkerOptionPragma(llvm::StringRef Opts) override {
@@ -602,9 +601,8 @@ llvm::LLVMContext *CodeGenAction::takeLLVMContext() {
   return VMContext;
 }
 
-static raw_ostream *GetOutputStream(CompilerInstance &CI,
-                                    StringRef InFile,
-                                    BackendAction Action) {
+static raw_pwrite_stream *
+GetOutputStream(CompilerInstance &CI, StringRef InFile, BackendAction Action) {
   switch (Action) {
   case Backend_EmitAssembly:
     return CI.createDefaultOutputFile(false, InFile, "s");
@@ -626,7 +624,7 @@ static raw_ostream *GetOutputStream(CompilerInstance &CI,
 std::unique_ptr<ASTConsumer>
 CodeGenAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   BackendAction BA = static_cast<BackendAction>(Act);
-  std::unique_ptr<raw_ostream> OS(GetOutputStream(CI, InFile, BA));
+  std::unique_ptr<raw_pwrite_stream> OS(GetOutputStream(CI, InFile, BA));
   if (BA != Backend_EmitNothing && !OS)
     return nullptr;
 
@@ -668,12 +666,18 @@ CodeGenAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   return std::move(Result);
 }
 
+static void BitcodeInlineAsmDiagHandler(const llvm::SMDiagnostic &SM,
+                                         void *Context,
+                                         unsigned LocCookie) {
+  SM.print(nullptr, llvm::errs());
+}
+
 void CodeGenAction::ExecuteAction() {
   // If this is an IR file, we have to treat it specially.
   if (getCurrentFileKind() == IK_LLVM_IR) {
     BackendAction BA = static_cast<BackendAction>(Act);
     CompilerInstance &CI = getCompilerInstance();
-    raw_ostream *OS = GetOutputStream(CI, getCurrentFile(), BA);
+    raw_pwrite_stream *OS = GetOutputStream(CI, getCurrentFile(), BA);
     if (BA != Backend_EmitNothing && !OS)
       return;
 
@@ -710,14 +714,14 @@ void CodeGenAction::ExecuteAction() {
     }
     const TargetOptions &TargetOpts = CI.getTargetOpts();
     if (TheModule->getTargetTriple() != TargetOpts.Triple) {
-      unsigned DiagID = CI.getDiagnostics().getCustomDiagID(
-          DiagnosticsEngine::Warning,
-          "overriding the module target triple with %0");
-
-      CI.getDiagnostics().Report(SourceLocation(), DiagID) << TargetOpts.Triple;
+      CI.getDiagnostics().Report(SourceLocation(),
+                                 diag::warn_fe_override_module)
+          << TargetOpts.Triple;
       TheModule->setTargetTriple(TargetOpts.Triple);
     }
 
+    LLVMContext &Ctx = TheModule->getContext();
+    Ctx.setInlineAsmDiagnosticHandler(BitcodeInlineAsmDiagHandler);
     EmitBackendOutput(CI.getDiagnostics(), CI.getCodeGenOpts(), TargetOpts,
                       CI.getLangOpts(), CI.getTarget().getTargetDescription(),
                       TheModule.get(), BA, OS);

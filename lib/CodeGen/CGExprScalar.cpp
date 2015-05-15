@@ -196,6 +196,7 @@ public:
   //===--------------------------------------------------------------------===//
 
   Value *Visit(Expr *E) {
+    ApplyDebugLocation DL(CGF, E);
     return StmtVisitor<ScalarExprEmitter, Value*>::Visit(E);
   }
 
@@ -319,7 +320,7 @@ public:
   Value *VisitCastExpr(CastExpr *E);
 
   Value *VisitCallExpr(const CallExpr *E) {
-    if (E->getCallReturnType()->isReferenceType())
+    if (E->getCallReturnType(CGF.getContext())->isReferenceType())
       return EmitLoadOfLValue(E);
 
     Value *V = CGF.EmitCallExpr(E).getScalarVal();
@@ -744,22 +745,36 @@ Value *ScalarExprEmitter::EmitScalarConversion(Value *Src, QualType SrcType,
   QualType OrigSrcType = SrcType;
   llvm::Type *SrcTy = Src->getType();
 
-  // If casting to/from storage-only half FP, use special intrinsics.
-  if (SrcType->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType &&
-      !CGF.getContext().getLangOpts().HalfArgsAndReturns) {
-    Src = Builder.CreateCall(
-        CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16,
-                             CGF.CGM.FloatTy),
-        Src);
-    SrcType = CGF.getContext().FloatTy;
-    SrcTy = CGF.FloatTy;
-  }
-
   // Handle conversions to bool first, they are special: comparisons against 0.
   if (DstType->isBooleanType())
     return EmitConversionToBool(Src, SrcType);
 
   llvm::Type *DstTy = ConvertType(DstType);
+
+  // Cast from half through float if half isn't a native type.
+  if (SrcType->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType) {
+    // Cast to FP using the intrinsic if the half type itself isn't supported.
+    if (DstTy->isFloatingPointTy()) {
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns)
+        return Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16, DstTy),
+            Src);
+    } else {
+      // Cast to other types through float, using either the intrinsic or FPExt,
+      // depending on whether the half type itself is supported
+      // (as opposed to operations on half, available with NativeHalfType).
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+        Src = Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16,
+                                 CGF.CGM.FloatTy),
+            Src);
+      } else {
+        Src = Builder.CreateFPExt(Src, CGF.CGM.FloatTy, "conv");
+      }
+      SrcType = CGF.getContext().FloatTy;
+      SrcTy = CGF.FloatTy;
+    }
+  }
 
   // Ignore conversions like int -> uint.
   if (SrcTy == DstTy)
@@ -817,10 +832,20 @@ Value *ScalarExprEmitter::EmitScalarConversion(Value *Src, QualType SrcType,
     EmitFloatConversionCheck(OrigSrc, OrigSrcType, Src, SrcType, DstType,
                              DstTy);
 
-  // Cast to half via float
-  if (DstType->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType &&
-      !CGF.getContext().getLangOpts().HalfArgsAndReturns)
+  // Cast to half through float if half isn't a native type.
+  if (DstType->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType) {
+    // Make sure we cast in a single step if from another FP type.
+    if (SrcTy->isFloatingPointTy()) {
+      // Use the intrinsic if the half type itself isn't supported
+      // (as opposed to operations on half, available with NativeHalfType).
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns)
+        return Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_to_fp16, SrcTy), Src);
+      // If the half type is supported, just use an fptrunc.
+      return Builder.CreateFPTrunc(Src, DstTy);
+    }
     DstTy = CGF.FloatTy;
+  }
 
   if (isa<llvm::IntegerType>(SrcTy)) {
     bool InputSigned = SrcType->isSignedIntegerOrEnumerationType();
@@ -846,10 +871,14 @@ Value *ScalarExprEmitter::EmitScalarConversion(Value *Src, QualType SrcType,
   }
 
   if (DstTy != ResTy) {
-    assert(ResTy->isIntegerTy(16) && "Only half FP requires extra conversion");
-    Res = Builder.CreateCall(
+    if (!CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+      assert(ResTy->isIntegerTy(16) && "Only half FP requires extra conversion");
+      Res = Builder.CreateCall(
         CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_to_fp16, CGF.CGM.FloatTy),
         Res);
+    } else {
+      Res = Builder.CreateFPTrunc(Res, ResTy, "conv");
+    }
   }
 
   return Res;
@@ -1354,6 +1383,13 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
       llvm_unreachable("wrong cast for pointers in different address spaces"
                        "(must be an address space cast)!");
     }
+
+    if (CGF.SanOpts.has(SanitizerKind::CFIUnrelatedCast)) {
+      if (auto PT = DestTy->getAs<PointerType>())
+        CGF.EmitVTablePtrCheckForCast(PT->getPointeeType(), Src,
+                                      /*MayBeNull=*/true);
+    }
+
     return Builder.CreateBitCast(Src, DstTy);
   }
   case CK_AddressSpaceConversion: {
@@ -1383,6 +1419,10 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
       CGF.EmitTypeCheck(CodeGenFunction::TCK_DowncastPointer, CE->getExprLoc(),
                         Derived, DestTy->getPointeeType());
 
+    if (CGF.SanOpts.has(SanitizerKind::CFIDerivedCast))
+      CGF.EmitVTablePtrCheckForCast(DestTy->getPointeeType(), Derived,
+                                    /*MayBeNull=*/true);
+
     return Derived;
   }
   case CK_UncheckedDerivedToBase:
@@ -1411,10 +1451,13 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
     // anything here.
     if (!E->getType()->isVariableArrayType()) {
       assert(isa<llvm::PointerType>(V->getType()) && "Expected pointer");
-      assert(isa<llvm::ArrayType>(cast<llvm::PointerType>(V->getType())
-                                 ->getElementType()) &&
+      llvm::Type *NewTy = ConvertType(E->getType());
+      V = CGF.Builder.CreatePointerCast(
+          V, NewTy->getPointerTo(V->getType()->getPointerAddressSpace()));
+
+      assert(isa<llvm::ArrayType>(V->getType()->getPointerElementType()) &&
              "Expected pointer to array");
-      V = Builder.CreateStructGEP(V, 0, "arraydecay");
+      V = Builder.CreateStructGEP(NewTy, V, 0, "arraydecay");
     }
 
     // Make sure the array decay ends up being the right type.  This matters if
@@ -1738,13 +1781,16 @@ ScalarExprEmitter::EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
     // Add the inc/dec to the real part.
     llvm::Value *amt;
 
-    if (type->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType &&
-        !CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+    if (type->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType) {
       // Another special case: half FP increment should be done via float
-      value = Builder.CreateCall(
-          CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16,
-                               CGF.CGM.FloatTy),
-          input);
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+        value = Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16,
+                                 CGF.CGM.FloatTy),
+            input, "incdec.conv");
+      } else {
+        value = Builder.CreateFPExt(input, CGF.CGM.FloatTy, "incdec.conv");
+      }
     }
 
     if (value->getType()->isFloatTy())
@@ -1754,20 +1800,29 @@ ScalarExprEmitter::EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
       amt = llvm::ConstantFP::get(VMContext,
                                   llvm::APFloat(static_cast<double>(amount)));
     else {
+      // Remaining types are either Half or LongDouble.  Convert from float.
       llvm::APFloat F(static_cast<float>(amount));
       bool ignored;
-      F.convert(CGF.getTarget().getLongDoubleFormat(),
+      // Don't use getFloatTypeSemantics because Half isn't
+      // necessarily represented using the "half" LLVM type.
+      F.convert(value->getType()->isHalfTy()
+                    ? CGF.getTarget().getHalfFormat()
+                    : CGF.getTarget().getLongDoubleFormat(),
                 llvm::APFloat::rmTowardZero, &ignored);
       amt = llvm::ConstantFP::get(VMContext, F);
     }
     value = Builder.CreateFAdd(value, amt, isInc ? "inc" : "dec");
 
-    if (type->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType &&
-        !CGF.getContext().getLangOpts().HalfArgsAndReturns)
-      value = Builder.CreateCall(
-          CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_to_fp16,
-                               CGF.CGM.FloatTy),
-          value);
+    if (type->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType) {
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+        value = Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_to_fp16,
+                                 CGF.CGM.FloatTy),
+            value, "incdec.conv");
+      } else {
+        value = Builder.CreateFPTrunc(value, input->getType(), "incdec.conv");
+      }
+    }
 
   // Objective-C pointer types.
   } else {
@@ -1789,11 +1844,10 @@ ScalarExprEmitter::EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
   if (atomicPHI) {
     llvm::BasicBlock *opBB = Builder.GetInsertBlock();
     llvm::BasicBlock *contBB = CGF.createBasicBlock("atomic_cont", CGF.CurFn);
-    llvm::Value *pair = Builder.CreateAtomicCmpXchg(
-        LV.getAddress(), atomicPHI, CGF.EmitToMemory(value, type),
-        llvm::SequentiallyConsistent, llvm::SequentiallyConsistent);
-    llvm::Value *old = Builder.CreateExtractValue(pair, 0);
-    llvm::Value *success = Builder.CreateExtractValue(pair, 1);
+    auto Pair = CGF.EmitAtomicCompareExchange(
+        LV, RValue::get(atomicPHI), RValue::get(value), E->getExprLoc());
+    llvm::Value *old = CGF.EmitToMemory(Pair.first.getScalarVal(), type);
+    llvm::Value *success = Pair.second;
     atomicPHI->addIncoming(old, opBB);
     Builder.CreateCondBr(success, contBB, opBB);
     Builder.SetInsertPoint(contBB);
@@ -2052,7 +2106,7 @@ LValue ScalarExprEmitter::EmitCompoundAssignLValue(
   BinOpInfo OpInfo;
 
   if (E->getComputationResultType()->isAnyComplexType())
-    return CGF.EmitScalarCompooundAssignWithComplex(E, Result);
+    return CGF.EmitScalarCompoundAssignWithComplex(E, Result);
 
   // Emit the RHS first.  __block variables need to have the rhs evaluated
   // first, plus this should improve codegen a little.
@@ -2133,11 +2187,10 @@ LValue ScalarExprEmitter::EmitCompoundAssignLValue(
   if (atomicPHI) {
     llvm::BasicBlock *opBB = Builder.GetInsertBlock();
     llvm::BasicBlock *contBB = CGF.createBasicBlock("atomic_cont", CGF.CurFn);
-    llvm::Value *pair = Builder.CreateAtomicCmpXchg(
-        LHSLV.getAddress(), atomicPHI, CGF.EmitToMemory(Result, LHSTy),
-        llvm::SequentiallyConsistent, llvm::SequentiallyConsistent);
-    llvm::Value *old = Builder.CreateExtractValue(pair, 0);
-    llvm::Value *success = Builder.CreateExtractValue(pair, 1);
+    auto Pair = CGF.EmitAtomicCompareExchange(
+        LHSLV, RValue::get(atomicPHI), RValue::get(Result), E->getExprLoc());
+    llvm::Value *old = CGF.EmitToMemory(Pair.first.getScalarVal(), LHSTy);
+    llvm::Value *success = Pair.second;
     atomicPHI->addIncoming(old, opBB);
     Builder.CreateCondBr(success, contBB, opBB);
     Builder.SetInsertPoint(contBB);
@@ -2660,21 +2713,34 @@ Value *ScalarExprEmitter::EmitShl(const BinOpInfo &Ops) {
   if (Ops.LHS->getType() != RHS->getType())
     RHS = Builder.CreateIntCast(RHS, Ops.LHS->getType(), false, "sh_prom");
 
-  if (CGF.SanOpts.has(SanitizerKind::Shift) && !CGF.getLangOpts().OpenCL &&
-      isa<llvm::IntegerType>(Ops.LHS->getType())) {
+  bool SanitizeBase = CGF.SanOpts.has(SanitizerKind::ShiftBase) &&
+                      Ops.Ty->hasSignedIntegerRepresentation();
+  bool SanitizeExponent = CGF.SanOpts.has(SanitizerKind::ShiftExponent);
+  // OpenCL 6.3j: shift values are effectively % word size of LHS.
+  if (CGF.getLangOpts().OpenCL)
+    RHS =
+        Builder.CreateAnd(RHS, GetWidthMinusOneValue(Ops.LHS, RHS), "shl.mask");
+  else if ((SanitizeBase || SanitizeExponent) &&
+           isa<llvm::IntegerType>(Ops.LHS->getType())) {
     CodeGenFunction::SanitizerScope SanScope(&CGF);
+    SmallVector<std::pair<Value *, SanitizerKind>, 2> Checks;
     llvm::Value *WidthMinusOne = GetWidthMinusOneValue(Ops.LHS, RHS);
-    llvm::Value *Valid = Builder.CreateICmpULE(RHS, WidthMinusOne);
+    llvm::Value *ValidExponent = Builder.CreateICmpULE(RHS, WidthMinusOne);
 
-    if (Ops.Ty->hasSignedIntegerRepresentation()) {
+    if (SanitizeExponent) {
+      Checks.push_back(
+          std::make_pair(ValidExponent, SanitizerKind::ShiftExponent));
+    }
+
+    if (SanitizeBase) {
+      // Check whether we are shifting any non-zero bits off the top of the
+      // integer. We only emit this check if exponent is valid - otherwise
+      // instructions below will have undefined behavior themselves.
       llvm::BasicBlock *Orig = Builder.GetInsertBlock();
       llvm::BasicBlock *Cont = CGF.createBasicBlock("cont");
-      llvm::BasicBlock *CheckBitsShifted = CGF.createBasicBlock("check");
-      Builder.CreateCondBr(Valid, CheckBitsShifted, Cont);
-
-      // Check whether we are shifting any non-zero bits off the top of the
-      // integer.
-      CGF.EmitBlock(CheckBitsShifted);
+      llvm::BasicBlock *CheckShiftBase = CGF.createBasicBlock("check");
+      Builder.CreateCondBr(ValidExponent, CheckShiftBase, Cont);
+      CGF.EmitBlock(CheckShiftBase);
       llvm::Value *BitsShiftedOff =
         Builder.CreateLShr(Ops.LHS,
                            Builder.CreateSub(WidthMinusOne, RHS, "shl.zeros",
@@ -2689,19 +2755,17 @@ Value *ScalarExprEmitter::EmitShl(const BinOpInfo &Ops) {
         BitsShiftedOff = Builder.CreateLShr(BitsShiftedOff, One);
       }
       llvm::Value *Zero = llvm::ConstantInt::get(BitsShiftedOff->getType(), 0);
-      llvm::Value *SecondCheck = Builder.CreateICmpEQ(BitsShiftedOff, Zero);
+      llvm::Value *ValidBase = Builder.CreateICmpEQ(BitsShiftedOff, Zero);
       CGF.EmitBlock(Cont);
-      llvm::PHINode *P = Builder.CreatePHI(Valid->getType(), 2);
-      P->addIncoming(Valid, Orig);
-      P->addIncoming(SecondCheck, CheckBitsShifted);
-      Valid = P;
+      llvm::PHINode *BaseCheck = Builder.CreatePHI(ValidBase->getType(), 2);
+      BaseCheck->addIncoming(Builder.getTrue(), Orig);
+      BaseCheck->addIncoming(ValidBase, CheckShiftBase);
+      Checks.push_back(std::make_pair(BaseCheck, SanitizerKind::ShiftBase));
     }
 
-    EmitBinOpCheck(std::make_pair(Valid, SanitizerKind::Shift), Ops);
+    assert(!Checks.empty());
+    EmitBinOpCheck(Checks, Ops);
   }
-  // OpenCL 6.3j: shift values are effectively % word size of LHS.
-  if (CGF.getLangOpts().OpenCL)
-    RHS = Builder.CreateAnd(RHS, GetWidthMinusOneValue(Ops.LHS, RHS), "shl.mask");
 
   return Builder.CreateShl(Ops.LHS, RHS, "shl");
 }
@@ -2713,17 +2777,17 @@ Value *ScalarExprEmitter::EmitShr(const BinOpInfo &Ops) {
   if (Ops.LHS->getType() != RHS->getType())
     RHS = Builder.CreateIntCast(RHS, Ops.LHS->getType(), false, "sh_prom");
 
-  if (CGF.SanOpts.has(SanitizerKind::Shift) && !CGF.getLangOpts().OpenCL &&
-      isa<llvm::IntegerType>(Ops.LHS->getType())) {
+  // OpenCL 6.3j: shift values are effectively % word size of LHS.
+  if (CGF.getLangOpts().OpenCL)
+    RHS =
+        Builder.CreateAnd(RHS, GetWidthMinusOneValue(Ops.LHS, RHS), "shr.mask");
+  else if (CGF.SanOpts.has(SanitizerKind::ShiftExponent) &&
+           isa<llvm::IntegerType>(Ops.LHS->getType())) {
     CodeGenFunction::SanitizerScope SanScope(&CGF);
     llvm::Value *Valid =
         Builder.CreateICmpULE(RHS, GetWidthMinusOneValue(Ops.LHS, RHS));
-    EmitBinOpCheck(std::make_pair(Valid, SanitizerKind::Shift), Ops);
+    EmitBinOpCheck(std::make_pair(Valid, SanitizerKind::ShiftExponent), Ops);
   }
-
-  // OpenCL 6.3j: shift values are effectively % word size of LHS.
-  if (CGF.getLangOpts().OpenCL)
-    RHS = Builder.CreateAnd(RHS, GetWidthMinusOneValue(Ops.LHS, RHS), "shr.mask");
 
   if (Ops.Ty->hasUnsignedIntegerRepresentation())
     return Builder.CreateLShr(Ops.LHS, RHS, "shr");
@@ -3039,7 +3103,7 @@ Value *ScalarExprEmitter::VisitBinLAnd(const BinaryOperator *E) {
   // Emit an unconditional branch from this block to ContBlock.
   {
     // There is no need to emit line number for unconditional branch.
-    SuppressDebugLocation S(Builder);
+    auto NL = ApplyDebugLocation::CreateEmpty(CGF);
     CGF.EmitBlock(ContBlock);
   }
   // Insert an entry into the phi node for the edge with the value of RHSCond.
@@ -3312,8 +3376,12 @@ Value *ScalarExprEmitter::VisitVAArgExpr(VAArgExpr *VE) {
   llvm::Value *Val = Builder.CreateLoad(ArgPtr);
 
   // If EmitVAArg promoted the type, we must truncate it.
-  if (ArgTy != Val->getType())
-    Val = Builder.CreateTrunc(Val, ArgTy);
+  if (ArgTy != Val->getType()) {
+    if (ArgTy->isPointerTy() && !Val->getType()->isPointerTy())
+      Val = Builder.CreateIntToPtr(Val, ArgTy);
+    else
+      Val = Builder.CreateTrunc(Val, ArgTy);
+  }
 
   return Val;
 }
@@ -3385,13 +3453,8 @@ Value *CodeGenFunction::EmitScalarExpr(const Expr *E, bool IgnoreResultAssign) {
   assert(E && hasScalarEvaluationKind(E->getType()) &&
          "Invalid scalar expression to emit");
 
-  if (isa<CXXDefaultArgExpr>(E))
-    disableDebugInfo();
-  Value *V = ScalarExprEmitter(*this, IgnoreResultAssign)
-    .Visit(const_cast<Expr*>(E));
-  if (isa<CXXDefaultArgExpr>(E))
-    enableDebugInfo();
-  return V;
+  return ScalarExprEmitter(*this, IgnoreResultAssign)
+      .Visit(const_cast<Expr *>(E));
 }
 
 /// EmitScalarConversion - Emit a conversion from the specified type to the

@@ -152,7 +152,7 @@ protected:
 public:
   Generic_GCC(const Driver &D, const llvm::Triple &Triple,
               const llvm::opt::ArgList &Args);
-  ~Generic_GCC();
+  ~Generic_GCC() override;
 
   void printVerboseInfo(raw_ostream &OS) const override;
 
@@ -196,7 +196,7 @@ private:
 public:
   MachO(const Driver &D, const llvm::Triple &Triple,
              const llvm::opt::ArgList &Args);
-  ~MachO();
+  ~MachO() override;
 
   /// @name MachO specific toolchain API
   /// {
@@ -256,7 +256,7 @@ public:
 
   bool IsBlocksDefault() const override {
     // Always allow blocks on Apple; users interested in versioning are
-    // expected to use /usr/include/Blocks.h.
+    // expected to use /usr/include/Block.h.
     return true;
   }
   bool IsIntegratedAssemblerDefault() const override {
@@ -345,7 +345,7 @@ private:
 public:
   Darwin(const Driver &D, const llvm::Triple &Triple,
          const llvm::opt::ArgList &Args);
-  ~Darwin();
+  ~Darwin() override;
 
   std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
                                           types::ID InputType) const override;
@@ -362,8 +362,7 @@ public:
                          llvm::opt::ArgStringList &CmdArgs) const override;
 
   bool isKernelStatic() const override {
-    return !isTargetIPhoneOS() || isIPhoneOSVersionLT(6, 0) ||
-           getTriple().getArch() == llvm::Triple::aarch64;
+    return !isTargetIPhoneOS() || isIPhoneOSVersionLT(6, 0);
   }
 
 protected:
@@ -488,13 +487,17 @@ public:
   AddCCKextLibArgs(const llvm::opt::ArgList &Args,
                    llvm::opt::ArgStringList &CmdArgs) const override;
 
-  virtual void addClangWarningOptions(llvm::opt::ArgStringList &CC1Args)
-                                                      const override;
+  void addClangWarningOptions(llvm::opt::ArgStringList &CC1Args) const override;
 
   void
   AddLinkARCArgs(const llvm::opt::ArgList &Args,
                  llvm::opt::ArgStringList &CmdArgs) const override;
   /// }
+
+private:
+  void AddLinkSanitizerLibArgs(const llvm::opt::ArgList &Args,
+                               llvm::opt::ArgStringList &CmdArgs,
+                               StringRef Sanitizer) const;
 };
 
 class LLVM_LIBRARY_VISIBILITY Generic_ELF : public Generic_GCC {
@@ -506,6 +509,31 @@ public:
 
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                              llvm::opt::ArgStringList &CC1Args) const override;
+};
+
+class LLVM_LIBRARY_VISIBILITY CloudABI : public Generic_ELF {
+public:
+  CloudABI(const Driver &D, const llvm::Triple &Triple,
+           const llvm::opt::ArgList &Args);
+  bool HasNativeLLVMSupport() const override { return true; }
+
+  bool IsMathErrnoDefault() const override { return false; }
+  bool IsObjCNonFragileABIDefault() const override { return true; }
+
+  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args)
+      const override {
+    return ToolChain::CST_Libcxx;
+  }
+  void AddClangCXXStdlibIncludeArgs(
+      const llvm::opt::ArgList &DriverArgs,
+      llvm::opt::ArgStringList &CC1Args) const override;
+  void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
+                           llvm::opt::ArgStringList &CmdArgs) const override;
+
+  bool isPIEDefault() const override { return false; }
+
+protected:
+  Tool *buildLinker() const override;
 };
 
 class LLVM_LIBRARY_VISIBILITY Solaris : public Generic_GCC {
@@ -532,17 +560,6 @@ public:
 
   unsigned GetDefaultStackProtectorLevel(bool KernelOrKext) const override {
     return 2;
-  }
-
-  virtual bool IsIntegratedAssemblerDefault() const override {
-    switch (getTriple().getArch()) {
-    case llvm::Triple::ppc:
-    case llvm::Triple::sparc:
-    case llvm::Triple::sparcv9:
-      return true;
-    default:
-      return Generic_ELF::IsIntegratedAssemblerDefault();
-    }
   }
 
 protected:
@@ -586,14 +603,6 @@ public:
   void
   AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                                llvm::opt::ArgStringList &CC1Args) const override;
-  bool IsIntegratedAssemblerDefault() const override {
-    switch (getTriple().getArch()) {
-    case llvm::Triple::ppc:
-      return true;
-    default:
-      return Generic_ELF::IsIntegratedAssemblerDefault();
-    }
-  }
 
   bool UseSjLjExceptions() const override;
   bool isPIEDefault() const override;
@@ -617,14 +626,6 @@ public:
                               llvm::opt::ArgStringList &CC1Args) const override;
   bool IsUnwindTablesDefault() const override {
     return true;
-  }
-  bool IsIntegratedAssemblerDefault() const override {
-    switch (getTriple().getArch()) {
-    case llvm::Triple::ppc:
-      return true;
-    default:
-      return Generic_ELF::IsIntegratedAssemblerDefault();
-    }
   }
 
 protected:
@@ -697,7 +698,7 @@ protected:
 public:
   Hexagon_TC(const Driver &D, const llvm::Triple &Triple,
              const llvm::opt::ArgList &Args);
-  ~Hexagon_TC();
+  ~Hexagon_TC() override;
 
   void
   AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
@@ -732,7 +733,6 @@ public:
 };
 // @LOCALMOD-END Emscripten
 
-// @LOCALMOD-START
 class LLVM_LIBRARY_VISIBILITY NaCl_TC : public Generic_ELF {
 public:
   NaCl_TC(const Driver &D, const llvm::Triple &Triple,
@@ -771,8 +771,6 @@ protected:
 private:
   std::string NaClArmMacrosPath;
 };
-// @LOCALMOD-END
-
 
 /// TCEToolChain - A tool chain using the llvm bitcode tools to perform
 /// all subcommands. See http://tce.cs.tut.fi for our peculiar target.
@@ -780,7 +778,7 @@ class LLVM_LIBRARY_VISIBILITY TCEToolChain : public ToolChain {
 public:
   TCEToolChain(const Driver &D, const llvm::Triple &Triple,
                const llvm::opt::ArgList &Args);
-  ~TCEToolChain();
+  ~TCEToolChain() override;
 
   bool IsMathErrnoDefault() const override;
   bool isPICDefault() const override;

@@ -344,7 +344,7 @@ namespace PR15045 {
 
   int f() {
     Cl0 c;
-    return c->a;  // expected-error {{member reference type 'PR15045::Cl0' is not a pointer; maybe you meant to use '.'?}}
+    return c->a;  // expected-error {{member reference type 'PR15045::Cl0' is not a pointer; did you mean to use '.'?}}
   }
 }
 
@@ -381,3 +381,9 @@ struct H : A  // expected-error{{expected '{' after base class list}}
 };
 #endif
 }
+
+struct conversion_operator {
+  conversion_operator::* const operator int(); // expected-error {{put the complete type after 'operator'}}
+  // CHECK: fix-it:"{{.*}}":{[[@LINE-1]]:3-[[@LINE-1]]:32}:""
+  // CHECK: fix-it:"{{.*}}":{[[@LINE-2]]:44-[[@LINE-2]]:44}:" conversion_operator::* const"
+};

@@ -88,13 +88,13 @@
 
 // RUN: %clang -target arm-linux-eabi -mfpu=neon-vfpv3 %s -### -o %t.o 2>&1 \
 // RUN:   | FileCheck --check-prefix=CHECK-NEON-VFPV3 %s
-// CHECK-NEON-VFPV3: "-target-feature" "+vfpv3"
+// CHECK-NEON-VFPV3: "-target-feature" "+vfp3"
 // CHECK-NEON-VFPV3: "-target-feature" "+neon"
 
 // RUN: %clang -target arm-linux-eabi -mfpu=neon-vfpv4 %s -### -o %t.o 2>&1 \
 // RUN:   | FileCheck --check-prefix=CHECK-NEON-VFPV4 %s
 // CHECK-NEON-VFPV4: "-target-feature" "+neon"
-// CHECK-NEON-VFPV4: "-target-feature" "+vfpv4"
+// CHECK-NEON-VFPV4: "-target-feature" "+vfp4"
 
 // RUN: %clang -target arm-linux-eabi -msoft-float %s -### -o %t.o 2>&1 \
 // RUN:   | FileCheck --check-prefix=CHECK-SOFT-FLOAT %s
@@ -141,7 +141,7 @@
 
 // RUN: %clang -target arm-linux-gnueabihf %s -### 2>&1 \
 // RUN:   | FileCheck --check-prefix=CHECK-HF %s
-// CHECK-HF: "-target-cpu" "arm1136jf-s"
+// CHECK-HF: "-target-cpu" "arm1176jzf-s"
 
 // RUN: %clang -target armv7-apple-darwin -x assembler %s -### -c 2>&1 \
 // RUN:   | FileCheck --check-prefix=ASM %s

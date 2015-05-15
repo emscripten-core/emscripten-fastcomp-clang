@@ -58,16 +58,21 @@ Module::~Module() {
 /// language options has the given feature.
 static bool hasFeature(StringRef Feature, const LangOptions &LangOpts,
                        const TargetInfo &Target) {
-  return llvm::StringSwitch<bool>(Feature)
-           .Case("altivec", LangOpts.AltiVec)
-           .Case("blocks", LangOpts.Blocks)
-           .Case("cplusplus", LangOpts.CPlusPlus)
-           .Case("cplusplus11", LangOpts.CPlusPlus11)
-           .Case("objc", LangOpts.ObjC1)
-           .Case("objc_arc", LangOpts.ObjCAutoRefCount)
-           .Case("opencl", LangOpts.OpenCL)
-           .Case("tls", Target.isTLSSupported())
-           .Default(Target.hasFeature(Feature));
+  bool HasFeature = llvm::StringSwitch<bool>(Feature)
+                        .Case("altivec", LangOpts.AltiVec)
+                        .Case("blocks", LangOpts.Blocks)
+                        .Case("cplusplus", LangOpts.CPlusPlus)
+                        .Case("cplusplus11", LangOpts.CPlusPlus11)
+                        .Case("objc", LangOpts.ObjC1)
+                        .Case("objc_arc", LangOpts.ObjCAutoRefCount)
+                        .Case("opencl", LangOpts.OpenCL)
+                        .Case("tls", Target.isTLSSupported())
+                        .Default(Target.hasFeature(Feature));
+  if (!HasFeature)
+    HasFeature = std::find(LangOpts.ModuleFeatures.begin(),
+                           LangOpts.ModuleFeatures.end(),
+                           Feature) != LangOpts.ModuleFeatures.end();
+  return HasFeature;
 }
 
 bool Module::isAvailable(const LangOptions &LangOpts, const TargetInfo &Target,
@@ -151,6 +156,19 @@ ArrayRef<const FileEntry *> Module::getTopHeaders(FileManager &FileMgr) {
   }
 
   return llvm::makeArrayRef(TopHeaders.begin(), TopHeaders.end());
+}
+
+bool Module::directlyUses(const Module *Requested) const {
+  auto *Top = getTopLevelModule();
+
+  // A top-level module implicitly uses itself.
+  if (Requested->isSubModuleOf(Top))
+    return true;
+
+  for (auto *Use : Top->DirectUses)
+    if (Requested->isSubModuleOf(Use))
+      return true;
+  return false;
 }
 
 void Module::addRequirement(StringRef Feature, bool RequiredState,
@@ -293,9 +311,12 @@ void Module::print(raw_ostream &OS, unsigned Indent) const {
     OS << "explicit ";
   OS << "module " << Name;
 
-  if (IsSystem) {
+  if (IsSystem || IsExternC) {
     OS.indent(Indent + 2);
-    OS << " [system]";
+    if (IsSystem)
+      OS << " [system]";
+    if (IsExternC)
+      OS << " [extern_c]";
   }
 
   OS << " {\n";

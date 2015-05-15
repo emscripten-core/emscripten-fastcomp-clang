@@ -240,9 +240,8 @@ static bool visitPreprocessedEntitiesInRange(SourceRange R,
       FID = FileID();
   }
 
-  std::pair<PreprocessingRecord::iterator, PreprocessingRecord::iterator>
-    Entities = PPRec.getPreprocessedEntitiesInRange(R);
-  return Visitor.visitPreprocessedEntities(Entities.first, Entities.second,
+  const auto &Entities = PPRec.getPreprocessedEntitiesInRange(R);
+  return Visitor.visitPreprocessedEntities(Entities.begin(), Entities.end(),
                                            PPRec, FID);
 }
 
@@ -1719,7 +1718,7 @@ public:
     return VJ->getKind() == DeclVisitKind;
   }
   const Decl *get() const { return static_cast<const Decl *>(data[0]); }
-  bool isFirst() const { return data[1] ? true : false; }
+  bool isFirst() const { return data[1] != nullptr; }
 };
 class TypeLocVisit : public VisitorJob {
 public:
@@ -2023,16 +2022,47 @@ void OMPClauseEnqueue::VisitOMPFirstprivateClause(
 void OMPClauseEnqueue::VisitOMPLastprivateClause(
                                         const OMPLastprivateClause *C) {
   VisitOMPClauseList(C);
+  for (auto *E : C->private_copies()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->source_exprs()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->destination_exprs()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->assignment_ops()) {
+    Visitor->AddStmt(E);
+  }
 }
 void OMPClauseEnqueue::VisitOMPSharedClause(const OMPSharedClause *C) {
   VisitOMPClauseList(C);
 }
 void OMPClauseEnqueue::VisitOMPReductionClause(const OMPReductionClause *C) {
   VisitOMPClauseList(C);
+  for (auto *E : C->lhs_exprs()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->rhs_exprs()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->reduction_ops()) {
+    Visitor->AddStmt(E);
+  }
 }
 void OMPClauseEnqueue::VisitOMPLinearClause(const OMPLinearClause *C) {
   VisitOMPClauseList(C);
+  for (const auto *E : C->inits()) {
+    Visitor->AddStmt(E);
+  }
+  for (const auto *E : C->updates()) {
+    Visitor->AddStmt(E);
+  }
+  for (const auto *E : C->finals()) {
+    Visitor->AddStmt(E);
+  }
   Visitor->AddStmt(C->getStep());
+  Visitor->AddStmt(C->getCalcStep());
 }
 void OMPClauseEnqueue::VisitOMPAlignedClause(const OMPAlignedClause *C) {
   VisitOMPClauseList(C);
@@ -2040,10 +2070,28 @@ void OMPClauseEnqueue::VisitOMPAlignedClause(const OMPAlignedClause *C) {
 }
 void OMPClauseEnqueue::VisitOMPCopyinClause(const OMPCopyinClause *C) {
   VisitOMPClauseList(C);
+  for (auto *E : C->source_exprs()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->destination_exprs()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->assignment_ops()) {
+    Visitor->AddStmt(E);
+  }
 }
 void
 OMPClauseEnqueue::VisitOMPCopyprivateClause(const OMPCopyprivateClause *C) {
   VisitOMPClauseList(C);
+  for (auto *E : C->source_exprs()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->destination_exprs()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->assignment_ops()) {
+    Visitor->AddStmt(E);
+  }
 }
 void OMPClauseEnqueue::VisitOMPFlushClause(const OMPFlushClause *C) {
   VisitOMPClauseList(C);
@@ -2239,8 +2287,21 @@ void EnqueueVisitor::VisitMemberExpr(const MemberExpr *M) {
   // visit it.
   // FIXME: If we ever want to show these implicit accesses, this will be
   // unfortunate. However, clang_getCursor() relies on this behavior.
-  if (!M->isImplicitAccess())
-    AddStmt(M->getBase());
+  if (M->isImplicitAccess())
+    return;
+
+  // Ignore base anonymous struct/union fields, otherwise they will shadow the
+  // real field that that we are interested in.
+  if (auto *SubME = dyn_cast<MemberExpr>(M->getBase())) {
+    if (auto *FD = dyn_cast_or_null<FieldDecl>(SubME->getMemberDecl())) {
+      if (FD->isAnonymousStructOrUnion()) {
+        AddStmt(SubME->getBase());
+        return;
+      }
+    }
+  }
+
+  AddStmt(M->getBase());
 }
 void EnqueueVisitor::VisitObjCEncodeExpr(const ObjCEncodeExpr *E) {
   AddTypeLoc(E->getEncodedTypeSourceInfo());
@@ -4208,6 +4269,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPTargetDirective");
   case CXCursor_OMPTeamsDirective:
     return cxstring::createRef("OMPTeamsDirective");
+  case CXCursor_OverloadCandidate:
+      return cxstring::createRef("OverloadCandidate");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");
@@ -4950,6 +5013,7 @@ CXCursor clang_getCursorDefinition(CXCursor C) {
   // nonetheless harmless.
   case Decl::Empty:
   case Decl::TranslationUnit:
+  case Decl::ExternCContext:
     break;
 
   // Declaration kinds for which the definition is not resolvable.
@@ -6943,7 +7007,7 @@ CXTUResourceUsage clang_getCXTUResourceUsage(CXTranslationUnit TU) {
 
   CXTUResourceUsage usage = { (void*) entries.get(),
                             (unsigned) entries->size(),
-                            entries->size() ? &(*entries)[0] : nullptr };
+                            !entries->empty() ? &(*entries)[0] : nullptr };
   entries.release();
   return usage;
 }
@@ -7266,10 +7330,10 @@ cxindex::Logger::~Logger() {
 
   llvm::TimeRecord TR = llvm::TimeRecord::getCurrentTime();
   OS << llvm::format("%7.4f] ", TR.getWallTime() - sBeginTR.getWallTime());
-  OS << Msg.str() << '\n';
+  OS << Msg << '\n';
 
   if (Trace) {
-    llvm::sys::PrintStackTrace(stderr);
+    llvm::sys::PrintStackTrace(OS);
     OS << "--------------------------------------------------\n";
   }
 }
