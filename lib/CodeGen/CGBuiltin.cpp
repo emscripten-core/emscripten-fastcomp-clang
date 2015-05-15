@@ -1422,9 +1422,18 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return RValue::get(Builder.CreateCall(F, Arg0));
   }
 
-  case Builtin::BI__builtin_pow:
-  case Builtin::BI__builtin_powf:
-  case Builtin::BI__builtin_powl:
+    // @LOCALMOD-START
+    // Do not generate pow intrinsic calls for builtin_pow. The
+    // -fno-math-builtin flag prevents the libcall builtin code from firing
+    // either, but it doesn't work for the __builtin flavors. Pow is currently
+    // (AFAIK) the only math.h function to be converted this way.
+    // This is effectively a revert of r228240
+    // TODO(dschuf): Consider removing -fno-math-builtin and rewriting
+    // llvm.pow to a libcall in IR simplification instead.
+    //case Builtin::BI__builtin_pow:
+    //case Builtin::BI__builtin_powf:
+    //case Builtin::BI__builtin_powl:
+    // @LOCALMOD-END
   case Builtin::BIpow:
   case Builtin::BIpowf:
   case Builtin::BIpowl: {
