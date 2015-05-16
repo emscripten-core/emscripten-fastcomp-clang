@@ -40,6 +40,7 @@
 #include "clang/Tooling/CompilationDatabase.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Option/Option.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -78,7 +79,7 @@ public:
 /// process each translation unit.
 class FrontendActionFactory : public ToolAction {
 public:
-  virtual ~FrontendActionFactory();
+  ~FrontendActionFactory() override;
 
   /// \brief Invokes the compiler with a FrontendAction created by create().
   bool runInvocation(clang::CompilerInvocation *Invocation, FileManager *Files,
@@ -274,7 +275,7 @@ class ClangTool {
   ///
   /// \param Adjuster An argument adjuster, which will be run on the output of
   ///        previous argument adjusters.
-  void appendArgumentsAdjuster(ArgumentsAdjuster *Adjuster);
+  void appendArgumentsAdjuster(ArgumentsAdjuster Adjuster);
 
   /// \brief Clear the command line arguments adjuster chain.
   void clearArgumentsAdjusters();
@@ -301,7 +302,7 @@ class ClangTool {
   // Contains a list of pairs (<file name>, <file content>).
   std::vector< std::pair<StringRef, StringRef> > MappedFileContents;
 
-  SmallVector<std::unique_ptr<ArgumentsAdjuster>, 2> ArgsAdjusters;
+  ArgumentsAdjuster ArgsAdjuster;
 
   DiagnosticConsumer *DiagConsumer;
 };
@@ -382,6 +383,11 @@ inline std::unique_ptr<FrontendActionFactory> newFrontendActionFactory(
 ///
 /// \param File Either an absolute or relative path.
 std::string getAbsolutePath(StringRef File);
+
+/// \brief Creates a \c CompilerInvocation.
+clang::CompilerInvocation *newInvocation(
+    clang::DiagnosticsEngine *Diagnostics,
+    const llvm::opt::ArgStringList &CC1Args);
 
 } // end namespace tooling
 } // end namespace clang

@@ -530,7 +530,7 @@ StmtResult Parser::ParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
       TheTarget->createMCAsmParser(*STI, *Parser, *MII, MCOptions));
 
   std::unique_ptr<llvm::MCInstPrinter> IP(
-      TheTarget->createMCInstPrinter(1, *MAI, *MII, *MRI, *STI));
+      TheTarget->createMCInstPrinter(llvm::Triple(TT), 1, *MAI, *MII, *MRI));
 
   // Change to the Intel dialect.
   Parser->setAssemblerDialect(1);
@@ -615,6 +615,11 @@ StmtResult Parser::ParseAsmStatement(bool &msAsm) {
     msAsm = true;
     return ParseMicrosoftAsmStatement(AsmLoc);
   }
+
+  // Check if GNU-style inline Asm is disabled.
+  if (!getLangOpts().GNUAsm)
+    Diag(AsmLoc, diag::err_gnu_inline_asm_disabled);
+
   DeclSpec DS(AttrFactory);
   SourceLocation Loc = Tok.getLocation();
   ParseTypeQualifierListOpt(DS, AR_VendorAttributesParsed);

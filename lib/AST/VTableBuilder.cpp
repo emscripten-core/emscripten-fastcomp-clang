@@ -411,7 +411,8 @@ void FinalOverriders::dump(raw_ostream &Out, BaseSubobject Base,
   for (const auto *MD : RD->methods()) {
     if (!MD->isVirtual())
       continue;
-  
+    MD = MD->getCanonicalDecl();
+
     OverriderInfo Overrider = getOverrider(MD, Base.getBaseOffset());
 
     Out << "  ";
@@ -695,6 +696,7 @@ void VCallAndVBaseOffsetBuilder::AddVCallOffsets(BaseSubobject Base,
   for (const auto *MD : RD->methods()) {
     if (!MD->isVirtual())
       continue;
+    MD = MD->getCanonicalDecl();
 
     CharUnits OffsetOffset = getCurrentOffsetOffset();
     
@@ -1514,6 +1516,7 @@ void ItaniumVTableBuilder::AddMethods(
   for (const auto *MD : RD->methods()) {
     if (!MD->isVirtual())
       continue;
+    MD = MD->getCanonicalDecl();
 
     // Get the final overrider.
     FinalOverriders::OverriderInfo Overrider = 
@@ -2196,6 +2199,7 @@ void ItaniumVTableBuilder::dumpLayout(raw_ostream &Out) {
     // We only want virtual member functions.
     if (!MD->isVirtual())
       continue;
+    MD = MD->getCanonicalDecl();
 
     std::string MethodName =
       PredefinedExpr::ComputeName(PredefinedExpr::PrettyFunctionNoVirtual,
@@ -2585,7 +2589,9 @@ public:
     // Only include the RTTI component if we know that we will provide a
     // definition of the vftable.
     HasRTTIComponent = Context.getLangOpts().RTTIData &&
-                       !MostDerivedClass->hasAttr<DLLImportAttr>();
+                       !MostDerivedClass->hasAttr<DLLImportAttr>() &&
+                       MostDerivedClass->getTemplateSpecializationKind() !=
+                           TSK_ExplicitInstantiationDeclaration;
 
     LayoutVFTable();
 
@@ -2625,8 +2631,6 @@ public:
   void dumpLayout(raw_ostream &);
 };
 
-} // end namespace
-
 /// InitialOverriddenDefinitionCollector - Finds the set of least derived bases
 /// that define the given method.
 struct InitialOverriddenDefinitionCollector {
@@ -2640,6 +2644,8 @@ struct InitialOverriddenDefinitionCollector {
     return VisitedOverriddenMethods.insert(OverriddenMD).second;
   }
 };
+
+} // end namespace
 
 static bool BaseInSet(const CXXBaseSpecifier *Specifier,
                       CXXBasePath &Path, void *BasesSet) {
@@ -2930,6 +2936,7 @@ static void GroupNewVirtualOverloads(
   typedef llvm::DenseMap<DeclarationName, unsigned> VisitedGroupIndicesTy;
   VisitedGroupIndicesTy VisitedGroupIndices;
   for (const auto *MD : RD->methods()) {
+    MD = MD->getCanonicalDecl();
     VisitedGroupIndicesTy::iterator J;
     bool Inserted;
     std::tie(J, Inserted) = VisitedGroupIndices.insert(

@@ -23,7 +23,7 @@ namespace {
 
 class PrintFunctionsConsumer : public ASTConsumer {
 public:
-  virtual bool HandleTopLevelDecl(DeclGroupRef DG) {
+  bool HandleTopLevelDecl(DeclGroupRef DG) override {
     for (DeclGroupRef::iterator i = DG.begin(), e = DG.end(); i != e; ++i) {
       const Decl *D = *i;
       if (const NamedDecl *ND = dyn_cast<NamedDecl>(D))
@@ -37,12 +37,12 @@ public:
 class PrintFunctionNamesAction : public PluginASTAction {
 protected:
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
-                                                 llvm::StringRef) {
+                                                 llvm::StringRef) override {
     return llvm::make_unique<PrintFunctionsConsumer>();
   }
 
   bool ParseArgs(const CompilerInstance &CI,
-                 const std::vector<std::string>& args) {
+                 const std::vector<std::string> &args) override {
     for (unsigned i = 0, e = args.size(); i != e; ++i) {
       llvm::errs() << "PrintFunctionNames arg = " << args[i] << "\n";
 
@@ -55,7 +55,7 @@ protected:
         return false;
       }
     }
-    if (args.size() && args[0] == "help")
+    if (!args.empty() && args[0] == "help")
       PrintHelp(llvm::errs());
 
     return true;

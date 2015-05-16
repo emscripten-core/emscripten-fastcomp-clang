@@ -84,6 +84,11 @@ public:
     /// ARM-style pointers to member functions.
     Emscripten,
     // @LOCALMOD-END Emscripten
+    /// The generic Mips ABI is a modified version of the Itanium ABI.
+    ///
+    /// At the moment, only change from the generic ABI in this case is:
+    ///   - representation of member function pointers adjusted as in ARM.
+    GenericMIPS,
 
     /// The Microsoft ABI is the ABI used by Microsoft Visual Studio (and
     /// compatible compilers).
@@ -121,6 +126,7 @@ public:
     case Emscripten: // @LOCALMOD Emscripten
     case iOS:
     case iOS64:
+    case GenericMIPS:
       return true;
 
     case Microsoft:
@@ -138,6 +144,7 @@ public:
     case Emscripten: // @LOCALMOD Emscripten
     case iOS:
     case iOS64:
+    case GenericMIPS:
       return false;
 
     case Microsoft:
@@ -160,6 +167,7 @@ public:
       //       the this adjustment, so they don't require functions to have any
       //       special alignment and could therefore also return false.
     case GenericItanium:
+    case GenericMIPS:
     case iOS:
     case iOS64:
     case Microsoft:
@@ -244,6 +252,7 @@ public:
     case Emscripten: // @LOCALMOD Emscripten
     case iOS:   // old iOS compilers did not follow this rule
     case Microsoft:
+    case GenericMIPS:
       return true;
     }
     llvm_unreachable("bad ABI kind");
@@ -290,6 +299,7 @@ public:
     case GenericARM:
     case Emscripten: // @LOCALMOD Emscripten
     case iOS:
+    case GenericMIPS:
       return UseTailPaddingUnlessPOD03;
 
     // iOS on ARM64 uses the C++11 POD rules.  It does not honor the

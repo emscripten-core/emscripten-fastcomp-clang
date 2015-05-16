@@ -44,6 +44,12 @@ void bah() {
 }
 
 namespace warn_unused_CXX11 {
+class Status;
+class Foo {
+ public:
+  Status doStuff();
+};
+
 struct [[clang::warn_unused_result]] Status {
   bool ok() const;
   Status& operator=(const Status& x);
@@ -73,9 +79,22 @@ void lazy() {
   (void)DoYetAnotherThing();
 
   DoSomething(); // expected-warning {{ignoring return value}}
-  DoSomethingElse(); // expected-warning {{ignoring return value}}
-  DoAnotherThing(); // expected-warning {{ignoring return value}}
+  DoSomethingElse();
+  DoAnotherThing();
   DoYetAnotherThing();
+}
+
+template <typename T>
+class [[clang::warn_unused_result]] StatusOr {
+};
+StatusOr<int> doit();
+void test() {
+  Foo f;
+  f.doStuff(); // expected-warning {{ignoring return value}}
+  doit(); // expected-warning {{ignoring return value}}
+
+  auto func = []() { return Status(); };
+  func(); // expected-warning {{ignoring return value}}
 }
 }
 
@@ -132,7 +151,7 @@ void g() {
   D d;
   C c;
   (void)typeid(f(), c); // Should not warn.
-  (void)typeid(f(), d); // expected-warning {{ignoring return value}}
+  (void)typeid(f(), d); // expected-warning {{ignoring return value}} expected-warning {{expression with side effects will be evaluated despite being used as an operand to 'typeid'}}
 
   // The sizeof expression operand is never evaluated.
   (void)sizeof(f(), c); // Should not warn.
