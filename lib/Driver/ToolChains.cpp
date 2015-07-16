@@ -2337,7 +2337,7 @@ NaCl_TC::NaCl_TC(const Driver &D, const llvm::Triple &Triple,
   switch(Triple.getArch()) {
     case llvm::Triple::x86: {
       file_paths.push_back(FilePath + "x86_64-nacl/lib32");
-      file_paths.push_back(FilePath + "x86_64-nacl/usr/lib32");
+      file_paths.push_back(FilePath + "i686-nacl/usr/lib");
       prog_paths.push_back(ProgPath + "x86_64-nacl/bin");
       file_paths.push_back(ToolPath + "i686-nacl");
       break;
@@ -2381,13 +2381,29 @@ void NaCl_TC::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     return;
 
   SmallString<128> P(D.Dir + "/../");
-  if (getTriple().getArch() == llvm::Triple::arm) {
+  switch (getTriple().getArch()) {
+  case llvm::Triple::x86:
+    // x86 is special because multilib style uses x86_64-nacl/include for libc
+    // headers but the SDK wants i686-nacl/usr/include. The other architectures
+    // have the same substring.
+    llvm::sys::path::append(P, "i686-nacl/usr/include");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+    llvm::sys::path::remove_filename(P);
+    llvm::sys::path::remove_filename(P);
+    llvm::sys::path::remove_filename(P);
+    llvm::sys::path::append(P, "x86_64-nacl/include");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+    return;
+  case llvm::Triple::arm:
     llvm::sys::path::append(P, "arm-nacl/usr/include");
-  } else if (getTriple().getArch() == llvm::Triple::x86) {
+    break;
+  case llvm::Triple::x86_64:
     llvm::sys::path::append(P, "x86_64-nacl/usr/include");
-  } else if (getTriple().getArch() == llvm::Triple::x86_64) {
-    llvm::sys::path::append(P, "x86_64-nacl/usr/include");
-  } else {
+    break;
+  case llvm::Triple::mipsel:
+    llvm::sys::path::append(P, "mipsel-nacl/usr/include");
+    break;
+  default:
     return;
   }
 
