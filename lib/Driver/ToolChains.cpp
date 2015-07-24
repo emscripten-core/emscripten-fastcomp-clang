@@ -2356,6 +2356,13 @@ NaCl_TC::NaCl_TC(const Driver &D, const llvm::Triple &Triple,
       file_paths.push_back(ToolPath + "arm-nacl");
       break;
     }
+    case llvm::Triple::mipsel: {
+      file_paths.push_back(FilePath + "mipsel-nacl/lib");
+      file_paths.push_back(FilePath + "mipsel-nacl/usr/lib");
+      prog_paths.push_back(ProgPath + "bin");
+      file_paths.push_back(ToolPath + "mipsel-nacl");
+      break;
+    }
     default:
       break;
   }
@@ -2444,6 +2451,10 @@ void NaCl_TC::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
   } else if (getTriple().getArch() == llvm::Triple::x86_64) {
     SmallString<128> P(D.Dir + "/../");
     llvm::sys::path::append(P, "x86_64-nacl/include/c++/v1");
+    addSystemInclude(DriverArgs, CC1Args, P.str());
+  } else if (getTriple().getArch() == llvm::Triple::mipsel) {
+    SmallString<128> P(D.Dir + "/../");
+    llvm::sys::path::append(P, "mipsel-nacl/include/c++/v1");
     addSystemInclude(DriverArgs, CC1Args, P.str());
   }
 }
