@@ -1229,6 +1229,13 @@ void Clang::AddMIPSTargetArgs(const ArgList &Args,
     CmdArgs.push_back(Args.MakeArgString("-mips-ssection-threshold=" + v));
     A->claim();
   }
+
+  // @LOCALMOD-BEGIN
+  if (Triple.getOS() == llvm::Triple::NaCl) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-direct-to-nacl");
+  }
+  // @LOCALMOD-END
 }
 
 /// getPPCTargetCPU - Get the (LLVM) name of the PowerPC cpu we are targeting.
@@ -3141,10 +3148,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       Args.hasArg(options::OPT_dA))
     CmdArgs.push_back("-masm-verbose");
 
-  bool UsingIntegratedAssembler =
-      Args.hasFlag(options::OPT_fintegrated_as, options::OPT_fno_integrated_as,
-                   IsIntegratedAssemblerDefault);
-  if (!UsingIntegratedAssembler)
+  if (!Args.hasFlag(options::OPT_fintegrated_as, options::OPT_fno_integrated_as,
+                    IsIntegratedAssemblerDefault))
     CmdArgs.push_back("-no-integrated-as");
 
   if (Args.hasArg(options::OPT_fdebug_pass_structure)) {
@@ -3388,8 +3393,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   if (!Args.hasFlag(options::OPT_funique_section_names,
-                    options::OPT_fno_unique_section_names,
-                    !UsingIntegratedAssembler))
+                    options::OPT_fno_unique_section_names, true))
     CmdArgs.push_back("-fno-unique-section-names");
 
   Args.AddAllArgs(CmdArgs, options::OPT_finstrument_functions);
@@ -8061,6 +8065,8 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("armelf_nacl");
   else if (ToolChain.getArch() == llvm::Triple::x86_64)
     CmdArgs.push_back("elf_x86_64_nacl");
+  else if (ToolChain.getArch() == llvm::Triple::mipsel)
+    CmdArgs.push_back("mipselelf_nacl");
   else
     D.Diag(diag::err_target_unsupported_arch) << ToolChain.getArchName() <<
         "Native Client";
@@ -8125,6 +8131,13 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
       if (Args.hasArg(options::OPT_pthread) ||
           Args.hasArg(options::OPT_pthreads) ||
           D.CCCIsCXX()) {
+        // Gold, used by Mips, handles nested groups differently than ld, and
+        // without '-lnacl' it prefers symbols from libpthread.a over libnacl.a,
+        // which is not a desired behaviour here.
+        // See https://sourceware.org/ml/binutils/2015-03/msg00034.html
+        if (getToolChain().getArch() == llvm::Triple::mipsel)
+          CmdArgs.push_back("-lnacl");
+
         CmdArgs.push_back("-lpthread");
       }
 
@@ -8135,6 +8148,13 @@ void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
       else
         CmdArgs.push_back("-lgcc_s");
       CmdArgs.push_back("--no-as-needed");
+
+      // Mips needs to create and use pnacl_legacy library that contains
+      // definitions from bitcode/pnaclmm.c and definitions for
+      // __nacl_tp_tls_offset() and __nacl_tp_tdb_offset().
+      if (getToolChain().getArch() == llvm::Triple::mipsel)
+        CmdArgs.push_back("-lpnacl_legacy");
+
       CmdArgs.push_back("--end-group");
     }
 
