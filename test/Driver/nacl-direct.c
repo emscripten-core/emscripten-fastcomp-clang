@@ -9,7 +9,7 @@
 // CHECK-I686: "-target-cpu" "pentium4"
 // CHECK-I686: "-resource-dir" "foo"
 // CHECK-I686: "-internal-isystem" "foo{{/|\\\\}}include"
-// CHECK-I686: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}x86_64-nacl{{/|\\\\}}usr{{/|\\\\}}include"
+// CHECK-I686: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}i686-nacl{{/|\\\\}}usr{{/|\\\\}}include"
 // CHECK-I686: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}x86_64-nacl{{/|\\\\}}include"
 // CHECK-I686: as{{(.exe)?}}" "--32"
 // CHECK-I686: ld{{(.exe)?}}"
@@ -17,7 +17,7 @@
 // CHECK-I686: "-m" "elf_i386_nacl"
 // CHECK-I686: "-static"
 // CHECK-I686: "-L{{.*}}{{/|\\\\}}..{{/|\\\\}}x86_64-nacl{{/|\\\\}}lib32"
-// CHECK-I686: "-L{{.*}}{{/|\\\\}}..{{/|\\\\}}x86_64-nacl{{/|\\\\}}usr{{/|\\\\}}lib32"
+// CHECK-I686: "-L{{.*}}{{/|\\\\}}..{{/|\\\\}}i686-nacl{{/|\\\\}}usr{{/|\\\\}}lib"
 // CHECK-I686: "-Lfoo{{/|\\\\}}lib{{/|\\\\}}i686-nacl"
 // CHECK-I686-NOT: -lpthread
 //
@@ -63,6 +63,29 @@
 // CHECK-ARM: "-L{{.*}}{{/|\\\\}}..{{/|\\\\}}arm-nacl{{/|\\\\}}usr{{/|\\\\}}lib"
 // CHECK-ARM: "-Lfoo{{/|\\\\}}lib{{/|\\\\}}arm-nacl"
 // CHECK-ARM-NOT: -lpthread
+//
+// RUN: %clang -no-canonical-prefixes -### -o %t.o %s \
+// RUN:     -target mipsel-unknown-nacl -resource-dir foo 2>&1 \
+// RUN:   | FileCheck --check-prefix=CHECK-MIPS %s
+// CHECK-MIPS: {{.*}}clang{{.*}}" "-cc1"
+// CHECK-MIPS: "-fuse-init-array"
+// CHECK-MIPS: "-target-cpu" "mips32r2"
+// CHECK-MIPS: "-target-abi" "o32"
+// CHECK-MIPS: "-mfloat-abi" "hard"
+// CHECK-MIPS: "-resource-dir" "foo"
+// CHECK-MIPS: "-internal-isystem" "foo{{/|\\\\}}include"
+// CHECK-MIPS: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}mipsel-nacl{{/|\\\\}}usr{{/|\\\\}}include"
+// CHECK-MIPS: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}mipsel-nacl{{/|\\\\}}include"
+// CHECK-MIPS-NOT: as{{(.exe)?}}"
+// CHECK-MIPS: ld{{(.exe)?}}"
+// CHECK-MIPS: "--build-id"
+// CHECK-MIPS: "-m" "mipselelf_nacl"
+// CHECK-MIPS: "-static"
+// CHECK-MIPS: "-L{{.*}}{{/|\\\\}}..{{/|\\\\}}mipsel-nacl{{/|\\\\}}lib"
+// CHECK-MIPS: "-L{{.*}}{{/|\\\\}}..{{/|\\\\}}mipsel-nacl{{/|\\\\}}usr{{/|\\\\}}lib"
+// CHECK-MIPS: "-Lfoo{{/|\\\\}}lib{{/|\\\\}}mipsel-nacl"
+// CHECK-MIPS: "-lpnacl_legacy"
+// CHECK-MIPS-NOT: "-lpthread"
 
 // Check that even when the target arch is just "arm" (as will be the case when
 // it is inferred from the binary name) that we get the right ABI flags
@@ -95,7 +118,7 @@
 // CHECK-I686-CXX: "-resource-dir" "foo"
 // CHECK-I686-CXX: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}x86_64-nacl{{/|\\\\}}include{{/|\\\\}}c++{{/|\\\\}}v1"
 // CHECK-I686-CXX: "-internal-isystem" "foo{{/|\\\\}}include"
-// CHECK-I686-CXX: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}x86_64-nacl{{/|\\\\}}usr{{/|\\\\}}include"
+// CHECK-I686-CXX: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}i686-nacl{{/|\\\\}}usr{{/|\\\\}}include"
 // CHECK-I686-CXX: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}x86_64-nacl{{/|\\\\}}include"
 // CHECK-I686-CXX: "-lpthread"
 
@@ -109,3 +132,15 @@
 // CHECK-x86_64-CXX: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}x86_64-nacl{{/|\\\\}}usr{{/|\\\\}}include"
 // CHECK-x86_64-CXX: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}x86_64-nacl{{/|\\\\}}include"
 // CHECK-x86_64-CXX: "-lpthread"
+
+// RUN: %clangxx -no-canonical-prefixes -### -o %t.o %s \
+// RUN:     -target mipsel-unknown-nacl -resource-dir foo 2>&1 \
+// RUN:   | FileCheck --check-prefix=CHECK-MIPS-CXX %s
+// CHECK-MIPS-CXX: {{.*}}clang{{.*}}" "-cc1"
+// CHECK-MIPS-CXX: "-resource-dir" "foo"
+// CHECK-MIPS-CXX: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}mipsel-nacl{{/|\\\\}}include{{/|\\\\}}c++{{/|\\\\}}v1"
+// CHECK-MIPS-CXX: "-internal-isystem" "foo{{/|\\\\}}include"
+// CHECK-MIPS-CXX: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}mipsel-nacl{{/|\\\\}}usr{{/|\\\\}}include"
+// CHECK-MIPS-CXX: "-internal-isystem" "{{.*}}{{/|\\\\}}..{{/|\\\\}}mipsel-nacl{{/|\\\\}}include"
+// CHECK-MIPS-CXX: "-lnacl"
+// CHECK-MIPS-CXX: "-lpthread"
