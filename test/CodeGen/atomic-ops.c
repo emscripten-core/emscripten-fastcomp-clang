@@ -1,4 +1,5 @@
 // RUN: %clang_cc1 %s -emit-llvm -o - -ffreestanding -triple=i686-apple-darwin9 | FileCheck %s
+// REQUIRES: x86-registered-target
 
 // Also test serialization of atomic operations here, to avoid duplicating the
 // test.
@@ -103,6 +104,14 @@ int fi3e(atomic_int *i) {
   // CHECK: atomicrmw or
   // CHECK-NOT: {{ or }}
   return atomic_fetch_or(i, 1);
+}
+
+int fi3f(int *i) {
+  // CHECK-LABEL: @fi3f
+  // CHECK-NOT: store volatile
+  // CHECK: atomicrmw or
+  // CHECK-NOT: {{ or }}
+  return __atomic_fetch_or(i, (short)1, memory_order_seq_cst);
 }
 
 _Bool fi4(_Atomic(int) *i) {

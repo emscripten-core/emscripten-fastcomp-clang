@@ -222,6 +222,9 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   case Stmt::OMPTaskwaitDirectiveClass:
     EmitOMPTaskwaitDirective(cast<OMPTaskwaitDirective>(*S));
     break;
+  case Stmt::OMPTaskgroupDirectiveClass:
+    EmitOMPTaskgroupDirective(cast<OMPTaskgroupDirective>(*S));
+    break;
   case Stmt::OMPFlushDirectiveClass:
     EmitOMPFlushDirective(cast<OMPFlushDirective>(*S));
     break;
@@ -236,6 +239,15 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
     break;
   case Stmt::OMPTeamsDirectiveClass:
     EmitOMPTeamsDirective(cast<OMPTeamsDirective>(*S));
+    break;
+  case Stmt::OMPCancellationPointDirectiveClass:
+    EmitOMPCancellationPointDirective(cast<OMPCancellationPointDirective>(*S));
+    break;
+  case Stmt::OMPCancelDirectiveClass:
+    EmitOMPCancelDirective(cast<OMPCancelDirective>(*S));
+    break;
+  case Stmt::OMPTargetDataDirectiveClass:
+    EmitOMPTargetDataDirective(cast<OMPTargetDataDirective>(*S));
     break;
   }
 }
@@ -423,9 +435,8 @@ void CodeGenFunction::EmitLabel(const LabelDecl *D) {
     ResolveBranchFixups(Dest.getBlock());
   }
 
-  RegionCounter Cnt = getPGORegionCounter(D->getStmt());
   EmitBlock(Dest.getBlock());
-  Cnt.beginRegion(Builder);
+  incrementProfileCounter(D->getStmt());
 }
 
 /// Change the cleanup scope of the labels in this lexical scope to
@@ -513,7 +524,6 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
   // C99 6.8.4.1: The first substatement is executed if the expression compares
   // unequal to 0.  The condition must be a scalar type.
   LexicalScope ConditionScope(*this, S.getCond()->getSourceRange());
-  RegionCounter Cnt = getPGORegionCounter(&S);
 
   if (S.getConditionVariable())
     EmitAutoVarDecl(*S.getConditionVariable());
@@ -532,7 +542,7 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
     // This avoids emitting dead code and simplifies the CFG substantially.
     if (!ContainsLabel(Skipped)) {
       if (CondConstant)
-        Cnt.beginRegion(Builder);
+        incrementProfileCounter(&S);
       if (Executed) {
         RunCleanupsScope ExecutedScope(*this);
         EmitStmt(Executed);
@@ -549,11 +559,12 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
   if (S.getElse())
     ElseBlock = createBasicBlock("if.else");
 
-  EmitBranchOnBoolExpr(S.getCond(), ThenBlock, ElseBlock, Cnt.getCount());
+  EmitBranchOnBoolExpr(S.getCond(), ThenBlock, ElseBlock,
+                       getProfileCount(S.getThen()));
 
   // Emit the 'then' code.
   EmitBlock(ThenBlock);
-  Cnt.beginRegion(Builder);
+  incrementProfileCounter(&S);
   {
     RunCleanupsScope ThenScope(*this);
     EmitStmt(S.getThen());
@@ -582,110 +593,14 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
   EmitBlock(ContBlock, true);
 }
 
-void CodeGenFunction::EmitCondBrHints(llvm::LLVMContext &Context,
-                                      llvm::BranchInst *CondBr,
-                                      ArrayRef<const Attr *> Attrs) {
-  // Return if there are no hints.
-  if (Attrs.empty())
-    return;
-
-  // Add vectorize and unroll hints to the metadata on the conditional branch.
-  //
-  // FIXME: Should this really start with a size of 1?
-  SmallVector<llvm::Metadata *, 2> Metadata(1);
-  for (const auto *Attr : Attrs) {
-    const LoopHintAttr *LH = dyn_cast<LoopHintAttr>(Attr);
-
-    // Skip non loop hint attributes
-    if (!LH)
-      continue;
-
-    LoopHintAttr::OptionType Option = LH->getOption();
-    LoopHintAttr::LoopHintState State = LH->getState();
-    const char *MetadataName;
-    switch (Option) {
-    case LoopHintAttr::Vectorize:
-    case LoopHintAttr::VectorizeWidth:
-      MetadataName = "llvm.loop.vectorize.width";
-      break;
-    case LoopHintAttr::Interleave:
-    case LoopHintAttr::InterleaveCount:
-      MetadataName = "llvm.loop.interleave.count";
-      break;
-    case LoopHintAttr::Unroll:
-      // With the unroll loop hint, a non-zero value indicates full unrolling.
-      MetadataName = State == LoopHintAttr::Disable ? "llvm.loop.unroll.disable"
-                                                    : "llvm.loop.unroll.full";
-      break;
-    case LoopHintAttr::UnrollCount:
-      MetadataName = "llvm.loop.unroll.count";
-      break;
-    }
-
-    Expr *ValueExpr = LH->getValue();
-    int ValueInt = 1;
-    if (ValueExpr) {
-      llvm::APSInt ValueAPS =
-          ValueExpr->EvaluateKnownConstInt(CGM.getContext());
-      ValueInt = static_cast<int>(ValueAPS.getSExtValue());
-    }
-
-    llvm::Constant *Value;
-    llvm::MDString *Name;
-    switch (Option) {
-    case LoopHintAttr::Vectorize:
-    case LoopHintAttr::Interleave:
-      if (State != LoopHintAttr::Disable) {
-        // FIXME: In the future I will modifiy the behavior of the metadata
-        // so we can enable/disable vectorization and interleaving separately.
-        Name = llvm::MDString::get(Context, "llvm.loop.vectorize.enable");
-        Value = Builder.getTrue();
-        break;
-      }
-      // Vectorization/interleaving is disabled, set width/count to 1.
-      ValueInt = 1;
-      // Fallthrough.
-    case LoopHintAttr::VectorizeWidth:
-    case LoopHintAttr::InterleaveCount:
-    case LoopHintAttr::UnrollCount:
-      Name = llvm::MDString::get(Context, MetadataName);
-      Value = llvm::ConstantInt::get(Int32Ty, ValueInt);
-      break;
-    case LoopHintAttr::Unroll:
-      Name = llvm::MDString::get(Context, MetadataName);
-      Value = nullptr;
-      break;
-    }
-
-    SmallVector<llvm::Metadata *, 2> OpValues;
-    OpValues.push_back(Name);
-    if (Value)
-      OpValues.push_back(llvm::ConstantAsMetadata::get(Value));
-
-    // Set or overwrite metadata indicated by Name.
-    Metadata.push_back(llvm::MDNode::get(Context, OpValues));
-  }
-
-  // FIXME: This condition is never false.  Should it be an assert?
-  if (!Metadata.empty()) {
-    // Add llvm.loop MDNode to CondBr.
-    llvm::MDNode *LoopID = llvm::MDNode::get(Context, Metadata);
-    LoopID->replaceOperandWith(0, LoopID); // First op points to itself.
-
-    CondBr->setMetadata("llvm.loop", LoopID);
-  }
-}
-
 void CodeGenFunction::EmitWhileStmt(const WhileStmt &S,
                                     ArrayRef<const Attr *> WhileAttrs) {
-  RegionCounter Cnt = getPGORegionCounter(&S);
-
   // Emit the header for the loop, which will also become
   // the continue target.
   JumpDest LoopHeader = getJumpDestInCurrentScope("while.cond");
   EmitBlock(LoopHeader.getBlock());
 
-  LoopStack.push(LoopHeader.getBlock());
+  LoopStack.push(LoopHeader.getBlock(), CGM.getContext(), WhileAttrs);
 
   // Create an exit block for when the condition fails, which will
   // also become the break target.
@@ -724,17 +639,14 @@ void CodeGenFunction::EmitWhileStmt(const WhileStmt &S,
     llvm::BasicBlock *ExitBlock = LoopExit.getBlock();
     if (ConditionScope.requiresCleanups())
       ExitBlock = createBasicBlock("while.exit");
-    llvm::BranchInst *CondBr =
-        Builder.CreateCondBr(BoolCondVal, LoopBody, ExitBlock,
-                             PGO.createLoopWeights(S.getCond(), Cnt));
+    Builder.CreateCondBr(
+        BoolCondVal, LoopBody, ExitBlock,
+        createProfileWeightsForLoop(S.getCond(), getProfileCount(S.getBody())));
 
     if (ExitBlock != LoopExit.getBlock()) {
       EmitBlock(ExitBlock);
       EmitBranchThroughCleanup(LoopExit);
     }
-
-    // Attach metadata to loop body conditional branch.
-    EmitCondBrHints(LoopBody->getContext(), CondBr, WhileAttrs);
   }
 
   // Emit the loop body.  We have to emit this in a cleanup scope
@@ -742,7 +654,7 @@ void CodeGenFunction::EmitWhileStmt(const WhileStmt &S,
   {
     RunCleanupsScope BodyScope(*this);
     EmitBlock(LoopBody);
-    Cnt.beginRegion(Builder);
+    incrementProfileCounter(&S);
     EmitStmt(S.getBody());
   }
 
@@ -771,7 +683,7 @@ void CodeGenFunction::EmitDoStmt(const DoStmt &S,
   JumpDest LoopExit = getJumpDestInCurrentScope("do.end");
   JumpDest LoopCond = getJumpDestInCurrentScope("do.cond");
 
-  RegionCounter Cnt = getPGORegionCounter(&S);
+  uint64_t ParentCount = getCurrentProfileCount();
 
   // Store the blocks to use for break and continue.
   BreakContinueStack.push_back(BreakContinue(LoopExit, LoopCond));
@@ -779,9 +691,9 @@ void CodeGenFunction::EmitDoStmt(const DoStmt &S,
   // Emit the body of the loop.
   llvm::BasicBlock *LoopBody = createBasicBlock("do.body");
 
-  LoopStack.push(LoopBody);
+  LoopStack.push(LoopBody, CGM.getContext(), DoAttrs);
 
-  EmitBlockWithFallThrough(LoopBody, Cnt);
+  EmitBlockWithFallThrough(LoopBody, &S);
   {
     RunCleanupsScope BodyScope(*this);
     EmitStmt(S.getBody());
@@ -808,12 +720,10 @@ void CodeGenFunction::EmitDoStmt(const DoStmt &S,
 
   // As long as the condition is true, iterate the loop.
   if (EmitBoolCondBranch) {
-    llvm::BranchInst *CondBr =
-        Builder.CreateCondBr(BoolCondVal, LoopBody, LoopExit.getBlock(),
-                             PGO.createLoopWeights(S.getCond(), Cnt));
-
-    // Attach metadata to loop body conditional branch.
-    EmitCondBrHints(LoopBody->getContext(), CondBr, DoAttrs);
+    uint64_t BackedgeCount = getProfileCount(S.getBody()) - ParentCount;
+    Builder.CreateCondBr(
+        BoolCondVal, LoopBody, LoopExit.getBlock(),
+        createProfileWeightsForLoop(S.getCond(), BackedgeCount));
   }
 
   LoopStack.pop();
@@ -837,8 +747,6 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
   if (S.getInit())
     EmitStmt(S.getInit());
 
-  RegionCounter Cnt = getPGORegionCounter(&S);
-
   // Start the loop with a block that tests the condition.
   // If there's an increment, the continue scope will be overwritten
   // later.
@@ -846,7 +754,7 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
   llvm::BasicBlock *CondBlock = Continue.getBlock();
   EmitBlock(CondBlock);
 
-  LoopStack.push(CondBlock);
+  LoopStack.push(CondBlock, CGM.getContext(), ForAttrs);
 
   // If the for loop doesn't have an increment we can just use the
   // condition as the continue block.  Otherwise we'll need to create
@@ -880,12 +788,9 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
     // C99 6.8.5p2/p4: The first substatement is executed if the expression
     // compares unequal to 0.  The condition must be a scalar type.
     llvm::Value *BoolCondVal = EvaluateExprAsBool(S.getCond());
-    llvm::BranchInst *CondBr =
-        Builder.CreateCondBr(BoolCondVal, ForBody, ExitBlock,
-                             PGO.createLoopWeights(S.getCond(), Cnt));
-
-    // Attach metadata to loop body conditional branch.
-    EmitCondBrHints(ForBody->getContext(), CondBr, ForAttrs);
+    Builder.CreateCondBr(
+        BoolCondVal, ForBody, ExitBlock,
+        createProfileWeightsForLoop(S.getCond(), getProfileCount(S.getBody())));
 
     if (ExitBlock != LoopExit.getBlock()) {
       EmitBlock(ExitBlock);
@@ -897,7 +802,7 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
     // Treat it as a non-zero constant.  Don't even create a new block for the
     // body, just fall into it.
   }
-  Cnt.beginRegion(Builder);
+  incrementProfileCounter(&S);
 
   {
     // Create a separate cleanup scope for the body, in case it is not
@@ -938,15 +843,13 @@ CodeGenFunction::EmitCXXForRangeStmt(const CXXForRangeStmt &S,
   EmitStmt(S.getRangeStmt());
   EmitStmt(S.getBeginEndStmt());
 
-  RegionCounter Cnt = getPGORegionCounter(&S);
-
   // Start the loop with a block that tests the condition.
   // If there's an increment, the continue scope will be overwritten
   // later.
   llvm::BasicBlock *CondBlock = createBasicBlock("for.cond");
   EmitBlock(CondBlock);
 
-  LoopStack.push(CondBlock);
+  LoopStack.push(CondBlock, CGM.getContext(), ForAttrs);
 
   // If there are any cleanups between here and the loop-exit scope,
   // create a block to stage a loop exit along.
@@ -960,11 +863,9 @@ CodeGenFunction::EmitCXXForRangeStmt(const CXXForRangeStmt &S,
   // The body is executed if the expression, contextually converted
   // to bool, is true.
   llvm::Value *BoolCondVal = EvaluateExprAsBool(S.getCond());
-  llvm::BranchInst *CondBr = Builder.CreateCondBr(
-      BoolCondVal, ForBody, ExitBlock, PGO.createLoopWeights(S.getCond(), Cnt));
-
-  // Attach metadata to loop body conditional branch.
-  EmitCondBrHints(ForBody->getContext(), CondBr, ForAttrs);
+  Builder.CreateCondBr(
+      BoolCondVal, ForBody, ExitBlock,
+      createProfileWeightsForLoop(S.getCond(), getProfileCount(S.getBody())));
 
   if (ExitBlock != LoopExit.getBlock()) {
     EmitBlock(ExitBlock);
@@ -972,7 +873,7 @@ CodeGenFunction::EmitCXXForRangeStmt(const CXXForRangeStmt &S,
   }
 
   EmitBlock(ForBody);
-  Cnt.beginRegion(Builder);
+  incrementProfileCounter(&S);
 
   // Create a block for the increment. In case of a 'continue', we jump there.
   JumpDest Continue = getJumpDestInCurrentScope("for.inc");
@@ -1138,13 +1039,11 @@ void CodeGenFunction::EmitCaseStmtRange(const CaseStmt &S) {
   llvm::APSInt LHS = S.getLHS()->EvaluateKnownConstInt(getContext());
   llvm::APSInt RHS = S.getRHS()->EvaluateKnownConstInt(getContext());
 
-  RegionCounter CaseCnt = getPGORegionCounter(&S);
-
   // Emit the code for this case. We do this first to make sure it is
   // properly chained from our predecessor before generating the
   // switch machinery to enter this block.
   llvm::BasicBlock *CaseDest = createBasicBlock("sw.bb");
-  EmitBlockWithFallThrough(CaseDest, CaseCnt);
+  EmitBlockWithFallThrough(CaseDest, &S);
   EmitStmt(S.getSubStmt());
 
   // If range is empty, do nothing.
@@ -1155,7 +1054,7 @@ void CodeGenFunction::EmitCaseStmtRange(const CaseStmt &S) {
   // FIXME: parameters such as this should not be hardcoded.
   if (Range.ult(llvm::APInt(Range.getBitWidth(), 64))) {
     // Range is small enough to add multiple switch instruction cases.
-    uint64_t Total = CaseCnt.getCount();
+    uint64_t Total = getProfileCount(&S);
     unsigned NCases = Range.getZExtValue() + 1;
     // We only have one region counter for the entire set of cases here, so we
     // need to divide the weights evenly between the generated cases, ensuring
@@ -1194,9 +1093,9 @@ void CodeGenFunction::EmitCaseStmtRange(const CaseStmt &S) {
 
   llvm::MDNode *Weights = nullptr;
   if (SwitchWeights) {
-    uint64_t ThisCount = CaseCnt.getCount();
+    uint64_t ThisCount = getProfileCount(&S);
     uint64_t DefaultCount = (*SwitchWeights)[0];
-    Weights = PGO.createBranchWeights(ThisCount, DefaultCount);
+    Weights = createProfileWeights(ThisCount, DefaultCount);
 
     // Since we're chaining the switch default through each large case range, we
     // need to update the weight for the default, ie, the first case, to include
@@ -1229,7 +1128,6 @@ void CodeGenFunction::EmitCaseStmt(const CaseStmt &S) {
     return;
   }
 
-  RegionCounter CaseCnt = getPGORegionCounter(&S);
   llvm::ConstantInt *CaseVal =
     Builder.getInt(S.getLHS()->EvaluateKnownConstInt(getContext()));
 
@@ -1244,7 +1142,7 @@ void CodeGenFunction::EmitCaseStmt(const CaseStmt &S) {
     // Only do this optimization if there are no cleanups that need emitting.
     if (isObviouslyBranchWithoutCleanups(Block)) {
       if (SwitchWeights)
-        SwitchWeights->push_back(CaseCnt.getCount());
+        SwitchWeights->push_back(getProfileCount(&S));
       SwitchInsn->addCase(CaseVal, Block.getBlock());
 
       // If there was a fallthrough into this case, make sure to redirect it to
@@ -1258,9 +1156,9 @@ void CodeGenFunction::EmitCaseStmt(const CaseStmt &S) {
   }
 
   llvm::BasicBlock *CaseDest = createBasicBlock("sw.bb");
-  EmitBlockWithFallThrough(CaseDest, CaseCnt);
+  EmitBlockWithFallThrough(CaseDest, &S);
   if (SwitchWeights)
-    SwitchWeights->push_back(CaseCnt.getCount());
+    SwitchWeights->push_back(getProfileCount(&S));
   SwitchInsn->addCase(CaseVal, CaseDest);
 
   // Recursively emitting the statement is acceptable, but is not wonderful for
@@ -1281,12 +1179,11 @@ void CodeGenFunction::EmitCaseStmt(const CaseStmt &S) {
     llvm::ConstantInt *CaseVal =
       Builder.getInt(CurCase->getLHS()->EvaluateKnownConstInt(getContext()));
 
-    CaseCnt = getPGORegionCounter(NextCase);
     if (SwitchWeights)
-      SwitchWeights->push_back(CaseCnt.getCount());
+      SwitchWeights->push_back(getProfileCount(NextCase));
     if (CGM.getCodeGenOpts().ProfileInstrGenerate) {
       CaseDest = createBasicBlock("sw.bb");
-      EmitBlockWithFallThrough(CaseDest, CaseCnt);
+      EmitBlockWithFallThrough(CaseDest, &S);
     }
 
     SwitchInsn->addCase(CaseVal, CaseDest);
@@ -1302,8 +1199,7 @@ void CodeGenFunction::EmitDefaultStmt(const DefaultStmt &S) {
   assert(DefaultBlock->empty() &&
          "EmitDefaultStmt: Default block already defined?");
 
-  RegionCounter Cnt = getPGORegionCounter(&S);
-  EmitBlockWithFallThrough(DefaultBlock, Cnt);
+  EmitBlockWithFallThrough(DefaultBlock, &S);
 
   EmitStmt(S.getSubStmt());
 }
@@ -1525,10 +1421,8 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
     const SwitchCase *Case = nullptr;
     if (FindCaseStatementsForValue(S, ConstantCondValue, CaseStmts,
                                    getContext(), Case)) {
-      if (Case) {
-        RegionCounter CaseCnt = getPGORegionCounter(Case);
-        CaseCnt.beginRegion(Builder);
-      }
+      if (Case)
+        incrementProfileCounter(Case);
       RunCleanupsScope ExecutedScope(*this);
 
       // Emit the condition variable if needed inside the entire cleanup scope
@@ -1545,8 +1439,7 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
       // specified series of statements and we're good.
       for (unsigned i = 0, e = CaseStmts.size(); i != e; ++i)
         EmitStmt(CaseStmts[i]);
-      RegionCounter ExitCnt = getPGORegionCounter(&S);
-      ExitCnt.beginRegion(Builder);
+      incrementProfileCounter(&S);
 
       // Now we want to restore the saved switch instance so that nested
       // switches continue to function properly
@@ -1577,7 +1470,7 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
          Case;
          Case = Case->getNextSwitchCase()) {
       if (isa<DefaultStmt>(Case))
-        DefaultCount = getPGORegionCounter(Case).getCount();
+        DefaultCount = getProfileCount(Case);
       NumCases += 1;
     }
     SwitchWeights = new SmallVector<uint64_t, 16>();
@@ -1626,8 +1519,7 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
 
   // Emit continuation.
   EmitBlock(SwitchExit.getBlock(), true);
-  RegionCounter ExitCnt = getPGORegionCounter(&S);
-  ExitCnt.beginRegion(Builder);
+  incrementProfileCounter(&S);
 
   if (SwitchWeights) {
     assert(SwitchWeights->size() == 1 + SwitchInsn->getNumCases() &&
@@ -1635,7 +1527,7 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
     // If there's only one jump destination there's no sense weighting it.
     if (SwitchWeights->size() > 1)
       SwitchInsn->setMetadata(llvm::LLVMContext::MD_prof,
-                              PGO.createBranchWeights(*SwitchWeights));
+                              createProfileWeights(*SwitchWeights));
     delete SwitchWeights;
   }
   SwitchInsn = SavedSwitchInsn;
@@ -1764,6 +1656,16 @@ llvm::Value* CodeGenFunction::EmitAsmInput(
                                          const TargetInfo::ConstraintInfo &Info,
                                            const Expr *InputExpr,
                                            std::string &ConstraintStr) {
+  // If this can't be a register or memory, i.e., has to be a constant
+  // (immediate or symbolic), try to emit it as such.
+  if (!Info.allowsRegister() && !Info.allowsMemory()) {
+    llvm::APSInt Result;
+    if (InputExpr->EvaluateAsInt(Result, getContext()))
+      return llvm::ConstantInt::get(getLLVMContext(), Result);
+    assert(!Info.requiresImmediateConstant() &&
+           "Required-immediate inlineasm arg isn't constant?");
+  }
+
   if (Info.allowsRegister() || !Info.allowsMemory())
     if (CodeGenFunction::hasScalarEvaluationKind(InputExpr->getType()))
       return EmitScalarExpr(InputExpr);
@@ -1847,6 +1749,14 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
   std::vector<llvm::Value*> InOutArgs;
   std::vector<llvm::Type*> InOutArgTypes;
 
+  // An inline asm can be marked readonly if it meets the following conditions:
+  //  - it doesn't have any sideeffects
+  //  - it doesn't clobber memory
+  //  - it doesn't return a value by-reference
+  // It can be marked readnone if it doesn't have any input memory constraints
+  // in addition to meeting the conditions listed above.
+  bool ReadOnly = true, ReadNone = true;
+
   for (unsigned i = 0, e = S.getNumOutputs(); i != e; i++) {
     TargetInfo::ConstraintInfo &Info = OutputConstraintInfos[i];
 
@@ -1910,6 +1820,7 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
       Args.push_back(Dest.getAddress());
       Constraints += "=*";
       Constraints += OutputConstraint;
+      ReadOnly = ReadNone = false;
     }
 
     if (Info.isReadWrite()) {
@@ -1953,6 +1864,9 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
     const Expr *InputExpr = S.getInputExpr(i);
 
     TargetInfo::ConstraintInfo &Info = InputConstraintInfos[i];
+
+    if (Info.allowsMemory())
+      ReadNone = false;
 
     if (!Constraints.empty())
       Constraints += ',';
@@ -2018,7 +1932,9 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
   for (unsigned i = 0, e = S.getNumClobbers(); i != e; i++) {
     StringRef Clobber = S.getClobber(i);
 
-    if (Clobber != "memory" && Clobber != "cc")
+    if (Clobber == "memory")
+      ReadOnly = ReadNone = false;
+    else if (Clobber != "cc")
       Clobber = getTarget().getNormalizedGCCRegisterName(Clobber);
 
     if (!Constraints.empty())
@@ -2058,17 +1974,15 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
   Result->addAttribute(llvm::AttributeSet::FunctionIndex,
                        llvm::Attribute::NoUnwind);
 
-  // @LOCALMOD-START
-  if (getTargetHooks().asmMemoryIsFence() && IA->isAsmMemory()) {
-    // Targets can ask that ``asm("":::"memory")`` be treated like
-    // ``__sync_synchronize()``.
-    Builder.CreateFence(llvm::SequentiallyConsistent);
-    Builder.CreateCall(
-        llvm::InlineAsm::get(FTy, AsmString, Constraints, HasSideEffect))->
-        addAttribute(llvm::AttributeSet::FunctionIndex,
-                     llvm::Attribute::NoUnwind);
+  // Attach readnone and readonly attributes.
+  if (!HasSideEffect) {
+    if (ReadNone)
+      Result->addAttribute(llvm::AttributeSet::FunctionIndex,
+                           llvm::Attribute::ReadNone);
+    else if (ReadOnly)
+      Result->addAttribute(llvm::AttributeSet::FunctionIndex,
+                           llvm::Attribute::ReadOnly);
   }
-  // @LOCALMOD-END
 
   // Slap the source location of the inline asm into a !srcloc metadata on the
   // call.
@@ -2139,8 +2053,8 @@ LValue CodeGenFunction::InitCapturedStruct(const CapturedStmt &S) {
       CreateMemTemp(RecordTy, "agg.captured"), RecordTy);
 
   RecordDecl::field_iterator CurField = RD->field_begin();
-  for (CapturedStmt::capture_init_iterator I = S.capture_init_begin(),
-                                           E = S.capture_init_end();
+  for (CapturedStmt::const_capture_init_iterator I = S.capture_init_begin(),
+                                                 E = S.capture_init_end();
        I != E; ++I, ++CurField) {
     LValue LV = EmitLValueForFieldInitialization(SlotLV, *CurField);
     if (CurField->hasCapturedVLAType()) {
@@ -2162,7 +2076,7 @@ CodeGenFunction::EmitCapturedStmt(const CapturedStmt &S, CapturedRegionKind K) {
 
   // Emit the CapturedDecl
   CodeGenFunction CGF(CGM, true);
-  CGF.CapturedStmtInfo = new CGCapturedStmtInfo(S, K);
+  CGCapturedStmtRAII CapInfoRAII(CGF, new CGCapturedStmtInfo(S, K));
   llvm::Function *F = CGF.GenerateCapturedStmtFunction(S);
   delete CGF.CapturedStmtInfo;
 

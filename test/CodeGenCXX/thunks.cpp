@@ -362,31 +362,27 @@ namespace Test15 {
 }
 
 namespace Test16 {
-
-// Check that the thunk for 'B::f' has available_externally linkage
-// and is not in a comdat.
-
-template <class C>
 struct A {
-  virtual void f();
+  virtual ~A();
 };
-
-template <class D>
-struct B : virtual A<D> {
-  virtual void f() { }
+struct B {
+  virtual void foo();
 };
-
-extern template struct B<int>;
-
-void f(B<int> b) {
-  b.f();
-}
+struct C : public A, public B {
+  void foo() {}
+};
+struct D : public C {
+  ~D();
+};
+D::~D() {}
+// CHECK: define linkonce_odr void @_ZThn8_N6Test161C3fooEv({{.*}}) {{.*}} comdat
 }
 
 /**** The following has to go at the end of the file ****/
 
 // This is from Test5:
 // CHECK-LABEL: define internal void @_ZThn8_N6Test4B12_GLOBAL__N_11C1fEv(
+// CHECK-NOT: comdat
 // CHECK-LABEL: define linkonce_odr void @_ZTv0_n24_N5Test51B1fEv
 
 // This is from Test10:

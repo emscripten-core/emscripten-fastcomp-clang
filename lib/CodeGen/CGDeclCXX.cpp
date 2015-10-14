@@ -259,18 +259,23 @@ llvm::Function *CodeGenModule::CreateGlobalInitOrDestructFunction(
       Fn->setSection(Section);
   }
 
+  SetLLVMFunctionAttributes(nullptr, getTypes().arrangeNullaryFunction(), Fn);
+
   Fn->setCallingConv(getRuntimeCC());
 
   if (!getLangOpts().Exceptions)
     Fn->setDoesNotThrow();
 
   if (!isInSanitizerBlacklist(Fn, Loc)) {
-    if (getLangOpts().Sanitize.has(SanitizerKind::Address))
+    if (getLangOpts().Sanitize.hasOneOf(SanitizerKind::Address |
+                                        SanitizerKind::KernelAddress))
       Fn->addFnAttr(llvm::Attribute::SanitizeAddress);
     if (getLangOpts().Sanitize.has(SanitizerKind::Thread))
       Fn->addFnAttr(llvm::Attribute::SanitizeThread);
     if (getLangOpts().Sanitize.has(SanitizerKind::Memory))
       Fn->addFnAttr(llvm::Attribute::SanitizeMemory);
+    if (getLangOpts().Sanitize.has(SanitizerKind::SafeStack))
+      Fn->addFnAttr(llvm::Attribute::SafeStack);
   }
 
   return Fn;
@@ -419,6 +424,7 @@ CodeGenModule::EmitCXXGlobalInitFunc() {
       CodeGenFunction(*this).GenerateCXXGlobalInitFunc(Fn, LocalCXXGlobalInits);
       AddGlobalCtor(Fn, Priority);
     }
+    PrioritizedCXXGlobalInits.clear();
   }
 
   SmallString<128> FileName;
@@ -429,7 +435,7 @@ CodeGenModule::EmitCXXGlobalInitFunc() {
     // priority emitted above.
     FileName = llvm::sys::path::filename(MainFile->getName());
   } else {
-    FileName = SmallString<128>("<null>");
+    FileName = "<null>";
   }
 
   for (size_t i = 0; i < FileName.size(); ++i) {
@@ -446,7 +452,6 @@ CodeGenModule::EmitCXXGlobalInitFunc() {
   AddGlobalCtor(Fn);
 
   CXXGlobalInits.clear();
-  PrioritizedCXXGlobalInits.clear();
 }
 
 void CodeGenModule::EmitCXXGlobalDtorFunc() {

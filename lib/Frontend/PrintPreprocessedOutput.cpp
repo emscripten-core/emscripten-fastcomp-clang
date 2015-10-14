@@ -64,12 +64,11 @@ static void PrintMacroDefinition(const IdentifierInfo &II, const MacroInfo &MI,
     OS << ' ';
 
   SmallString<128> SpellingBuffer;
-  for (MacroInfo::tokens_iterator I = MI.tokens_begin(), E = MI.tokens_end();
-       I != E; ++I) {
-    if (I->hasLeadingSpace())
+  for (const auto &T : MI.tokens()) {
+    if (T.hasLeadingSpace())
       OS << ' ';
 
-    OS << PP.getSpelling(*I, SpellingBuffer);
+    OS << PP.getSpelling(T, SpellingBuffer);
   }
 }
 
@@ -129,7 +128,7 @@ public:
                           CharSourceRange FilenameRange, const FileEntry *File,
                           StringRef SearchPath, StringRef RelativePath,
                           const Module *Imported) override;
-  void Ident(SourceLocation Loc, const std::string &str) override;
+  void Ident(SourceLocation Loc, StringRef str) override;
   void PragmaMessage(SourceLocation Loc, StringRef Namespace,
                      PragmaMessageKind Kind, StringRef Str) override;
   void PragmaDebug(SourceLocation Loc, StringRef DebugType) override;
@@ -170,7 +169,7 @@ public:
 
   /// MacroUndefined - This hook is called whenever a macro #undef is seen.
   void MacroUndefined(const Token &MacroNameTok,
-                      const MacroDirective *MD) override;
+                      const MacroDefinition &MD) override;
 };
 }  // end anonymous namespace
 
@@ -338,11 +337,11 @@ void PrintPPOutputPPCallbacks::InclusionDirective(SourceLocation HashLoc,
 
 /// Ident - Handle #ident directives when read by the preprocessor.
 ///
-void PrintPPOutputPPCallbacks::Ident(SourceLocation Loc, const std::string &S) {
+void PrintPPOutputPPCallbacks::Ident(SourceLocation Loc, StringRef S) {
   MoveToLine(Loc);
 
   OS.write("#ident ", strlen("#ident "));
-  OS.write(&S[0], S.size());
+  OS.write(S.begin(), S.size());
   EmittedTokensOnThisLine = true;
 }
 
@@ -361,7 +360,7 @@ void PrintPPOutputPPCallbacks::MacroDefined(const Token &MacroNameTok,
 }
 
 void PrintPPOutputPPCallbacks::MacroUndefined(const Token &MacroNameTok,
-                                              const MacroDirective *MD) {
+                                              const MacroDefinition &MD) {
   // Only print out macro definitions in -dD mode.
   if (!DumpDefines) return;
 
@@ -563,8 +562,13 @@ struct UnknownPragmaHandler : public PragmaHandler {
   const char *Prefix;
   PrintPPOutputPPCallbacks *Callbacks;
 
-  UnknownPragmaHandler(const char *prefix, PrintPPOutputPPCallbacks *callbacks)
-    : Prefix(prefix), Callbacks(callbacks) {}
+  // Set to true if tokens should be expanded
+  bool ShouldExpandTokens;
+
+  UnknownPragmaHandler(const char *prefix, PrintPPOutputPPCallbacks *callbacks,
+                       bool RequireTokenExpansion)
+      : Prefix(prefix), Callbacks(callbacks),
+        ShouldExpandTokens(RequireTokenExpansion) {}
   void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
                     Token &PragmaTok) override {
     // Figure out what line we went to and insert the appropriate number of
@@ -572,16 +576,24 @@ struct UnknownPragmaHandler : public PragmaHandler {
     Callbacks->startNewLineIfNeeded();
     Callbacks->MoveToLine(PragmaTok.getLocation());
     Callbacks->OS.write(Prefix, strlen(Prefix));
+
+    Token PrevToken;
+    Token PrevPrevToken;
+    PrevToken.startToken();
+    PrevPrevToken.startToken();
+
     // Read and print all of the pragma tokens.
     while (PragmaTok.isNot(tok::eod)) {
-      if (PragmaTok.hasLeadingSpace())
+      if (PragmaTok.hasLeadingSpace() ||
+          Callbacks->AvoidConcat(PrevPrevToken, PrevToken, PragmaTok))
         Callbacks->OS << ' ';
       std::string TokSpell = PP.getSpelling(PragmaTok);
       Callbacks->OS.write(&TokSpell[0], TokSpell.size());
 
-      // Expand macros in pragmas with -fms-extensions.  The assumption is that
-      // the majority of pragmas in such a file will be Microsoft pragmas.
-      if (PP.getLangOpts().MicrosoftExt)
+      PrevPrevToken = PrevToken;
+      PrevToken = PragmaTok;
+
+      if (ShouldExpandTokens)
         PP.Lex(PragmaTok);
       else
         PP.LexUnexpandedToken(PragmaTok);
@@ -686,8 +698,9 @@ static void DoPrintMacros(Preprocessor &PP, raw_ostream *OS) {
   SmallVector<id_macro_pair, 128> MacrosByID;
   for (Preprocessor::macro_iterator I = PP.macro_begin(), E = PP.macro_end();
        I != E; ++I) {
-    if (I->first->hasMacroDefinition())
-      MacrosByID.push_back(id_macro_pair(I->first, I->second->getMacroInfo()));
+    auto *MD = I->second.getLatest();
+    if (MD && MD->isDefined())
+      MacrosByID.push_back(id_macro_pair(I->first, MD->getMacroInfo()));
   }
   llvm::array_pod_sort(MacrosByID.begin(), MacrosByID.end(), MacroIDCompare);
 
@@ -718,10 +731,29 @@ void clang::DoPrintPreprocessedInput(Preprocessor &PP, raw_ostream *OS,
 
   PrintPPOutputPPCallbacks *Callbacks = new PrintPPOutputPPCallbacks(
       PP, *OS, !Opts.ShowLineMarkers, Opts.ShowMacros, Opts.UseLineDirectives);
-  PP.AddPragmaHandler(new UnknownPragmaHandler("#pragma", Callbacks));
-  PP.AddPragmaHandler("GCC", new UnknownPragmaHandler("#pragma GCC",Callbacks));
-  PP.AddPragmaHandler("clang",
-                      new UnknownPragmaHandler("#pragma clang", Callbacks));
+
+  // Expand macros in pragmas with -fms-extensions.  The assumption is that
+  // the majority of pragmas in such a file will be Microsoft pragmas.
+  PP.AddPragmaHandler(new UnknownPragmaHandler(
+      "#pragma", Callbacks,
+      /*RequireTokenExpansion=*/PP.getLangOpts().MicrosoftExt));
+  PP.AddPragmaHandler(
+      "GCC", new UnknownPragmaHandler(
+                 "#pragma GCC", Callbacks,
+                 /*RequireTokenExpansion=*/PP.getLangOpts().MicrosoftExt));
+  PP.AddPragmaHandler(
+      "clang", new UnknownPragmaHandler(
+                   "#pragma clang", Callbacks,
+                   /*RequireTokenExpansion=*/PP.getLangOpts().MicrosoftExt));
+
+  // The tokens after pragma omp need to be expanded.
+  //
+  //  OpenMP [2.1, Directive format]
+  //  Preprocessing tokens following the #pragma omp are subject to macro
+  //  replacement.
+  PP.AddPragmaHandler("omp",
+                      new UnknownPragmaHandler("#pragma omp", Callbacks,
+                                               /*RequireTokenExpansion=*/true));
 
   PP.addPPCallbacks(std::unique_ptr<PPCallbacks>(Callbacks));
 

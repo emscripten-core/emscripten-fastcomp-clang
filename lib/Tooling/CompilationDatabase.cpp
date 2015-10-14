@@ -250,14 +250,11 @@ static bool stripPositionalArgs(std::vector<const char *> Args,
 
   CompileJobAnalyzer CompileAnalyzer;
 
-  for (const auto &Job : Jobs) {
-    if (Job.getKind() == driver::Job::CommandClass) {
-      const driver::Command &Cmd = cast<driver::Command>(Job);
-      // Collect only for Assemble jobs. If we do all jobs we get duplicates
-      // since Link jobs point to Assemble jobs as inputs.
-      if (Cmd.getSource().getKind() == driver::Action::AssembleJobClass)
-        CompileAnalyzer.run(&Cmd.getSource());
-    }
+  for (const auto &Cmd : Jobs) {
+    // Collect only for Assemble jobs. If we do all jobs we get duplicates
+    // since Link jobs point to Assemble jobs as inputs.
+    if (Cmd.getSource().getKind() == driver::Action::AssembleJobClass)
+      CompileAnalyzer.run(&Cmd.getSource());
   }
 
   if (CompileAnalyzer.Inputs.empty()) {
@@ -302,8 +299,7 @@ FixedCompilationDatabase(Twine Directory, ArrayRef<std::string> CommandLine) {
   std::vector<std::string> ToolCommandLine(1, "clang-tool");
   ToolCommandLine.insert(ToolCommandLine.end(),
                          CommandLine.begin(), CommandLine.end());
-  CompileCommands.push_back(
-      CompileCommand(Directory, std::move(ToolCommandLine)));
+  CompileCommands.emplace_back(Directory, std::move(ToolCommandLine));
 }
 
 std::vector<CompileCommand>

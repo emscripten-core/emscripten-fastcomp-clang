@@ -432,6 +432,8 @@ void t37() {
 // CHECK: mov eax, $$4294967292
   __asm mov eax, ~15
 // CHECK: mov eax, $$4294967280
+  __asm mov eax, 6 ^ 3
+// CHECK: mov eax, $$5
 // CHECK: "~{eax},~{dirflag},~{fpsr},~{flags}"()
 }
 
@@ -504,6 +506,14 @@ void t41(unsigned short a) {
   __asm mov ss, a;
 // CHECK: mov ss, word ptr $5
 // CHECK: "*m,*m,*m,*m,*m,*m,~{dirflag},~{fpsr},~{flags}"(i16* {{.*}}, i16* {{.*}}, i16* {{.*}}, i16* {{.*}}, i16* {{.*}}, i16* {{.*}})
+}
+
+void t42() {
+// CHECK-LABEL: define void @t42
+  int flags;
+  __asm mov flags, eax
+// CHECK: mov dword ptr $0, eax
+// CHECK: "=*m,~{dirflag},~{fpsr},~{flags}"(i32* %flags)
 }
 
 void call_clobber() {

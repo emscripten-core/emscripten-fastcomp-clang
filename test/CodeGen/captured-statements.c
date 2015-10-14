@@ -14,18 +14,21 @@ void test1() {
   int i = 0;
   #pragma clang __debug captured
   {
+    static float inner = 3.0;
+    (void)inner;
     i++;
   }
   // CHECK-1: %struct.anon = type { i32* }
+  // CHECK-1: {{.+}} global float 3.0
   //
   // CHECK-1: test1
   // CHECK-1: alloca %struct.anon
   // CHECK-1: getelementptr inbounds %struct.anon, %struct.anon*
   // CHECK-1: store i32* %i
-  // CHECK-1: call void @[[HelperName:__captured_stmt[0-9]+]]
+  // CHECK-1: call void @[[HelperName:__captured_stmt[\.0-9]+]]
 }
 
-// CHECK-1: define internal void @[[HelperName]](%struct.anon
+// CHECK-1: define internal {{.*}}void @[[HelperName]](%struct.anon
 // CHECK-1:   getelementptr inbounds %struct.anon{{.*}}, i32 0, i32 0
 // CHECK-1:   load i32*, i32**
 // CHECK-1:   load i32, i32*
@@ -42,10 +45,10 @@ void test2(int x) {
   }
   // CHECK-2: test2
   // CHECK-2-NOT: %i
-  // CHECK-2: call void @[[HelperName:__captured_stmt[0-9]+]]
+  // CHECK-2: call void @[[HelperName:__captured_stmt[\.0-9]+]]
 }
 
-// CHECK-2: define internal void @[[HelperName]]
+// CHECK-2: define internal {{.*}}void @[[HelperName]]
 // CHECK-2-NOT: }
 // CHECK-2:   %i = alloca i32
 
@@ -87,10 +90,10 @@ void dont_capture_global() {
   }
 
   // CHECK-GLOBALS: %[[Capture:struct\.anon[\.0-9]*]] = type {}
-  // CHECK-GLOBALS: call void @__captured_stmt[[HelperName:[0-9]+]](%[[Capture]]
+  // CHECK-GLOBALS: call void @__captured_stmt[[HelperName:[\.0-9]+]](%[[Capture]]
 }
 
-// CHECK-GLOBALS: define internal void @__captured_stmt[[HelperName]]
+// CHECK-GLOBALS: define internal {{.*}}void @__captured_stmt[[HelperName]]
 // CHECK-GLOBALS-NOT: ret
 // CHECK-GLOBALS:   load i32, i32* @global
 // CHECK-GLOBALS:   load i32, i32* @

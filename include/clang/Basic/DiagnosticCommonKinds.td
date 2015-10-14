@@ -99,6 +99,27 @@ def err_enum_template : Error<"enumeration cannot be a template">;
 
 }
 
+let CategoryName = "Nullability Issue" in {
+
+def warn_nullability_duplicate : Warning<
+  "duplicate nullability specifier %0">,
+  InGroup<Nullability>;
+  
+def warn_conflicting_nullability_attr_overriding_ret_types : Warning<
+  "conflicting nullability specifier on return types, %0 "
+  "conflicts with existing specifier %1">,
+  InGroup<Nullability>;
+
+def warn_conflicting_nullability_attr_overriding_param_types : Warning<
+  "conflicting nullability specifier on parameter types, %0 "
+  "conflicts with existing specifier %1">,
+  InGroup<Nullability>;
+
+def err_nullability_conflicting : Error<
+  "nullability specifier %0 conflicts with existing specifier %1">;
+
+}
+
 // Sema && Lex
 def ext_c99_longlong : Extension<
   "'long long' is an extension when C99 mode is not enabled">,
@@ -115,7 +136,23 @@ def err_integer_literal_too_large : Error<
 def ext_integer_literal_too_large_for_signed : ExtWarn<
   "integer literal is too large to be represented in a signed integer type, "
   "interpreting as unsigned">,
-  InGroup<DiagGroup<"implicitly-unsigned-literal">>;
+  InGroup<ImplicitlyUnsignedLiteral>;
+def warn_old_implicitly_unsigned_long : Warning<
+  "integer literal is too large to be represented in type 'long', "
+  "interpreting as 'unsigned long' per C89; this literal will "
+  "%select{have type 'long long'|be ill-formed}0 in C99 onwards">,
+  InGroup<C99Compat>;
+def warn_old_implicitly_unsigned_long_cxx : Warning<
+  "integer literal is too large to be represented in type 'long', "
+  "interpreting as 'unsigned long' per C++98; this literal will "
+  "%select{have type 'long long'|be ill-formed}0 in C++11 onwards">,
+  InGroup<CXX11Compat>;
+def ext_old_implicitly_unsigned_long_cxx : ExtWarn<
+  "integer literal is too large to be represented in type 'long' and is "
+  "subject to undefined behavior under C++98, interpreting as 'unsigned long'; "
+  "this literal will %select{have type 'long long'|be ill-formed}0 "
+  "in C++11 onwards">,
+  InGroup<CXX11Compat>;
 
 // SEH
 def err_seh_expected_handler : Error<
@@ -142,6 +179,8 @@ def err_target_unsupported_fpmath : Error<
     "the '%0' unit is not supported with this instruction set">;
 def err_target_unsupported_unaligned : Error<
   "the %0 sub-architecture does not support unaligned accesses">;
+def err_opt_not_valid_with_opt : Error<
+  "option '%0' cannot be specified with '%1'">;
 
 // Source manager
 def err_cannot_open_file : Error<"cannot open file '%0': %1">, DefaultFatal;
@@ -156,6 +195,8 @@ def err_unable_to_make_temp : Error<
   
 // Modules
 def err_module_file_conflict : Error<"module '%0' found in both '%1' and '%2'">;
+def err_module_format_unhandled : Error<
+  "no handler registered for module format '%0'">;
 
 // TransformActions
 // TODO: Use a custom category name to distinguish rewriter errors.
