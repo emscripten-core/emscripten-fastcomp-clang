@@ -1149,29 +1149,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     // any way to safely use it... but in practice, it mostly works
     // to use it with non-atomic loads and stores to get acquire/release
     // semantics.
-    // @LOCALMOD-START
-    // Targets can ask that ``__sync_synchronize()`` be surrounded with
-    // compiler fences. This should enforce ordering of more than just
-    // atomic memory accesses, though it won't guarantee that all
-    // accesses (e.g. those to non-escaping objects) won't be reordered.
-    llvm::FunctionType *FTy = llvm::FunctionType::get(VoidTy, false);
-    std::string AsmString;  // Empty.
-    std::string Constraints("~{memory}");
-    bool HasSideEffect = true;
-    if (getTargetHooks().addAsmMemoryAroundSyncSynchronize()) {
-      Builder.CreateCall(
-          llvm::InlineAsm::get(FTy, AsmString, Constraints, HasSideEffect))->
-          addAttribute(llvm::AttributeSet::FunctionIndex,
-                       llvm::Attribute::NoUnwind);
-      Builder.CreateFence(llvm::SequentiallyConsistent);
-      Builder.CreateCall(
-          llvm::InlineAsm::get(FTy, AsmString, Constraints, HasSideEffect))->
-          addAttribute(llvm::AttributeSet::FunctionIndex,
-                       llvm::Attribute::NoUnwind);
-    } else {
-      Builder.CreateFence(llvm::SequentiallyConsistent);
-    }
-    // @LOCALMOD-END
+    Builder.CreateFence(llvm::SequentiallyConsistent);
     return RValue::get(nullptr);
   }
 
@@ -1434,18 +1412,9 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return RValue::get(Builder.CreateCall(F, Arg0));
   }
 
-    // @LOCALMOD-START
-    // Do not generate pow intrinsic calls for builtin_pow. The
-    // -fno-math-builtin flag prevents the libcall builtin code from firing
-    // either, but it doesn't work for the __builtin flavors. Pow is currently
-    // (AFAIK) the only math.h function to be converted this way.
-    // This is effectively a revert of r228240
-    // TODO(dschuf): Consider removing -fno-math-builtin and rewriting
-    // llvm.pow to a libcall in IR simplification instead.
-    //case Builtin::BI__builtin_pow:
-    //case Builtin::BI__builtin_powf:
-    //case Builtin::BI__builtin_powl:
-    // @LOCALMOD-END
+  case Builtin::BI__builtin_pow:
+  case Builtin::BI__builtin_powf:
+  case Builtin::BI__builtin_powl:
   case Builtin::BIpow:
   case Builtin::BIpowf:
   case Builtin::BIpowl: {
