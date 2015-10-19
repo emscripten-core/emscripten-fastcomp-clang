@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 %s -triple=x86_64-pc-linux-gnu -munwind-tables -emit-llvm -o - | FileCheck %s
-// RUN: %clang_cc1 %s -triple=x86_64-pc-linux-gnu -munwind-tables -emit-llvm -o - -O1 -disable-llvm-optzns | FileCheck %s --check-prefix=CHECK --check-prefix=CHECKOPT
+// RUN: %clang_cc1 %s -triple=x86_64-pc-linux-gnu -munwind-tables -emit-llvm -o - -O1 -disable-llvm-optzns | FileCheck %s
 
 namespace Test1 {
 
@@ -388,8 +388,5 @@ D::~D() {}
 // This is from Test10:
 // CHECK-LABEL: define linkonce_odr void @_ZN6Test101C3fooEv
 // CHECK-LABEL: define linkonce_odr void @_ZThn8_N6Test101C3fooEv
-
-// CHECKOPT-LABEL: define available_externally void @_ZTv0_n24_N6Test161BIiE1fEv
-// CHECKOPT-NOT: comdat
 
 // CHECK: attributes [[NUW]] = { nounwind uwtable{{.*}} }

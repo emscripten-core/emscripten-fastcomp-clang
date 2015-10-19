@@ -464,6 +464,7 @@ void CodeGenVTables::emitThunk(GlobalDecl GD, const ThunkInfo &Thunk,
     // Normal thunk body generation.
     CodeGenFunction(CGM).generateThunk(ThunkFn, FnInfo, GD, Thunk);
   }
+
   setThunkProperties(CGM, Thunk, ThunkFn, ForVTable, GD);
 }
 

@@ -764,7 +764,6 @@ public:
     if (Triple.getArch() == llvm::Triple::arm) {
       // Handled in ARM's setABI().
     } else if (Triple.getArch() == llvm::Triple::x86) {
-      // @LOCALMOD MERGETODO: upstream this if it actually works.
       this->DescriptionString = "e-m:e-p:32:32-i64:64-n8:16:32-S128";
     } else if (Triple.getArch() == llvm::Triple::x86_64) {
       this->DescriptionString = "e-m:e-p:32:32-i64:64-n8:16:32:64-S128";
@@ -772,7 +771,7 @@ public:
       // Handled on mips' setDescriptionString.
     } else {
       assert(Triple.getArch() == llvm::Triple::le32);
-      this->DescriptionString = "e-p:32:32-i64:64-n32";
+      this->DescriptionString = "e-p:32:32-i64:64";
     }
   }
 };

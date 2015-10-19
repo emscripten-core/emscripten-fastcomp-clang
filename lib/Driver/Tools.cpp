@@ -631,10 +631,6 @@ StringRef tools::arm::getARMFloatABI(const Driver &D, const ArgList &Args,
       }
       break;
 
-    case llvm::Triple::NaCl: // @LOCALMOD
-      FloatABI = "hard";
-      break;
-
     default:
       switch (Triple.getEnvironment()) {
       case llvm::Triple::GNUEABIHF:
@@ -1270,13 +1266,6 @@ void Clang::AddMIPSTargetArgs(const ArgList &Args,
     CmdArgs.push_back(Args.MakeArgString("-mips-ssection-threshold=" + v));
     A->claim();
   }
-
-  // @LOCALMOD-BEGIN
-  if (Triple.getOS() == llvm::Triple::NaCl) {
-    CmdArgs.push_back("-mllvm");
-    CmdArgs.push_back("-direct-to-nacl");
-  }
-  // @LOCALMOD-END
 }
 
 /// getPPCTargetCPU - Get the (LLVM) name of the PowerPC cpu we are targeting.

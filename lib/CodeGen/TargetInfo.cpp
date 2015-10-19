@@ -524,9 +524,6 @@ class PNaClTargetCodeGenInfo : public TargetCodeGenInfo {
  public:
   PNaClTargetCodeGenInfo(CodeGen::CodeGenTypes &CGT)
     : TargetCodeGenInfo(new PNaClABIInfo(CGT)) {}
-
-  bool addAsmMemoryAroundSyncSynchronize() const { return true; } // @LOCALMOD
-  bool asmMemoryIsFence() const { return true; } // @LOCALMOD
 };
 
 void PNaClABIInfo::computeInfo(CGFunctionInfo &FI) const {

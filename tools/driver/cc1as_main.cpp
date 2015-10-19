@@ -28,7 +28,6 @@
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/MC/MCNaCl.h" // @LOCALMOD
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCParser/MCAsmParser.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -388,10 +387,6 @@ static bool ExecuteAssembler(AssemblerInvocation &Opts,
                                                 Opts.RelaxAll,
                                                 /*DWARFMustBeAtTheEnd*/ true));
     Str.get()->InitSections(Opts.NoExecStack);
-    // @LOCALMOD-BEGIN
-    if (T.isOSNaCl())
-      initializeNaClMCStreamer(*Str.get(), Ctx, T);
-    // @LOCALMOD-END
   }
 
   bool Failed = false;
@@ -501,3 +496,4 @@ int cc1as_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
 
   return !!Failed;
 }
+

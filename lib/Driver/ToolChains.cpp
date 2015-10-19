@@ -2359,7 +2359,7 @@ NaClToolChain::NaClToolChain(const Driver &D, const llvm::Triple &Triple,
   }
 
   // Use provided linker, not system linker
-  Linker = GetLinkerPath();
+  Linker = GetProgramPath("ld");
   NaClArmMacrosPath = GetFilePath("nacl-arm-macros.s");
 }
 
