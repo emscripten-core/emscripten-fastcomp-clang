@@ -30,7 +30,8 @@ IdentifierInfo *NSAPI::getNSClassId(NSClassIdKindKind K) const {
     "NSNumber",
     "NSMutableSet",
     "NSCountedSet",
-    "NSMutableOrderedSet"
+    "NSMutableOrderedSet",
+    "NSValue"
   };
 
   if (!ClassIds[K])
@@ -503,6 +504,11 @@ StringRef NSAPI::GetNSIntegralKind(QualType T) const {
     T = TDT->desugar();
   }
   return StringRef();
+}
+
+bool NSAPI::isMacroDefined(StringRef Id) const {
+  // FIXME: Check whether the relevant module macros are visible.
+  return Ctx.Idents.get(Id).hasMacroDefinition();
 }
 
 bool NSAPI::isObjCTypedef(QualType T,

@@ -651,8 +651,8 @@ public:
   CXXRecordDecl *getCanonicalDecl() override {
     return cast<CXXRecordDecl>(RecordDecl::getCanonicalDecl());
   }
-  virtual const CXXRecordDecl *getCanonicalDecl() const {
-    return cast<CXXRecordDecl>(RecordDecl::getCanonicalDecl());
+  const CXXRecordDecl *getCanonicalDecl() const {
+    return const_cast<CXXRecordDecl*>(this)->getCanonicalDecl();
   }
 
   CXXRecordDecl *getPreviousDecl() {
@@ -1392,6 +1392,10 @@ public:
   /// \brief Returns the destructor decl for this class.
   CXXDestructorDecl *getDestructor() const;
 
+  /// \brief Returns true if the class destructor, or any implicitly invoked
+  /// destructors are marked noreturn.
+  bool isAnyDestructorNoReturn() const;
+
   /// \brief If the class is a local class [class.local], returns
   /// the enclosing function declaration.
   const FunctionDecl *isLocalClass() const {
@@ -1436,7 +1440,7 @@ public:
   ///
   /// \returns true if this class is derived from \p Base, false otherwise.
   ///
-  /// \todo add a separate paramaeter to configure IsDerivedFrom, rather than
+  /// \todo add a separate parameter to configure IsDerivedFrom, rather than
   /// tangling input and output in \p Paths
   bool isDerivedFrom(const CXXRecordDecl *Base, CXXBasePaths &Paths) const;
 
@@ -1464,8 +1468,8 @@ public:
   /// \param BaseDefinition the definition of the base class
   ///
   /// \returns true if this base matched the search criteria
-  typedef bool ForallBasesCallback(const CXXRecordDecl *BaseDefinition,
-                                   void *UserData);
+  typedef llvm::function_ref<bool(const CXXRecordDecl *BaseDefinition)>
+      ForallBasesCallback;
 
   /// \brief Determines if the given callback holds for all the direct
   /// or indirect base classes of this type.
@@ -1477,13 +1481,10 @@ public:
   /// class of this type, or if \p AllowShortCircuit is true then until a call
   /// returns false.
   ///
-  /// \param UserData Passed as the second argument of every call to
-  /// \p BaseMatches.
-  ///
   /// \param AllowShortCircuit if false, forces the callback to be called
   /// for every base class, even if a dependent or non-matching base was
   /// found.
-  bool forallBases(ForallBasesCallback *BaseMatches, void *UserData,
+  bool forallBases(ForallBasesCallback BaseMatches,
                    bool AllowShortCircuit = true) const;
 
   /// \brief Function type used by lookupInBases() to determine whether a
@@ -1495,13 +1496,9 @@ public:
   /// \param Path the current path, from the most-derived class down to the
   /// base named by the \p Specifier.
   ///
-  /// \param UserData a single pointer to user-specified data, provided to
-  /// lookupInBases().
-  ///
   /// \returns true if this base matched the search criteria, false otherwise.
-  typedef bool BaseMatchesCallback(const CXXBaseSpecifier *Specifier,
-                                   CXXBasePath &Path,
-                                   void *UserData);
+  typedef llvm::function_ref<bool(const CXXBaseSpecifier *Specifier,
+                                  CXXBasePath &Path)> BaseMatchesCallback;
 
   /// \brief Look for entities within the base classes of this C++ class,
   /// transitively searching all base class subobjects.
@@ -1516,14 +1513,12 @@ public:
   /// \param BaseMatches callback function used to determine whether a given
   /// base matches the user-defined search criteria.
   ///
-  /// \param UserData user data pointer that will be provided to \p BaseMatches.
-  ///
   /// \param Paths used to record the paths from this class to its base class
   /// subobjects that match the search criteria.
   ///
   /// \returns true if there exists any path from this class to a base class
   /// subobject that matches the search criteria.
-  bool lookupInBases(BaseMatchesCallback *BaseMatches, void *UserData,
+  bool lookupInBases(BaseMatchesCallback BaseMatches,
                      CXXBasePaths &Paths) const;
 
   /// \brief Base-class lookup callback that determines whether the given
@@ -1531,10 +1526,10 @@ public:
   ///
   /// This callback can be used with \c lookupInBases() to determine whether
   /// a given derived class has is a base class subobject of a particular type.
-  /// The user data pointer should refer to the canonical CXXRecordDecl of the
+  /// The base record pointer should refer to the canonical CXXRecordDecl of the
   /// base class that we are searching for.
   static bool FindBaseClass(const CXXBaseSpecifier *Specifier,
-                            CXXBasePath &Path, void *BaseRecord);
+                            CXXBasePath &Path, const CXXRecordDecl *BaseRecord);
 
   /// \brief Base-class lookup callback that determines whether the
   /// given base class specifier refers to a specific class
@@ -1542,39 +1537,38 @@ public:
   ///
   /// This callback can be used with \c lookupInBases() to determine
   /// whether a given derived class has is a virtual base class
-  /// subobject of a particular type.  The user data pointer should
+  /// subobject of a particular type.  The base record pointer should
   /// refer to the canonical CXXRecordDecl of the base class that we
   /// are searching for.
   static bool FindVirtualBaseClass(const CXXBaseSpecifier *Specifier,
-                                   CXXBasePath &Path, void *BaseRecord);
+                                   CXXBasePath &Path,
+                                   const CXXRecordDecl *BaseRecord);
 
   /// \brief Base-class lookup callback that determines whether there exists
   /// a tag with the given name.
   ///
   /// This callback can be used with \c lookupInBases() to find tag members
-  /// of the given name within a C++ class hierarchy. The user data pointer
-  /// is an opaque \c DeclarationName pointer.
+  /// of the given name within a C++ class hierarchy.
   static bool FindTagMember(const CXXBaseSpecifier *Specifier,
-                            CXXBasePath &Path, void *Name);
+                            CXXBasePath &Path, DeclarationName Name);
 
   /// \brief Base-class lookup callback that determines whether there exists
   /// a member with the given name.
   ///
   /// This callback can be used with \c lookupInBases() to find members
-  /// of the given name within a C++ class hierarchy. The user data pointer
-  /// is an opaque \c DeclarationName pointer.
+  /// of the given name within a C++ class hierarchy.
   static bool FindOrdinaryMember(const CXXBaseSpecifier *Specifier,
-                                 CXXBasePath &Path, void *Name);
+                                 CXXBasePath &Path, DeclarationName Name);
 
   /// \brief Base-class lookup callback that determines whether there exists
   /// a member with the given name that can be used in a nested-name-specifier.
   ///
-  /// This callback can be used with \c lookupInBases() to find membes of
+  /// This callback can be used with \c lookupInBases() to find members of
   /// the given name within a C++ class hierarchy that can occur within
   /// nested-name-specifiers.
   static bool FindNestedNameSpecifierMember(const CXXBaseSpecifier *Specifier,
                                             CXXBasePath &Path,
-                                            void *UserData);
+                                            DeclarationName Name);
 
   /// \brief Retrieve the final overriders for each virtual member
   /// function in the class hierarchy where this class is the
@@ -1781,7 +1775,7 @@ public:
   CXXMethodDecl *getCanonicalDecl() override {
     return cast<CXXMethodDecl>(FunctionDecl::getCanonicalDecl());
   }
-  const CXXMethodDecl *getCanonicalDecl() const override {
+  const CXXMethodDecl *getCanonicalDecl() const {
     return const_cast<CXXMethodDecl*>(this)->getCanonicalDecl();
   }
 
@@ -2084,7 +2078,7 @@ public:
   /// This can only be called once for each initializer; it cannot be called
   /// on an initializer having a positive number of (implicit) array indices.
   ///
-  /// This assumes that the initialzier was written in the source code, and
+  /// This assumes that the initializer was written in the source code, and
   /// ensures that isWritten() returns true.
   void setSourceOrder(int pos) {
     assert(!IsWritten &&
@@ -2326,11 +2320,11 @@ public:
   /// \brief Set the constructor that this inheriting constructor is based on.
   void setInheritedConstructor(const CXXConstructorDecl *BaseCtor);
 
-  const CXXConstructorDecl *getCanonicalDecl() const override {
-    return cast<CXXConstructorDecl>(FunctionDecl::getCanonicalDecl());
-  }
   CXXConstructorDecl *getCanonicalDecl() override {
     return cast<CXXConstructorDecl>(FunctionDecl::getCanonicalDecl());
+  }
+  const CXXConstructorDecl *getCanonicalDecl() const {
+    return const_cast<CXXConstructorDecl*>(this)->getCanonicalDecl();
   }
 
   // Implement isa/cast/dyncast/etc.

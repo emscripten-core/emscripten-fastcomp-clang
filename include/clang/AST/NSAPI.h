@@ -37,8 +37,9 @@ public:
     ClassId_NSMutableSet,
     ClassId_NSCountedSet,
     ClassId_NSMutableOrderedSet,
+    ClassId_NSValue
   };
-  static const unsigned NumClassIds = 10;
+  static const unsigned NumClassIds = 11;
 
   enum NSStringMethodKind {
     NSStr_stringWithString,
@@ -215,6 +216,9 @@ public:
   /// \brief Returns one of NSIntegral typedef names if \param T is a typedef
   /// of that name in objective-c.
   StringRef GetNSIntegralKind(QualType T) const;
+
+  /// \brief Returns \c true if \p Id is currently defined as a macro.
+  bool isMacroDefined(StringRef Id) const;
 
 private:
   bool isObjCTypedef(QualType T, StringRef name, IdentifierInfo *&II) const;

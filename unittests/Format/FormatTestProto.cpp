@@ -63,11 +63,21 @@ TEST_F(FormatTestProto, FormatsMessages) {
                "}");
 }
 
+TEST_F(FormatTestProto, KeywordsInOtherLanguages) {
+  verifyFormat("optional string operator = 1;");
+}
+
 TEST_F(FormatTestProto, FormatsEnums) {
   verifyFormat("enum Type {\n"
                "  UNKNOWN = 0;\n"
                "  TYPE_A = 1;\n"
                "  TYPE_B = 2;\n"
+               "};");
+  verifyFormat("enum Type {\n"
+               "  UNKNOWN = 0 [(some_options) = {\n"
+               "    a: aa,\n"
+               "    b: bb\n"
+               "  }];\n"
                "};");
 }
 
@@ -103,6 +113,14 @@ TEST_F(FormatTestProto, MessageFieldAttributes) {
                "  bbbbbbb: BBBB,\n"
                "  bbbb: BBB\n"
                "}];");
+}
+
+TEST_F(FormatTestProto, DoesntWrapFileOptions) {
+  EXPECT_EQ(
+      "option java_package = "
+      "\"some.really.long.package.that.exceeds.the.column.limit\";",
+      format("option    java_package   =    "
+             "\"some.really.long.package.that.exceeds.the.column.limit\";"));
 }
 
 TEST_F(FormatTestProto, FormatsOptions) {

@@ -589,6 +589,25 @@ Current limitations
    translated from debug annotations. That translation can be lossy,
    which results in some remarks having no location information.
 
+Other Options
+-------------
+Clang options that that don't fit neatly into other categories.
+
+.. option:: -MV
+
+  When emitting a dependency file, use formatting conventions appropriate
+  for NMake or Jom. Ignored unless another option causes Clang to emit a
+  dependency file.
+
+When Clang emits a dependency file (e.g., you supplied the -M option)
+most filenames can be written to the file without any special formatting.
+Different Make tools will treat different sets of characters as "special"
+and use different conventions for telling the Make tool that the character
+is actually part of the filename. Normally Clang uses backslash to "escape"
+a special character, which is the convention used by GNU Make. The -MV
+option tells Clang to put double-quotes around the entire filename, which
+is the convention used by NMake and Jom.
+
 
 Language and Target-Independent Features
 ========================================
@@ -911,6 +930,8 @@ number of cases where the compilation environment is tightly controlled
 and the precompiled header cannot be generated after headers have been
 installed.
 
+.. _controlling-code-generation:
+
 Controlling Code Generation
 ---------------------------
 
@@ -949,16 +970,15 @@ are listed below.
       includes all of the checks listed below other than
       ``unsigned-integer-overflow``.
 
-   -  ``-fsanitize=undefined-trap``: This includes all sanitizers
-      included by ``-fsanitize=undefined``, except those that require
-      runtime support. This group of sanitizers is intended to be
-      used in conjunction with the ``-fsanitize-undefined-trap-on-error``
-      flag. This includes all of the checks listed below other than
-      ``unsigned-integer-overflow`` and ``vptr``.
+   -  ``-fsanitize=undefined-trap``: This is a deprecated alias for
+      ``-fsanitize=undefined``.
+
    -  ``-fsanitize=dataflow``: :doc:`DataFlowSanitizer`, a general data
       flow analysis.
    -  ``-fsanitize=cfi``: :doc:`control flow integrity <ControlFlowIntegrity>`
-      checks. Implies ``-flto``.
+      checks. Requires ``-flto``.
+   -  ``-fsanitize=safe-stack``: :doc:`safe stack <SafeStack>`
+      protection against stack-based memory corruption errors.
 
    The following more fine-grained checks are also available:
 
@@ -971,13 +991,13 @@ are listed below.
    -  ``-fsanitize=cfi-cast-strict``: Enables :ref:`strict cast checks
       <cfi-strictness>`.
    -  ``-fsanitize=cfi-derived-cast``: Base-to-derived cast to the wrong
-      dynamic type. Implies ``-flto``.
+      dynamic type. Requires ``-flto``.
    -  ``-fsanitize=cfi-unrelated-cast``: Cast from ``void*`` or another
-      unrelated type to the wrong dynamic type. Implies ``-flto``.
+      unrelated type to the wrong dynamic type. Requires ``-flto``.
    -  ``-fsanitize=cfi-nvcall``: Non-virtual call via an object whose vptr is of
-      the wrong dynamic type. Implies ``-flto``.
+      the wrong dynamic type. Requires ``-flto``.
    -  ``-fsanitize=cfi-vcall``: Virtual call via an object whose vptr is of the
-      wrong dynamic type. Implies ``-flto``.
+      wrong dynamic type. Requires ``-flto``.
    -  ``-fsanitize=enum``: Load of a value of an enumerated type which
       is not in the range of representable values for that enumerated
       type.
@@ -1046,15 +1066,6 @@ are listed below.
       through. This mode may use extra memory in programs that copy
       uninitialized memory a lot.
 
-   Extra features of UndefinedBehaviorSanitizer:
-
-   -  ``-fsanitize-undefined-trap-on-error``: Causes traps to be emitted
-      rather than calls to runtime libraries when a problem is detected.
-      This option is intended for use in cases where the sanitizer runtime
-      cannot be used (for instance, when building libc or a kernel module).
-      This is only compatible with the sanitizers in the ``undefined-trap``
-      group.
-
    The ``-fsanitize=`` argument must also be provided when linking, in
    order to link to the appropriate runtime library. When using
    ``-fsanitize=vptr`` (or a group that includes it, such as
@@ -1077,6 +1088,41 @@ are listed below.
    except for ``-fsanitize=return`` and ``-fsanitize=unreachable``. Some
    sanitizers (e.g. :doc:`AddressSanitizer`) may not support recovery,
    and always crash the program after the issue is detected.
+
+   Note that the ``-fsanitize-trap`` flag has precedence over this flag.
+   This means that if a check has been configured to trap elsewhere on the
+   command line, or if the check traps by default, this flag will not have
+   any effect unless that sanitizer's trapping behavior is disabled with
+   ``-fno-sanitize-trap``.
+
+   For example, if a command line contains the flags ``-fsanitize=undefined
+   -fsanitize-trap=undefined``, the flag ``-fsanitize-recover=alignment``
+   will have no effect on its own; it will need to be accompanied by
+   ``-fno-sanitize-trap=alignment``.
+
+**-f[no-]sanitize-trap=check1,check2,...**
+
+   Controls which checks enabled by the ``-fsanitize=`` flag trap. This
+   option is intended for use in cases where the sanitizer runtime cannot
+   be used (for instance, when building libc or a kernel module), or where
+   the binary size increase caused by the sanitizer runtime is a concern.
+
+   This flag is only compatible with ``local-bounds``,
+   ``unsigned-integer-overflow``, sanitizers in the ``cfi`` group and
+   sanitizers in the ``undefined`` group other than ``vptr``. If this flag
+   is supplied together with ``-fsanitize=undefined``, the ``vptr`` sanitizer
+   will be implicitly disabled.
+
+   This flag is enabled by default for sanitizers in the ``cfi`` group.
+
+**-f[no-]sanitize-coverage=[type,features,...]**
+
+   Enable simple code coverage in addition to certain sanitizers.
+   See :doc:`SanitizerCoverage` for more details.
+
+.. option:: -fsanitize-undefined-trap-on-error
+
+   Deprecated alias for ``-fsanitize-trap=undefined``.
 
 .. option:: -fno-assume-sane-operator-new
 
@@ -1110,6 +1156,13 @@ are listed below.
    selected model is not supported by the target, or if a more
    efficient model can be used. The TLS model can be overridden per
    variable using the ``tls_model`` attribute.
+
+.. option:: -femulated-tls
+
+   Select emulated TLS model, which overrides all -ftls-model choices.
+
+   In emulated TLS mode, all access to TLS variables are converted to
+   calls to __emutls_get_address in the runtime library.
 
 .. option:: -mhwdiv=[values]
 
@@ -1190,6 +1243,32 @@ behavior. Code that is not exercised in the profile will be optimized as if it
 is unimportant, and the compiler may make poor optimization choices for code
 that is disproportionately used while profiling.
 
+Differences Between Sampling and Instrumentation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Although both techniques are used for similar purposes, there are important
+differences between the two:
+
+1. Profile data generated with one cannot be used by the other, and there is no
+   conversion tool that can convert one to the other. So, a profile generated
+   via ``-fprofile-instr-generate`` must be used with ``-fprofile-instr-use``.
+   Similarly, sampling profiles generated by external profilers must be
+   converted and used with ``-fprofile-sample-use``.
+
+2. Instrumentation profile data can be used for code coverage analysis and
+   optimization.
+
+3. Sampling profiles can only be used for optimization. They cannot be used for
+   code coverage analysis. Although it would be technically possible to use
+   sampling profiles for code coverage, sample-based profiles are too
+   coarse-grained for code coverage purposes; it would yield poor results.
+
+4. Sampling profiles must be generated by an external tool. The profile
+   generated by that tool must then be converted into a format that can be read
+   by LLVM. The section on sampling profilers describes one of the supported
+   sampling profile formats.
+
+
 Using Sampling Profilers
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -1257,17 +1336,38 @@ usual build cycle when using sample profilers for optimization:
      $ clang++ -O2 -gline-tables-only -fprofile-sample-use=code.prof code.cc -o code
 
 
-Sample Profile Format
-"""""""""""""""""""""
+Sample Profile Formats
+""""""""""""""""""""""
 
-If you are not using Linux Perf to collect profiles, you will need to
-write a conversion tool from your profiler to LLVM's format. This section
-explains the file format expected by the backend.
+Since external profilers generate profile data in a variety of custom formats,
+the data generated by the profiler must be converted into a format that can be
+read by the backend. LLVM supports three different sample profile formats:
 
-Sample profiles are written as ASCII text. The file is divided into sections,
-which correspond to each of the functions executed at runtime. Each
-section has the following format (taken from
-https://github.com/google/autofdo/blob/master/profile_writer.h):
+1. ASCII text. This is the easiest one to generate. The file is divided into
+   sections, which correspond to each of the functions with profile
+   information. The format is described below.
+
+2. Binary encoding. This uses a more efficient encoding that yields smaller
+   profile files, which may be useful when generating large profiles. It can be
+   generated from the text format using the ``llvm-profdata`` tool.
+
+3. GCC encoding. This is based on the gcov format, which is accepted by GCC. It
+   is only interesting in environments where GCC and Clang co-exist. Similarly
+   to the binary encoding, it can be generated using the ``llvm-profdata`` tool.
+
+If you are using Linux Perf to generate sampling profiles, you can use the
+conversion tool ``create_llvm_prof`` described in the previous section.
+Otherwise, you will need to write a conversion tool that converts your
+profiler's native format into one of these three.
+
+
+Sample Profile Text Format
+""""""""""""""""""""""""""
+
+This section describes the ASCII text format for sampling profiles. It is,
+arguably, the easiest one to generate. If you are interested in generating any
+of the other two, consult the ``ProfileData`` library in in LLVM's source tree
+(specifically, ``llvm/lib/ProfileData/SampleProfWriter.cpp``).
 
 .. code-block:: console
 
@@ -1374,8 +1474,8 @@ instrumentation:
      $ LLVM_PROFILE_FILE="code-%p.profraw" ./code
 
 3. Combine profiles from multiple runs and convert the "raw" profile format to
-   the input expected by clang. Use the ``merge`` command of the llvm-profdata
-   tool to do this.
+   the input expected by clang. Use the ``merge`` command of the
+   ``llvm-profdata`` tool to do this.
 
    .. code-block:: console
 
@@ -1394,6 +1494,45 @@ instrumentation:
    You can repeat step 4 as often as you like without regenerating the
    profile. As you make changes to your code, clang may no longer be able to
    use the profile data. It will warn you when this happens.
+
+Profile generation and use can also be controlled by the GCC-compatible flags
+``-fprofile-generate`` and ``-fprofile-use``. Although these flags are
+semantically equivalent to their GCC counterparts, they *do not* handle
+GCC-compatible profiles. They are only meant to implement GCC's semantics
+with respect to profile creation and use.
+
+.. option:: -fprofile-generate[=<dirname>]
+
+  Without any other arguments, ``-fprofile-generate`` behaves identically to
+  ``-fprofile-instr-generate``. When given a directory name, it generates the
+  profile file ``default.profraw`` in the directory named ``dirname``. If
+  ``dirname`` does not exist, it will be created at runtime. The environment
+  variable ``LLVM_PROFILE_FILE`` can be used to override the directory and
+  filename for the profile file at runtime. For example,
+
+  .. code-block:: console
+
+    $ clang++ -O2 -fprofile-generate=yyy/zzz code.cc -o code
+
+  When ``code`` is executed, the profile will be written to the file
+  ``yyy/zzz/default.profraw``. This can be altered at runtime via the
+  ``LLVM_PROFILE_FILE`` environment variable:
+
+  .. code-block:: console
+
+    $ LLVM_PROFILE_FILE=/tmp/myprofile/code.profraw ./code
+
+  The above invocation will produce the profile file
+  ``/tmp/myprofile/code.profraw`` instead of ``yyy/zzz/default.profraw``.
+  Notice that ``LLVM_PROFILE_FILE`` overrides the directory *and* the file
+  name for the profile file.
+
+.. option:: -fprofile-use[=<pathname>]
+
+  Without any other arguments, ``-fprofile-use`` behaves identically to
+  ``-fprofile-instr-use``. Otherwise, if ``pathname`` is the full path to a
+  profile file, it reads from that file. If ``pathname`` is a directory name,
+  it reads from ``pathname/default.profdata``.
 
 
 Controlling Size of Debug Information

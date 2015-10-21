@@ -59,7 +59,7 @@ static RequiredArgs commonEmitCXXMemberOrOperatorCall(
   if (CE) {
     // Special case: skip first argument of CXXOperatorCall (it is "this").
     unsigned ArgsToSkip = isa<CXXOperatorCallExpr>(CE) ? 1 : 0;
-    CGF.EmitCallArgs(Args, FPT, CE->arg_begin() + ArgsToSkip, CE->arg_end(),
+    CGF.EmitCallArgs(Args, FPT, drop_begin(CE->arguments(), ArgsToSkip),
                      CE->getDirectCallee());
   } else {
     assert(
@@ -173,7 +173,7 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
     This = EmitLValue(Base).getAddress();
 
 
-  if (MD->isTrivial()) {
+  if (MD->isTrivial() || (MD->isDefaulted() && MD->getParent()->isUnion())) {
     if (isa<CXXDestructorDecl>(MD)) return RValue::get(nullptr);
     if (isa<CXXConstructorDecl>(MD) && 
         cast<CXXConstructorDecl>(MD)->isDefaultConstructor())
@@ -196,7 +196,7 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
         // Trivial move and copy ctor are the same.
         assert(CE->getNumArgs() == 1 && "unexpected argcount for trivial ctor");
         llvm::Value *RHS = EmitLValue(*CE->arg_begin()).getAddress();
-        EmitAggregateCopy(This, RHS, CE->arg_begin()->getType());
+        EmitAggregateCopy(This, RHS, (*CE->arg_begin())->getType());
         return RValue::get(This);
       }
       llvm_unreachable("unknown trivial member function");
@@ -254,12 +254,13 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
   if (const CXXConstructorDecl *Ctor = dyn_cast<CXXConstructorDecl>(MD)) {
     Callee = CGM.GetAddrOfFunction(GlobalDecl(Ctor, Ctor_Complete), Ty);
   } else if (UseVirtualCall) {
-    Callee = CGM.getCXXABI().getVirtualFunctionPointer(*this, MD, This, Ty);
+    Callee = CGM.getCXXABI().getVirtualFunctionPointer(*this, MD, This, Ty,
+                                                       CE->getLocStart());
   } else {
     if (SanOpts.has(SanitizerKind::CFINVCall) &&
         MD->getParent()->isDynamicClass()) {
       llvm::Value *VTable = GetVTablePtr(This, Int8PtrTy);
-      EmitVTablePtrCheckForCall(MD, VTable);
+      EmitVTablePtrCheckForCall(MD, VTable, CFITCK_NVCall, CE->getLocStart());
     }
 
     if (getLangOpts().AppleKext && MD->isVirtual() && HasQualifier)
@@ -325,7 +326,7 @@ CodeGenFunction::EmitCXXMemberPointerCallExpr(const CXXMemberCallExpr *E,
   RequiredArgs required = RequiredArgs::forPrototypePlus(FPT, 1);
   
   // And the rest of the call args
-  EmitCallArgs(Args, FPT, E->arg_begin(), E->arg_end(), E->getDirectCallee());
+  EmitCallArgs(Args, FPT, E->arguments(), E->getDirectCallee());
   return EmitCall(CGM.getTypes().arrangeCXXMethodCall(Args, FPT, required),
                   Callee, ReturnValue, Args);
 }
@@ -690,7 +691,7 @@ static llvm::Value *EmitCXXNewAllocSize(CodeGenFunction &CGF,
       llvm::Value *tsmV =
         llvm::ConstantInt::get(CGF.SizeTy, typeSizeMultiplier);
       llvm::Value *result =
-        CGF.Builder.CreateCall2(umul_with_overflow, size, tsmV);
+          CGF.Builder.CreateCall(umul_with_overflow, {size, tsmV});
 
       llvm::Value *overflowed = CGF.Builder.CreateExtractValue(result, 1);
       if (hasOverflow)
@@ -729,7 +730,7 @@ static llvm::Value *EmitCXXNewAllocSize(CodeGenFunction &CGF,
 
       llvm::Value *cookieSizeV = llvm::ConstantInt::get(CGF.SizeTy, cookieSize);
       llvm::Value *result =
-        CGF.Builder.CreateCall2(uadd_with_overflow, size, cookieSizeV);
+          CGF.Builder.CreateCall(uadd_with_overflow, {size, cookieSizeV});
 
       llvm::Value *overflowed = CGF.Builder.CreateExtractValue(result, 1);
       if (hasOverflow)
@@ -958,6 +959,25 @@ void CodeGenFunction::EmitNewArrayInitializer(
     if (ILE->getNumInits() == 0 && TryMemsetInitialization())
       return;
 
+  // If we have a struct whose every field is value-initialized, we can
+  // usually use memset.
+  if (auto *ILE = dyn_cast<InitListExpr>(Init)) {
+    if (const RecordType *RType = ILE->getType()->getAs<RecordType>()) {
+      if (RType->getDecl()->isStruct()) {
+        unsigned NumFields = 0;
+        for (auto *Field : RType->getDecl()->fields())
+          if (!Field->isUnnamedBitfield())
+            ++NumFields;
+        if (ILE->getNumInits() == NumFields)
+          for (unsigned i = 0, e = ILE->getNumInits(); i != e; ++i)
+            if (!isa<ImplicitValueInitExpr>(ILE->getInit(i)))
+              --NumFields;
+        if (ILE->getNumInits() == NumFields && TryMemsetInitialization())
+          return;
+      }
+    }
+  }
+
   // Create the loop blocks.
   llvm::BasicBlock *EntryBB = Builder.GetInsertBlock();
   llvm::BasicBlock *LoopBB = createBasicBlock("new.loop");
@@ -1069,8 +1089,7 @@ RValue CodeGenFunction::EmitBuiltinNewDeleteCall(const FunctionProtoType *Type,
                                                  bool IsDelete) {
   CallArgList Args;
   const Stmt *ArgS = Arg;
-  EmitCallArgs(Args, *Type->param_type_begin(),
-               ConstExprIterator(&ArgS), ConstExprIterator(&ArgS + 1));
+  EmitCallArgs(Args, *Type->param_type_begin(), llvm::makeArrayRef(ArgS));
   // Find the allocation or deallocation function that we're calling.
   ASTContext &Ctx = getContext();
   DeclarationName Name = Ctx.DeclarationNames
@@ -1266,8 +1285,8 @@ llvm::Value *CodeGenFunction::EmitCXXNewExpr(const CXXNewExpr *E) {
 
   // We start at 1 here because the first argument (the allocation size)
   // has already been emitted.
-  EmitCallArgs(allocatorArgs, allocatorType, E->placement_arg_begin(),
-               E->placement_arg_end(), /* CalleeDecl */ nullptr,
+  EmitCallArgs(allocatorArgs, allocatorType, E->placement_arguments(),
+               /* CalleeDecl */ nullptr,
                /*ParamsToSkip*/ 1);
 
   // Emit the allocation call.  If the allocator is a global placement
@@ -1528,7 +1547,8 @@ namespace {
         // The size of an element, multiplied by the number of elements.
         llvm::Value *Size
           = llvm::ConstantInt::get(SizeTy, ElementTypeSize.getQuantity());
-        Size = CGF.Builder.CreateMul(Size, NumElements);
+        if (NumElements)
+          Size = CGF.Builder.CreateMul(Size, NumElements);
 
         // Plus the size of the cookie if applicable.
         if (!CookieSize.isZero()) {
@@ -1823,8 +1843,8 @@ void CodeGenFunction::EmitLambdaExpr(const LambdaExpr *E, AggValueSlot Slot) {
       MakeAddrLValue(Slot.getAddr(), E->getType(), Slot.getAlignment());
 
   CXXRecordDecl::field_iterator CurField = E->getLambdaClass()->field_begin();
-  for (LambdaExpr::capture_init_iterator i = E->capture_init_begin(),
-                                         e = E->capture_init_end();
+  for (LambdaExpr::const_capture_init_iterator i = E->capture_init_begin(),
+                                               e = E->capture_init_end();
        i != e; ++i, ++CurField) {
     // Emit initialization
     LValue LV = EmitLValueForFieldInitialization(SlotLV, *CurField);

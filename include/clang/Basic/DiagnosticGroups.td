@@ -239,6 +239,7 @@ def MultiChar : DiagGroup<"multichar">;
 def : DiagGroup<"nested-externs">;
 def CXX11LongLong : DiagGroup<"c++11-long-long">;
 def LongLong : DiagGroup<"long-long", [CXX11LongLong]>;
+def ImplicitlyUnsignedLiteral : DiagGroup<"implicitly-unsigned-literal">;
 def MethodSignatures : DiagGroup<"method-signatures">;
 def MismatchedParameterTypes : DiagGroup<"mismatched-parameter-types">;
 def MismatchedReturnTypes : DiagGroup<"mismatched-return-types">;
@@ -247,6 +248,10 @@ def MissingFieldInitializers : DiagGroup<"missing-field-initializers">;
 def ModuleBuild : DiagGroup<"module-build">;
 def ModuleConflict : DiagGroup<"module-conflict">;
 def NewlineEOF : DiagGroup<"newline-eof">;
+def Nullability : DiagGroup<"nullability">;
+def NullabilityDeclSpec : DiagGroup<"nullability-declspec">;
+def NullableToNonNullConversion : DiagGroup<"nullable-to-nonnull-conversion">;
+def NullabilityCompleteness : DiagGroup<"nullability-completeness">;
 def NullArithmetic : DiagGroup<"null-arithmetic">;
 def NullCharacter : DiagGroup<"null-character">;
 def NullDereference : DiagGroup<"null-dereference">;
@@ -264,6 +269,8 @@ def : DiagGroup<"overflow">;
 def ForwardClassReceiver : DiagGroup<"receiver-forward-class">;
 def MethodAccess : DiagGroup<"objc-method-access">;
 def ObjCReceiver : DiagGroup<"receiver-expr">;
+// FIXME: Remove this when Xcode removes the warning setting.
+def : DiagGroup<"receiver-is-weak">;
 def OperatorNewReturnsNull : DiagGroup<"new-returns-null">;
 def OverlengthStrings : DiagGroup<"overlength-strings">;
 def OverloadedVirtual : DiagGroup<"overloaded-virtual">;
@@ -273,6 +280,7 @@ def FunctionDefInObjCContainer : DiagGroup<"function-def-in-objc-container">;
 def BadFunctionCast : DiagGroup<"bad-function-cast">;
 def ObjCPropertyImpl : DiagGroup<"objc-property-implementation">;
 def ObjCPropertyNoAttribute : DiagGroup<"objc-property-no-attribute">;
+def ObjCProtocolQualifiers : DiagGroup<"objc-protocol-qualifiers">;
 def ObjCMissingSuperCalls : DiagGroup<"objc-missing-super-calls">;
 def ObjCDesignatedInit : DiagGroup<"objc-designated-initializers">;
 def ObjCRetainBlockProperty : DiagGroup<"objc-noncopy-retain-block-property">;
@@ -286,6 +294,7 @@ def DeprecatedObjCIsaUsage : DiagGroup<"deprecated-objc-isa-usage">;
 def ExplicitInitializeCall : DiagGroup<"explicit-initialize-call">;
 def Packed : DiagGroup<"packed">;
 def Padded : DiagGroup<"padded">;
+def PessimizingMove : DiagGroup<"pessimizing-move">;
 def PointerArith : DiagGroup<"pointer-arith">;
 def PoundWarning : DiagGroup<"#warnings">;
 def PoundPragmaMessage : DiagGroup<"#pragma-messages">,
@@ -294,6 +303,7 @@ def : DiagGroup<"pointer-to-int-cast">;
 def : DiagGroup<"redundant-decls">;
 def RedeclaredClassMember : DiagGroup<"redeclared-class-member">;
 def GNURedeclaredEnum : DiagGroup<"gnu-redeclared-enum">;
+def RedundantMove : DiagGroup<"redundant-move">;
 def ReturnStackAddress : DiagGroup<"return-stack-address">;
 def ReturnTypeCLinkage : DiagGroup<"return-type-c-linkage">;
 def ReturnType : DiagGroup<"return-type", [ReturnTypeCLinkage]>;
@@ -399,6 +409,7 @@ def UnknownAttributes : DiagGroup<"unknown-attributes">;
 def IgnoredAttributes : DiagGroup<"ignored-attributes">;
 def Attributes : DiagGroup<"attributes", [UnknownAttributes,
                                           IgnoredAttributes]>;
+def UnknownSanitizers : DiagGroup<"unknown-sanitizers">;
 def UnnamedTypeTemplateArgs : DiagGroup<"unnamed-type-template-args",
                                         [CXX98CompatUnnamedTypeTemplateArgs]>;
 def UnsupportedFriend : DiagGroup<"unsupported-friend">;
@@ -574,6 +585,8 @@ def IntToVoidPointerCast : DiagGroup<"int-to-void-pointer-cast">;
 def IntToPointerCast : DiagGroup<"int-to-pointer-cast",
                                  [IntToVoidPointerCast]>;
 
+def Move : DiagGroup<"move", [PessimizingMove, RedundantMove, SelfMove]>;
+
 def Extra : DiagGroup<"extra", [
     MissingFieldInitializers,
     IgnoredQualifiers,
@@ -590,8 +603,10 @@ def Most : DiagGroup<"most", [
     DeleteNonVirtualDtor,
     Format,
     Implicit,
+    InfiniteRecursion,
     MismatchedTags,
     MissingBraces,
+    Move,
     MultiChar,
     Reorder,
     ReturnType,
@@ -700,8 +715,49 @@ def GNU : DiagGroup<"gnu", [GNUAlignofExpression, GNUAnonymousStruct,
 // A warning group for warnings about code that clang accepts but gcc doesn't.
 def GccCompat : DiagGroup<"gcc-compat">;
 
-// A warning group for warnings about Microsoft extensions.
-def Microsoft : DiagGroup<"microsoft">;
+// Warnings for Microsoft extensions.
+def MicrosoftCharize : DiagGroup<"microsoft-charize">;
+def MicrosoftInclude : DiagGroup<"microsoft-include">;
+def MicrosoftCppMacro : DiagGroup<"microsoft-cpp-macro">;
+def MicrosoftFixedEnum : DiagGroup<"microsoft-fixed-enum">;
+def MicrosoftSealed : DiagGroup<"microsoft-sealed">;
+def MicrosoftUnqualifiedFriend : DiagGroup<"microsoft-unqualified-friend">;
+def MicrosoftExceptionSpec : DiagGroup<"microsoft-exception-spec">;
+def MicrosoftUsingDecl : DiagGroup<"microsoft-using-decl">;
+def MicrosoftMutableReference : DiagGroup<"microsoft-mutable-reference">;
+def MicrosoftPureDefinition : DiagGroup<"microsoft-pure-definition">;
+def MicrosoftUnionMemberReference : DiagGroup<
+    "microsoft-union-member-reference">;
+def MicrosoftExplicitConstructorCall : DiagGroup<
+    "microsoft-explicit-constructor-call">;
+def MicrosoftEnumValue : DiagGroup<"microsoft-enum-value">;
+def MicrosoftDefaultArgRedefinition :
+    DiagGroup<"microsoft-default-arg-redefinition">;
+def MicrosoftTemplate : DiagGroup<"microsoft-template">;
+def MicrosoftRedeclareStatic : DiagGroup<"microsoft-redeclare-static">;
+def MicrosoftEnumForwardReference :
+    DiagGroup<"microsoft-enum-forward-reference">;
+def MicrosoftGoto : DiagGroup<"microsoft-goto">;
+def MicrosoftFlexibleArray : DiagGroup<"microsoft-flexible-array">;
+def MicrosoftExtraQualification : DiagGroup<"microsoft-extra-qualification">;
+def MicrosoftCast : DiagGroup<"microsoft-cast">;
+def MicrosoftConstInit : DiagGroup<"microsoft-const-init">;
+def MicrosoftVoidPseudoDtor : DiagGroup<"microsoft-void-pseudo-dtor">;
+def MicrosoftAnonTag : DiagGroup<"microsoft-anon-tag">;
+// Aliases.
+def : DiagGroup<"msvc-include", [MicrosoftInclude]>;
+                // -Wmsvc-include = -Wmicrosoft-include
+
+// Warnings group for warnings about Microsoft extensions.
+def Microsoft : DiagGroup<"microsoft",
+    [MicrosoftCharize, MicrosoftInclude, MicrosoftCppMacro, MicrosoftFixedEnum,
+     MicrosoftSealed, MicrosoftUnqualifiedFriend, MicrosoftExceptionSpec,
+     MicrosoftUsingDecl, MicrosoftMutableReference, MicrosoftPureDefinition,
+     MicrosoftUnionMemberReference, MicrosoftExplicitConstructorCall,
+     MicrosoftEnumValue, MicrosoftDefaultArgRedefinition, MicrosoftTemplate,
+     MicrosoftRedeclareStatic, MicrosoftEnumForwardReference, MicrosoftGoto,
+     MicrosoftFlexibleArray, MicrosoftExtraQualification, MicrosoftCast,
+     MicrosoftConstInit, MicrosoftVoidPseudoDtor, MicrosoftAnonTag]>;
 
 def ObjCNonUnifiedException : DiagGroup<"objc-nonunified-exceptions">;
 

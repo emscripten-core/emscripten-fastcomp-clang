@@ -23,6 +23,7 @@
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/CharInfo.h"
+#include "clang/Basic/LangOptions.h"
 #include "clang/Basic/TypeTraits.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APSInt.h"
@@ -276,6 +277,7 @@ public:
     MLV_LValueCast,           // Specialized form of MLV_InvalidExpression.
     MLV_IncompleteType,
     MLV_ConstQualified,
+    MLV_ConstAddrSpace,
     MLV_ArrayType,
     MLV_NoSetterProperty,
     MLV_MemberFunction,
@@ -324,6 +326,7 @@ public:
       CM_LValueCast, // Same as CM_RValue, but indicates GCC cast-as-lvalue ext
       CM_NoSetterProperty,// Implicit assignment to ObjC property without setter
       CM_ConstQualified,
+      CM_ConstAddrSpace,
       CM_ArrayType,
       CM_IncompleteType
     };
@@ -596,7 +599,7 @@ public:
 
   /// \brief Determine whether this expression involves a call to any function
   /// that is not trivial.
-  bool hasNonTrivialCall(ASTContext &Ctx);
+  bool hasNonTrivialCall(const ASTContext &Ctx) const;
 
   /// EvaluateKnownConstInt - Call EvaluateAsRValue and return the folded
   /// integer. This must be called on an expression that constant folds to an
@@ -854,7 +857,9 @@ public:
     return Loc;
   }
 
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 
   /// The source expression of an opaque value expression is the
   /// expression which originally generated the value.  This is
@@ -894,7 +899,7 @@ public:
 ///   DeclRefExprBits.RefersToEnclosingVariableOrCapture
 ///       Specifies when this declaration reference expression (validly)
 ///       refers to an enclosed local or a captured variable.
-class DeclRefExpr : public Expr {
+class LLVM_ALIGNAS(/*alignof(uint64_t)*/ 8) DeclRefExpr : public Expr {
   /// \brief The declaration that we are referencing.
   ValueDecl *D;
 
@@ -1048,13 +1053,17 @@ public:
     if (!hasTemplateKWAndArgsInfo())
       return nullptr;
 
-    if (hasFoundDecl())
+    if (hasFoundDecl()) {
       return reinterpret_cast<ASTTemplateKWAndArgsInfo *>(
-        &getInternalFoundDecl() + 1);
+          llvm::alignAddr(&getInternalFoundDecl() + 1,
+                          llvm::alignOf<ASTTemplateKWAndArgsInfo>()));
+    }
 
-    if (hasQualifier())
+    if (hasQualifier()) {
       return reinterpret_cast<ASTTemplateKWAndArgsInfo *>(
-        &getInternalQualifierLoc() + 1);
+          llvm::alignAddr(&getInternalQualifierLoc() + 1,
+                          llvm::alignOf<ASTTemplateKWAndArgsInfo>()));
+    }
 
     return reinterpret_cast<ASTTemplateKWAndArgsInfo *>(this + 1);
   }
@@ -1162,7 +1171,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 
   friend class ASTStmtReader;
   friend class ASTStmtWriter;
@@ -1308,7 +1319,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 class CharacterLiteral : public Expr {
@@ -1355,7 +1368,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 class FloatingLiteral : public Expr, private APFloatStorage {
@@ -1417,7 +1432,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 /// ImaginaryLiteral - We support imaginary integer and floating point literals,
@@ -1612,7 +1629,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 /// ParenExpr - This represents a parethesized expression, e.g. "(1)".  This
@@ -2271,7 +2290,7 @@ public:
 
   /// \brief Returns \c true if this is a call to a builtin which does not
   /// evaluate side-effects within its arguments.
-  bool isUnevaluatedBuiltinCall(ASTContext &Ctx) const;
+  bool isUnevaluatedBuiltinCall(const ASTContext &Ctx) const;
 
   /// getCallReturnType - Get the return type of the call expr. This is not
   /// always the type of the expr itself, if the return type is a reference
@@ -2298,9 +2317,9 @@ public:
 
 /// MemberExpr - [C99 6.5.2.3] Structure and Union Members.  X->F and X.F.
 ///
-class MemberExpr : public Expr {
+class LLVM_ALIGNAS(/*alignof(uint64_t)*/ 8) MemberExpr : public Expr {
   /// Extra data stored in some member expressions.
-  struct MemberNameQualifier {
+  struct LLVM_ALIGNAS(/*alignof(uint64_t)*/ 8) MemberNameQualifier {
     /// \brief The nested-name-specifier that qualifies the name, including
     /// source-location information.
     NestedNameSpecifierLoc QualifierLoc;
@@ -2571,6 +2590,14 @@ public:
   /// greater than 1.
   void setHadMultipleCandidates(bool V = true) {
     HadMultipleCandidates = V;
+  }
+
+  /// \brief Returns true if virtual dispatch is performed.
+  /// If the member access is fully qualified, (i.e. X::f()), virtual
+  /// dispatching is not performed. In -fapple-kext mode qualified
+  /// calls to virtual method will still go through the vtable.
+  bool performsVirtualDispatch(const LangOptions &LO) const {
+    return LO.AppleKext || !hasQualifier();
   }
 
   static bool classof(const Stmt *T) {
@@ -3382,7 +3409,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 /// StmtExpr - This is the GNU Statement Expression extension: ({int X=4; X;}).
@@ -3661,7 +3690,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 /// VAArgExpr, used for the builtin function __builtin_va_arg.
@@ -3914,7 +3945,8 @@ public:
   // Iterators
   child_range children() {
     // FIXME: This does not include the array filler expression.
-    if (InitExprs.empty()) return child_range();
+    if (InitExprs.empty())
+      return child_range(child_iterator(), child_iterator());
     return child_range(&InitExprs[0], &InitExprs[0] + InitExprs.size());
   }
 
@@ -4265,6 +4297,82 @@ public:
   }
 };
 
+/// \brief Represents a place-holder for an object not to be initialized by
+/// anything.
+///
+/// This only makes sense when it appears as part of an updater of a
+/// DesignatedInitUpdateExpr (see below). The base expression of a DIUE
+/// initializes a big object, and the NoInitExpr's mark the spots within the
+/// big object not to be overwritten by the updater.
+///
+/// \see DesignatedInitUpdateExpr
+class NoInitExpr : public Expr {
+public:
+  explicit NoInitExpr(QualType ty)
+    : Expr(NoInitExprClass, ty, VK_RValue, OK_Ordinary,
+           false, false, ty->isInstantiationDependentType(), false) { }
+
+  explicit NoInitExpr(EmptyShell Empty)
+    : Expr(NoInitExprClass, Empty) { }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == NoInitExprClass;
+  }
+
+  SourceLocation getLocStart() const LLVM_READONLY { return SourceLocation(); }
+  SourceLocation getLocEnd() const LLVM_READONLY { return SourceLocation(); }
+
+  // Iterators
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+};
+
+// In cases like:
+//   struct Q { int a, b, c; };
+//   Q *getQ();
+//   void foo() {
+//     struct A { Q q; } a = { *getQ(), .q.b = 3 };
+//   }
+//
+// We will have an InitListExpr for a, with type A, and then a
+// DesignatedInitUpdateExpr for "a.q" with type Q. The "base" for this DIUE
+// is the call expression *getQ(); the "updater" for the DIUE is ".q.b = 3"
+//
+class DesignatedInitUpdateExpr : public Expr {
+  // BaseAndUpdaterExprs[0] is the base expression;
+  // BaseAndUpdaterExprs[1] is an InitListExpr overwriting part of the base.
+  Stmt *BaseAndUpdaterExprs[2];
+
+public:
+  DesignatedInitUpdateExpr(const ASTContext &C, SourceLocation lBraceLoc,
+                           Expr *baseExprs, SourceLocation rBraceLoc);
+
+  explicit DesignatedInitUpdateExpr(EmptyShell Empty)
+    : Expr(DesignatedInitUpdateExprClass, Empty) { }
+
+  SourceLocation getLocStart() const LLVM_READONLY;
+  SourceLocation getLocEnd() const LLVM_READONLY;
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == DesignatedInitUpdateExprClass;
+  }
+
+  Expr *getBase() const { return cast<Expr>(BaseAndUpdaterExprs[0]); }
+  void setBase(Expr *Base) { BaseAndUpdaterExprs[0] = Base; }
+
+  InitListExpr *getUpdater() const {
+    return cast<InitListExpr>(BaseAndUpdaterExprs[1]);
+  }
+  void setUpdater(Expr *Updater) { BaseAndUpdaterExprs[1] = Updater; }
+
+  // Iterators
+  // children = the base and the updater
+  child_range children() {
+    return child_range(&BaseAndUpdaterExprs[0], &BaseAndUpdaterExprs[0] + 2);
+  }
+};
+
 /// \brief Represents an implicitly-generated value initialization of
 /// an object of a given type.
 ///
@@ -4291,7 +4399,9 @@ public:
   SourceLocation getLocEnd() const LLVM_READONLY { return SourceLocation(); }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 
@@ -4501,7 +4611,7 @@ public:
 
   /// getEncodedElementAccess - Encode the elements accessed into an llvm
   /// aggregate Constant of ConstantInt(s).
-  void getEncodedElementAccess(SmallVectorImpl<unsigned> &Elts) const;
+  void getEncodedElementAccess(SmallVectorImpl<uint32_t> &Elts) const;
 
   SourceLocation getLocStart() const LLVM_READONLY {
     return getBase()->getLocStart();
@@ -4557,7 +4667,9 @@ public:
   }
 
   // Iterators
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
 };
 
 /// AsTypeExpr - Clang builtin function __builtin_astype [OpenCL 6.2.4.2]
@@ -4859,7 +4971,9 @@ public:
     assert(T->isDependentType() && "TypoExpr given a non-dependent type");
   }
 
-  child_range children() { return child_range(); }
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
   SourceLocation getLocStart() const LLVM_READONLY { return SourceLocation(); }
   SourceLocation getLocEnd() const LLVM_READONLY { return SourceLocation(); }
 };

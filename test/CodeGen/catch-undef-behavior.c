@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -fsanitize=alignment,null,object-size,shift-base,shift-exponent,return,signed-integer-overflow,vla-bound,float-cast-overflow,integer-divide-by-zero,bool,returns-nonnull-attribute,nonnull-attribute -fsanitize-recover=alignment,null,object-size,shift-base,shift-exponent,signed-integer-overflow,vla-bound,float-cast-overflow,integer-divide-by-zero,bool,returns-nonnull-attribute,nonnull-attribute -emit-llvm %s -o - -triple x86_64-linux-gnu | FileCheck %s --check-prefix=CHECK-COMMON --check-prefix=CHECK-UBSAN
-// RUN: %clang_cc1 -fsanitize-undefined-trap-on-error -fsanitize=alignment,null,object-size,shift-base,shift-exponent,return,signed-integer-overflow,vla-bound,float-cast-overflow,integer-divide-by-zero,bool,returns-nonnull-attribute,nonnull-attribute -fsanitize-recover=alignment,null,object-size,shift-base,shift-exponent,signed-integer-overflow,vla-bound,float-cast-overflow,integer-divide-by-zero,bool,returns-nonnull-attribute,nonnull-attribute -emit-llvm %s -o - -triple x86_64-linux-gnu | FileCheck %s --check-prefix=CHECK-COMMON --check-prefix=CHECK-TRAP
+// RUN: %clang_cc1 -fsanitize-trap=alignment,null,object-size,shift-base,shift-exponent,return,signed-integer-overflow,vla-bound,float-cast-overflow,integer-divide-by-zero,bool,returns-nonnull-attribute,nonnull-attribute -fsanitize-recover=alignment,null,object-size,shift-base,shift-exponent,signed-integer-overflow,vla-bound,float-cast-overflow,integer-divide-by-zero,bool,returns-nonnull-attribute,nonnull-attribute -fsanitize=alignment,null,object-size,shift-base,shift-exponent,return,signed-integer-overflow,vla-bound,float-cast-overflow,integer-divide-by-zero,bool,returns-nonnull-attribute,nonnull-attribute -fsanitize-recover=alignment,null,object-size,shift-base,shift-exponent,signed-integer-overflow,vla-bound,float-cast-overflow,integer-divide-by-zero,bool,returns-nonnull-attribute,nonnull-attribute -emit-llvm %s -o - -triple x86_64-linux-gnu | FileCheck %s --check-prefix=CHECK-COMMON --check-prefix=CHECK-TRAP
 // RUN: %clang_cc1 -fsanitize=null -fsanitize-recover=null -emit-llvm %s -o - -triple x86_64-linux-gnu | FileCheck %s --check-prefix=CHECK-NULL
 // RUN: %clang_cc1 -fsanitize=signed-integer-overflow -emit-llvm %s -o - -triple x86_64-linux-gnu | FileCheck %s --check-prefix=CHECK-OVERFLOW
 // REQUIRES: asserts
@@ -369,6 +369,34 @@ void call_decl_nonnull(int *a) {
   // CHECK-TRAP: call void @llvm.trap() [[NR_NUW]]
   // CHECK-TRAP: unreachable
   decl_nonnull(a);
+}
+
+extern void *memcpy (void *, const void *, unsigned) __attribute__((nonnull(1, 2)));
+
+// CHECK-COMMON-LABEL: @call_memcpy_nonnull
+void call_memcpy_nonnull(void *p, void *q, int sz) {
+  // CHECK-COMMON: icmp ne i8* {{.*}}, null
+  // CHECK-UBSAN: call void @__ubsan_handle_nonnull_arg
+  // CHECK-TRAP: call void @llvm.trap()
+
+  // CHECK-COMMON: icmp ne i8* {{.*}}, null
+  // CHECK-UBSAN: call void @__ubsan_handle_nonnull_arg
+  // CHECK-TRAP: call void @llvm.trap()
+  memcpy(p, q, sz);
+}
+
+extern void *memmove (void *, const void *, unsigned) __attribute__((nonnull(1, 2)));
+
+// CHECK-COMMON-LABEL: @call_memmove_nonnull
+void call_memmove_nonnull(void *p, void *q, int sz) {
+  // CHECK-COMMON: icmp ne i8* {{.*}}, null
+  // CHECK-UBSAN: call void @__ubsan_handle_nonnull_arg
+  // CHECK-TRAP: call void @llvm.trap()
+
+  // CHECK-COMMON: icmp ne i8* {{.*}}, null
+  // CHECK-UBSAN: call void @__ubsan_handle_nonnull_arg
+  // CHECK-TRAP: call void @llvm.trap()
+  memmove(p, q, sz);
 }
 
 // CHECK-COMMON-LABEL: @call_nonnull_variadic

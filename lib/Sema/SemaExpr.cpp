@@ -104,13 +104,29 @@ DiagnoseAvailabilityOfDecl(Sema &S, NamedDecl *D, SourceLocation Loc,
                            bool ObjCPropertyAccess) {
   // See if this declaration is unavailable or deprecated.
   std::string Message;
+  AvailabilityResult Result = D->getAvailability(&Message);
+
+  // For typedefs, if the typedef declaration appears available look
+  // to the underlying type to see if it is more restrictive.
+  while (const TypedefNameDecl *TD = dyn_cast<TypedefNameDecl>(D)) {
+    if (Result == AR_Available) {
+      if (const TagType *TT = TD->getUnderlyingType()->getAs<TagType>()) {
+        D = TT->getDecl();
+        Result = D->getAvailability(&Message);
+        continue;
+      }
+    }
+    break;
+  }
     
   // Forward class declarations get their attributes from their definition.
   if (ObjCInterfaceDecl *IDecl = dyn_cast<ObjCInterfaceDecl>(D)) {
-    if (IDecl->getDefinition())
+    if (IDecl->getDefinition()) {
       D = IDecl->getDefinition();
+      Result = D->getAvailability(&Message);
+    }
   }
-  AvailabilityResult Result = D->getAvailability(&Message);
+
   if (const EnumConstantDecl *ECD = dyn_cast<EnumConstantDecl>(D))
     if (Result == AR_Available) {
       const DeclContext *DC = ECD->getDeclContext();
@@ -450,12 +466,11 @@ void Sema::DiagnoseSentinelCalls(NamedDecl *D, SourceLocation Loc,
   SourceLocation MissingNilLoc
     = PP.getLocForEndOfToken(sentinelExpr->getLocEnd());
   std::string NullValue;
-  if (calleeType == CT_Method &&
-      PP.getIdentifierInfo("nil")->hasMacroDefinition())
+  if (calleeType == CT_Method && PP.isMacroDefined("nil"))
     NullValue = "nil";
   else if (getLangOpts().CPlusPlus11)
     NullValue = "nullptr";
-  else if (PP.getIdentifierInfo("NULL")->hasMacroDefinition())
+  else if (PP.isMacroDefined("NULL"))
     NullValue = "NULL";
   else
     NullValue = "(void*) 0";
@@ -1095,10 +1110,15 @@ static QualType handleFloatConversion(Sema &S, ExprResult &LHS,
     return RHSType;
   }
 
-  if (LHSFloat)
+  if (LHSFloat) {
+    // Half FP has to be promoted to float unless it is natively supported
+    if (LHSType->isHalfType() && !S.getLangOpts().NativeHalfType)
+      LHSType = S.Context.FloatTy;
+
     return handleIntToFloatConversion(S, LHS, RHS, LHSType, RHSType,
                                       /*convertFloat=*/!IsCompAssign,
                                       /*convertInt=*/ true);
+  }
   assert(RHSFloat);
   return handleIntToFloatConversion(S, RHS, LHS, RHSType, LHSType,
                                     /*convertInt=*/ true,
@@ -2446,8 +2466,8 @@ Sema::LookupInObjCMethod(LookupResult &Lookup, Scope *S,
         Diag(Loc, diag::warn_direct_ivar_access) << IV->getDeclName();
 
       ObjCIvarRefExpr *Result = new (Context)
-          ObjCIvarRefExpr(IV, IV->getType(), Loc, IV->getLocation(),
-                          SelfExpr.get(), true, true);
+          ObjCIvarRefExpr(IV, IV->getUsageType(SelfExpr.get()->getType()), Loc,
+                          IV->getLocation(), SelfExpr.get(), true, true);
 
       if (getLangOpts().ObjCAutoRefCount) {
         if (IV->getType().getObjCLifetime() == Qualifiers::OCL_Weak) {
@@ -3335,13 +3355,6 @@ ExprResult Sema::ActOnNumericConstant(const Token &Tok, Scope *UDLScope) {
 
     // Get the value in the widest-possible width.
     unsigned MaxWidth = Context.getTargetInfo().getIntMaxTWidth();
-    // The microsoft literal suffix extensions support 128-bit literals, which
-    // may be wider than [u]intmax_t.
-    // FIXME: Actually, they don't. We seem to have accidentally invented the
-    //        i128 suffix.
-    if (Literal.MicrosoftInteger == 128 && MaxWidth < 128 &&
-        Context.getTargetInfo().hasInt128Type())
-      MaxWidth = 128;
     llvm::APInt ResultVal(MaxWidth, 0);
 
     if (Literal.GetIntegerValue(ResultVal)) {
@@ -3364,12 +3377,7 @@ ExprResult Sema::ActOnNumericConstant(const Token &Tok, Scope *UDLScope) {
 
       // Microsoft specific integer suffixes are explicitly sized.
       if (Literal.MicrosoftInteger) {
-        if (Literal.MicrosoftInteger > MaxWidth) {
-          // If this target doesn't support __int128, error and force to ull.
-          Diag(Tok.getLocation(), diag::err_int128_unsupported);
-          Width = MaxWidth;
-          Ty = Context.getIntMaxType();
-        } else if (Literal.MicrosoftInteger == 8 && !Literal.isUnsigned) {
+        if (Literal.MicrosoftInteger == 8 && !Literal.isUnsigned) {
           Width = 8;
           Ty = Context.CharTy;
         } else {
@@ -3405,6 +3413,22 @@ ExprResult Sema::ActOnNumericConstant(const Token &Tok, Scope *UDLScope) {
             Ty = Context.LongTy;
           else if (AllowUnsigned)
             Ty = Context.UnsignedLongTy;
+          // Check according to the rules of C90 6.1.3.2p5. C++03 [lex.icon]p2
+          // is compatible.
+          else if (!getLangOpts().C99 && !getLangOpts().CPlusPlus11) {
+            const unsigned LongLongSize =
+                Context.getTargetInfo().getLongLongWidth();
+            Diag(Tok.getLocation(),
+                 getLangOpts().CPlusPlus
+                     ? Literal.isLong
+                           ? diag::warn_old_implicitly_unsigned_long_cxx
+                           : /*C++98 UB*/ diag::
+                                 ext_old_implicitly_unsigned_long_cxx
+                     : diag::warn_old_implicitly_unsigned_long)
+                << (LongLongSize > LongSize ? /*will have type 'long long'*/ 0
+                                            : /*will be ill-formed*/ 1);
+            Ty = Context.UnsignedLongTy;
+          }
           Width = LongSize;
         }
       }
@@ -3653,7 +3677,7 @@ bool Sema::CheckUnaryExprOrTypeTraitOperand(QualType ExprType,
   // C11 6.5.3.4/3, C++11 [expr.alignof]p3:
   //   When alignof or _Alignof is applied to an array type, the result
   //   is the alignment of the element type.
-  if (ExprKind == UETT_AlignOf)
+  if (ExprKind == UETT_AlignOf || ExprKind == UETT_OpenMPRequiredSimdAlign)
     ExprType = Context.getBaseElementType(ExprType);
 
   if (ExprKind == UETT_VecStep)
@@ -3788,6 +3812,9 @@ Sema::CreateUnaryExprOrTypeTraitExpr(Expr *E, SourceLocation OpLoc,
     isInvalid = CheckAlignOfExpr(*this, E);
   } else if (ExprKind == UETT_VecStep) {
     isInvalid = CheckVecStepExpr(E);
+  } else if (ExprKind == UETT_OpenMPRequiredSimdAlign) {
+      Diag(E->getExprLoc(), diag::err_openmp_default_simd_align_expr);
+      isInvalid = true;
   } else if (E->refersToBitField()) {  // C99 6.5.3.4p1.
     Diag(E->getExprLoc(), diag::err_sizeof_alignof_bitfield) << 0;
     isInvalid = true;
@@ -4278,7 +4305,6 @@ Sema::ConvertArgumentsForCall(CallExpr *Call, Expr *Fn,
                               SourceLocation RParenLoc,
                               bool IsExecConfig) {
   // Bail out early if calling a builtin with custom typechecking.
-  // We don't need to do this in the 
   if (FDecl)
     if (unsigned ID = FDecl->getBuiltinID())
       if (Context.BuiltinInfo.hasCustomTypechecking(ID))
@@ -4902,6 +4928,17 @@ Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
     TheCall = new (Context) CallExpr(Context, Fn, Args, Context.BoolTy,
                                      VK_RValue, RParenLoc);
 
+  if (!getLangOpts().CPlusPlus) {
+    // C cannot always handle TypoExpr nodes in builtin calls and direct
+    // function calls as their argument checking don't necessarily handle
+    // dependent types properly, so make sure any TypoExprs have been
+    // dealt with.
+    ExprResult Result = CorrectDelayedTyposInExpr(TheCall);
+    if (!Result.isUsable()) return ExprError();
+    TheCall = dyn_cast<CallExpr>(Result.get());
+    if (!TheCall) return Result;
+  }
+
   // Bail out early if calling a builtin with custom typechecking.
   if (BuiltinID && Context.BuiltinInfo.hasCustomTypechecking(BuiltinID))
     return CheckBuiltinFunctionCall(FDecl, BuiltinID, TheCall);
@@ -5136,17 +5173,17 @@ Sema::ActOnInitList(SourceLocation LBraceLoc, MultiExprArg InitArgList,
 }
 
 /// Do an explicit extend of the given block pointer if we're in ARC.
-static void maybeExtendBlockObject(Sema &S, ExprResult &E) {
+void Sema::maybeExtendBlockObject(ExprResult &E) {
   assert(E.get()->getType()->isBlockPointerType());
   assert(E.get()->isRValue());
 
   // Only do this in an r-value context.
-  if (!S.getLangOpts().ObjCAutoRefCount) return;
+  if (!getLangOpts().ObjCAutoRefCount) return;
 
-  E = ImplicitCastExpr::Create(S.Context, E.get()->getType(),
+  E = ImplicitCastExpr::Create(Context, E.get()->getType(),
                                CK_ARCExtendBlockObject, E.get(),
                                /*base path*/ nullptr, VK_RValue);
-  S.ExprNeedsCleanups = true;
+  ExprNeedsCleanups = true;
 }
 
 /// Prepare a conversion of the given expression to an ObjC object
@@ -5156,7 +5193,7 @@ CastKind Sema::PrepareCastToObjCObjectPointer(ExprResult &E) {
   if (type->isObjCObjectPointerType()) {
     return CK_BitCast;
   } else if (type->isBlockPointerType()) {
-    maybeExtendBlockObject(*this, E);
+    maybeExtendBlockObject(E);
     return CK_BlockPointerToObjCPointerCast;
   } else {
     assert(type->isPointerType());
@@ -5198,7 +5235,7 @@ CastKind Sema::PrepareScalarCast(ExprResult &Src, QualType DestTy) {
         return CK_BitCast;
       if (SrcKind == Type::STK_CPointer)
         return CK_CPointerToObjCPointerCast;
-      maybeExtendBlockObject(*this, Src);
+      maybeExtendBlockObject(Src);
       return CK_BlockPointerToObjCPointerCast;
     case Type::STK_Bool:
       return CK_PointerToBoolean;
@@ -5351,7 +5388,16 @@ static bool breakDownVectorType(QualType type, uint64_t &len,
   return true;
 }
 
-static bool VectorTypesMatch(Sema &S, QualType srcTy, QualType destTy) {
+/// Are the two types lax-compatible vector types?  That is, given
+/// that one of them is a vector, do they have equal storage sizes,
+/// where the storage size is the number of elements times the element
+/// size?
+///
+/// This will also return false if either of the types is neither a
+/// vector nor a real type.
+bool Sema::areLaxCompatibleVectorTypes(QualType srcTy, QualType destTy) {
+  assert(destTy->isVectorType() || srcTy->isVectorType());
+
   uint64_t srcLen, destLen;
   QualType srcElt, destElt;
   if (!breakDownVectorType(srcTy, srcLen, srcElt)) return false;
@@ -5360,27 +5406,28 @@ static bool VectorTypesMatch(Sema &S, QualType srcTy, QualType destTy) {
   // ASTContext::getTypeSize will return the size rounded up to a
   // power of 2, so instead of using that, we need to use the raw
   // element size multiplied by the element count.
-  uint64_t srcEltSize = S.Context.getTypeSize(srcElt);
-  uint64_t destEltSize = S.Context.getTypeSize(destElt);
+  uint64_t srcEltSize = Context.getTypeSize(srcElt);
+  uint64_t destEltSize = Context.getTypeSize(destElt);
   
   return (srcLen * srcEltSize == destLen * destEltSize);
 }
 
-/// Is this a legal conversion between two known vector types?
+/// Is this a legal conversion between two types, one of which is
+/// known to be a vector type?
 bool Sema::isLaxVectorConversion(QualType srcTy, QualType destTy) {
   assert(destTy->isVectorType() || srcTy->isVectorType());
   
   if (!Context.getLangOpts().LaxVectorConversions)
     return false;
-  return VectorTypesMatch(*this, srcTy, destTy);
+  return areLaxCompatibleVectorTypes(srcTy, destTy);
 }
 
 bool Sema::CheckVectorCast(SourceRange R, QualType VectorTy, QualType Ty,
                            CastKind &Kind) {
   assert(VectorTy->isVectorType() && "Not a vector type!");
 
-  if (Ty->isVectorType() || Ty->isIntegerType()) {
-    if (!VectorTypesMatch(*this, Ty, VectorTy))
+  if (Ty->isVectorType() || Ty->isIntegralType(Context)) {
+    if (!areLaxCompatibleVectorTypes(Ty, VectorTy))
       return Diag(R.getBegin(),
                   Ty->isVectorType() ?
                   diag::err_invalid_conversion_between_vectors :
@@ -5406,7 +5453,7 @@ ExprResult Sema::CheckExtVectorCast(SourceRange R, QualType DestTy,
   // In OpenCL, casts between vectors of different types are not allowed.
   // (See OpenCL 6.2).
   if (SrcTy->isVectorType()) {
-    if (!VectorTypesMatch(*this, SrcTy, DestTy)
+    if (!areLaxCompatibleVectorTypes(SrcTy, DestTy)
         || (getLangOpts().OpenCL &&
             (DestTy.getCanonicalType() != SrcTy.getCanonicalType()))) {
       Diag(R.getBegin(),diag::err_invalid_conversion_between_ext_vectors)
@@ -5469,7 +5516,7 @@ Sema::ActOnCastExpr(Scope *S, SourceLocation LParenLoc,
   // i.e. all the elements are integer constants.
   ParenExpr *PE = dyn_cast<ParenExpr>(CastExpr);
   ParenListExpr *PLE = dyn_cast<ParenListExpr>(CastExpr);
-  if ((getLangOpts().AltiVec || getLangOpts().OpenCL)
+  if ((getLangOpts().AltiVec || getLangOpts().ZVector || getLangOpts().OpenCL)
        && castType->isVectorType() && (PE || PLE)) {
     if (PLE && PLE->getNumExprs() == 0) {
       Diag(PLE->getExprLoc(), diag::err_altivec_empty_initializer);
@@ -5777,36 +5824,6 @@ static QualType checkConditionalPointerCompatibility(Sema &S, ExprResult &LHS,
   return ResultTy;
 }
 
-/// \brief Returns true if QT is quelified-id and implements 'NSObject' and/or
-/// 'NSCopying' protocols (and nothing else); or QT is an NSObject and optionally
-/// implements 'NSObject' and/or NSCopying' protocols (and nothing else).
-static bool isObjCPtrBlockCompatible(Sema &S, ASTContext &C, QualType QT) {
-  if (QT->isObjCIdType())
-    return true;
-  
-  const ObjCObjectPointerType *OPT = QT->getAs<ObjCObjectPointerType>();
-  if (!OPT)
-    return false;
-
-  if (ObjCInterfaceDecl *ID = OPT->getInterfaceDecl())
-    if (ID->getIdentifier() != &C.Idents.get("NSObject"))
-      return false;
-  
-  ObjCProtocolDecl* PNSCopying =
-    S.LookupProtocol(&C.Idents.get("NSCopying"), SourceLocation());
-  ObjCProtocolDecl* PNSObject =
-    S.LookupProtocol(&C.Idents.get("NSObject"), SourceLocation());
-
-  for (auto *Proto : OPT->quals()) {
-    if ((PNSCopying && declaresSameEntity(Proto, PNSCopying)) ||
-        (PNSObject && declaresSameEntity(Proto, PNSObject)))
-      ;
-    else
-      return false;
-  }
-  return true;
-}
-
 /// \brief Return the resulting type when the operands are both block pointers.
 static QualType checkConditionalBlockPointerCompatibility(Sema &S,
                                                           ExprResult &LHS,
@@ -6056,7 +6073,9 @@ OpenCLCheckVectorConditional(Sema &S, ExprResult &Cond,
   if (LHS.get()->getType()->isVectorType() ||
       RHS.get()->getType()->isVectorType()) {
     QualType VecResTy = S.CheckVectorOperands(LHS, RHS, QuestionLoc,
-                                              /*isCompAssign*/false);
+                                              /*isCompAssign*/false,
+                                              /*AllowBothBool*/true,
+                                              /*AllowBoolConversions*/false);
     if (VecResTy.isNull()) return QualType();
     // The result type must match the condition type as specified in
     // OpenCL v1.1 s6.11.6.
@@ -6107,7 +6126,9 @@ QualType Sema::CheckConditionalOperands(ExprResult &Cond, ExprResult &LHS,
   // Now check the two expressions.
   if (LHS.get()->getType()->isVectorType() ||
       RHS.get()->getType()->isVectorType())
-    return CheckVectorOperands(LHS, RHS, QuestionLoc, /*isCompAssign*/false);
+    return CheckVectorOperands(LHS, RHS, QuestionLoc, /*isCompAssign*/false,
+                               /*AllowBothBool*/true,
+                               /*AllowBoolConversions*/false);
 
   QualType ResTy = UsualArithmeticConversions(LHS, RHS);
   if (LHS.isInvalid() || RHS.isInvalid())
@@ -6254,7 +6275,10 @@ QualType Sema::FindCompositeObjCPointerType(ExprResult &LHS, ExprResult &RHS,
 
     // FIXME: Consider unifying with 'areComparableObjCPointerTypes'.
     // It could return the composite type.
-    if (Context.canAssignObjCInterfaces(LHSOPT, RHSOPT)) {
+    if (!(compositeType =
+          Context.areCommonBaseCompatible(LHSOPT, RHSOPT)).isNull()) {
+      // Nothing more to do.
+    } else if (Context.canAssignObjCInterfaces(LHSOPT, RHSOPT)) {
       compositeType = RHSOPT->isObjCBuiltinType() ? RHSTy : LHSTy;
     } else if (Context.canAssignObjCInterfaces(RHSOPT, LHSOPT)) {
       compositeType = LHSOPT->isObjCBuiltinType() ? LHSTy : RHSTy;
@@ -6268,10 +6292,7 @@ QualType Sema::FindCompositeObjCPointerType(ExprResult &LHS, ExprResult &RHS,
       compositeType = Context.getObjCIdType();
     } else if (LHSTy->isObjCIdType() || RHSTy->isObjCIdType()) {
       compositeType = Context.getObjCIdType();
-    } else if (!(compositeType =
-                 Context.areCommonBaseCompatible(LHSOPT, RHSOPT)).isNull())
-      ;
-    else {
+    } else {
       Diag(QuestionLoc, diag::ext_typecheck_cond_incompatible_operands)
       << LHSTy << RHSTy
       << LHS.get()->getSourceRange() << RHS.get()->getSourceRange();
@@ -6512,6 +6533,8 @@ ExprResult Sema::ActOnConditionalOp(SourceLocation QuestionLoc,
 
   DiagnoseConditionalPrecedence(*this, QuestionLoc, Cond.get(), LHS.get(),
                                 RHS.get());
+
+  CheckBoolLikeConversion(Cond.get(), QuestionLoc);
 
   if (!commonExpr)
     return new (Context)
@@ -6957,9 +6980,9 @@ Sema::CheckAssignmentConstraints(QualType LHSType, ExprResult &RHS,
     }
 
     // Only under strict condition T^ is compatible with an Objective-C pointer.
-    if (RHSType->isBlockPointerType() &&
-        isObjCPtrBlockCompatible(*this, Context, LHSType)) {
-      maybeExtendBlockObject(*this, RHS);
+    if (RHSType->isBlockPointerType() && 
+        LHSType->isBlockCompatibleObjCPointerType(Context)) {
+      maybeExtendBlockObject(RHS);
       Kind = CK_BlockPointerToObjCPointerCast;
       return Compatible;
     }
@@ -7246,7 +7269,9 @@ static bool tryVectorConvertAndSplat(Sema &S, ExprResult *scalar,
 }
 
 QualType Sema::CheckVectorOperands(ExprResult &LHS, ExprResult &RHS,
-                                   SourceLocation Loc, bool IsCompAssign) {
+                                   SourceLocation Loc, bool IsCompAssign,
+                                   bool AllowBothBool,
+                                   bool AllowBoolConversions) {
   if (!IsCompAssign) {
     LHS = DefaultFunctionArrayLvalueConversion(LHS.get());
     if (LHS.isInvalid())
@@ -7261,13 +7286,20 @@ QualType Sema::CheckVectorOperands(ExprResult &LHS, ExprResult &RHS,
   QualType LHSType = LHS.get()->getType().getUnqualifiedType();
   QualType RHSType = RHS.get()->getType().getUnqualifiedType();
 
-  // If the vector types are identical, return.
-  if (Context.hasSameType(LHSType, RHSType))
-    return LHSType;
-
   const VectorType *LHSVecType = LHSType->getAs<VectorType>();
   const VectorType *RHSVecType = RHSType->getAs<VectorType>();
   assert(LHSVecType || RHSVecType);
+
+  // AltiVec-style "vector bool op vector bool" combinations are allowed
+  // for some operators but not others.
+  if (!AllowBothBool &&
+      LHSVecType && LHSVecType->getVectorKind() == VectorType::AltiVecBool &&
+      RHSVecType && RHSVecType->getVectorKind() == VectorType::AltiVecBool)
+    return InvalidOperands(Loc, LHS, RHS);
+
+  // If the vector types are identical, return.
+  if (Context.hasSameType(LHSType, RHSType))
+    return LHSType;
 
   // If we have compatible AltiVec and GCC vector types, use the AltiVec type.
   if (LHSVecType && RHSVecType &&
@@ -7280,6 +7312,28 @@ QualType Sema::CheckVectorOperands(ExprResult &LHS, ExprResult &RHS,
     if (!IsCompAssign)
       LHS = ImpCastExprToType(LHS.get(), RHSType, CK_BitCast);
     return RHSType;
+  }
+
+  // AllowBoolConversions says that bool and non-bool AltiVec vectors
+  // can be mixed, with the result being the non-bool type.  The non-bool
+  // operand must have integer element type.
+  if (AllowBoolConversions && LHSVecType && RHSVecType &&
+      LHSVecType->getNumElements() == RHSVecType->getNumElements() &&
+      (Context.getTypeSize(LHSVecType->getElementType()) ==
+       Context.getTypeSize(RHSVecType->getElementType()))) {
+    if (LHSVecType->getVectorKind() == VectorType::AltiVecVector &&
+        LHSVecType->getElementType()->isIntegerType() &&
+        RHSVecType->getVectorKind() == VectorType::AltiVecBool) {
+      RHS = ImpCastExprToType(RHS.get(), LHSType, CK_BitCast);
+      return LHSType;
+    }
+    if (!IsCompAssign &&
+        LHSVecType->getVectorKind() == VectorType::AltiVecBool &&
+        RHSVecType->getVectorKind() == VectorType::AltiVecVector &&
+        RHSVecType->getElementType()->isIntegerType()) {
+      LHS = ImpCastExprToType(LHS.get(), RHSType, CK_BitCast);
+      return RHSType;
+    }
   }
 
   // If there's an ext-vector type and a scalar, try to convert the scalar to
@@ -7370,7 +7424,9 @@ QualType Sema::CheckMultiplyDivideOperands(ExprResult &LHS, ExprResult &RHS,
 
   if (LHS.get()->getType()->isVectorType() ||
       RHS.get()->getType()->isVectorType())
-    return CheckVectorOperands(LHS, RHS, Loc, IsCompAssign);
+    return CheckVectorOperands(LHS, RHS, Loc, IsCompAssign,
+                               /*AllowBothBool*/getLangOpts().AltiVec,
+                               /*AllowBoolConversions*/false);
 
   QualType compType = UsualArithmeticConversions(LHS, RHS, IsCompAssign);
   if (LHS.isInvalid() || RHS.isInvalid())
@@ -7399,7 +7455,9 @@ QualType Sema::CheckRemainderOperands(
       RHS.get()->getType()->isVectorType()) {
     if (LHS.get()->getType()->hasIntegerRepresentation() && 
         RHS.get()->getType()->hasIntegerRepresentation())
-      return CheckVectorOperands(LHS, RHS, Loc, IsCompAssign);
+      return CheckVectorOperands(LHS, RHS, Loc, IsCompAssign,
+                                 /*AllowBothBool*/getLangOpts().AltiVec,
+                                 /*AllowBoolConversions*/false);
     return InvalidOperands(Loc, LHS, RHS);
   }
 
@@ -7685,7 +7743,10 @@ QualType Sema::CheckAdditionOperands( // C99 6.5.6
 
   if (LHS.get()->getType()->isVectorType() ||
       RHS.get()->getType()->isVectorType()) {
-    QualType compType = CheckVectorOperands(LHS, RHS, Loc, CompLHSTy);
+    QualType compType = CheckVectorOperands(
+        LHS, RHS, Loc, CompLHSTy,
+        /*AllowBothBool*/getLangOpts().AltiVec,
+        /*AllowBoolConversions*/getLangOpts().ZVector);
     if (CompLHSTy) *CompLHSTy = compType;
     return compType;
   }
@@ -7760,7 +7821,10 @@ QualType Sema::CheckSubtractionOperands(ExprResult &LHS, ExprResult &RHS,
 
   if (LHS.get()->getType()->isVectorType() ||
       RHS.get()->getType()->isVectorType()) {
-    QualType compType = CheckVectorOperands(LHS, RHS, Loc, CompLHSTy);
+    QualType compType = CheckVectorOperands(
+        LHS, RHS, Loc, CompLHSTy,
+        /*AllowBothBool*/getLangOpts().AltiVec,
+        /*AllowBoolConversions*/getLangOpts().ZVector);
     if (CompLHSTy) *CompLHSTy = compType;
     return compType;
   }
@@ -7886,9 +7950,19 @@ static void DiagnoseBadShiftValues(Sema& S, ExprResult &LHS, ExprResult &RHS,
   // representable in the result type, so never warn for those.
   llvm::APSInt Left;
   if (LHS.get()->isValueDependent() ||
-      !LHS.get()->isIntegerConstantExpr(Left, S.Context) ||
-      LHSType->hasUnsignedIntegerRepresentation())
+      LHSType->hasUnsignedIntegerRepresentation() ||
+      !LHS.get()->EvaluateAsInt(Left, S.Context))
     return;
+
+  // If LHS does not have a signed type and non-negative value
+  // then, the behavior is undefined. Warn about it.
+  if (Left.isNegative()) {
+    S.DiagRuntimeBehavior(Loc, LHS.get(),
+                          S.PDiag(diag::warn_shift_lhs_negative)
+                            << LHS.get()->getSourceRange());
+    return;
+  }
+
   llvm::APInt ResultBits =
       static_cast<llvm::APInt&>(Right) + Left.getMinSignedBits();
   if (LeftBits.uge(ResultBits))
@@ -7992,7 +8066,21 @@ QualType Sema::CheckShiftOperands(ExprResult &LHS, ExprResult &RHS,
       RHS.get()->getType()->isVectorType()) {
     if (LangOpts.OpenCL)
       return checkOpenCLVectorShift(*this, LHS, RHS, Loc, IsCompAssign);
-    return CheckVectorOperands(LHS, RHS, Loc, IsCompAssign);
+    if (LangOpts.ZVector) {
+      // The shift operators for the z vector extensions work basically
+      // like OpenCL shifts, except that neither the LHS nor the RHS is
+      // allowed to be a "vector bool".
+      if (auto LHSVecType = LHS.get()->getType()->getAs<VectorType>())
+        if (LHSVecType->getVectorKind() == VectorType::AltiVecBool)
+          return InvalidOperands(Loc, LHS, RHS);
+      if (auto RHSVecType = RHS.get()->getType()->getAs<VectorType>())
+        if (RHSVecType->getVectorKind() == VectorType::AltiVecBool)
+          return InvalidOperands(Loc, LHS, RHS);
+      return checkOpenCLVectorShift(*this, LHS, RHS, Loc, IsCompAssign);
+    }
+    return CheckVectorOperands(LHS, RHS, Loc, IsCompAssign,
+                               /*AllowBothBool*/true,
+                               /*AllowBoolConversions*/false);
   }
 
   // Shifts don't perform usual arithmetic conversions, they just do integer
@@ -8158,9 +8246,6 @@ static bool hasIsEqualMethod(Sema &S, const Expr *LHS, const Expr *RHS) {
 
   // Get the LHS object's interface type.
   QualType InterfaceType = Type->getPointeeType();
-  if (const ObjCObjectType *iQFaceTy =
-      InterfaceType->getAsObjCQualifiedInterfaceType())
-    InterfaceType = iQFaceTy->getBaseType();
 
   // If the RHS isn't an Objective-C object, bail out.
   if (!RHS->getType()->isObjCObjectPointerType())
@@ -8769,7 +8854,9 @@ QualType Sema::CheckVectorCompareOperands(ExprResult &LHS, ExprResult &RHS,
                                           bool IsRelational) {
   // Check to make sure we're operating on vectors of the same type and width,
   // Allowing one side to be a scalar of element type.
-  QualType vType = CheckVectorOperands(LHS, RHS, Loc, /*isCompAssign*/false);
+  QualType vType = CheckVectorOperands(LHS, RHS, Loc, /*isCompAssign*/false,
+                              /*AllowBothBool*/true,
+                              /*AllowBoolConversions*/getLangOpts().ZVector);
   if (vType.isNull())
     return vType;
 
@@ -8777,7 +8864,8 @@ QualType Sema::CheckVectorCompareOperands(ExprResult &LHS, ExprResult &RHS,
 
   // If AltiVec, the comparison results in a numeric type, i.e.
   // bool for C++, int for C
-  if (vType->getAs<VectorType>()->getVectorKind() == VectorType::AltiVecVector)
+  if (getLangOpts().AltiVec &&
+      vType->getAs<VectorType>()->getVectorKind() == VectorType::AltiVecVector)
     return Context.getLogicalOperationType();
 
   // For non-floating point types, check for self-comparisons of the form
@@ -8811,7 +8899,9 @@ QualType Sema::CheckVectorLogicalOperands(ExprResult &LHS, ExprResult &RHS,
                                           SourceLocation Loc) {
   // Ensure that either both operands are of the same vector type, or
   // one operand is of a vector type and the other is of its element type.
-  QualType vType = CheckVectorOperands(LHS, RHS, Loc, false);
+  QualType vType = CheckVectorOperands(LHS, RHS, Loc, false,
+                                       /*AllowBothBool*/true,
+                                       /*AllowBoolConversions*/false);
   if (vType.isNull())
     return InvalidOperands(Loc, LHS, RHS);
   if (getLangOpts().OpenCL && getLangOpts().OpenCLVersion < 120 &&
@@ -8829,8 +8919,9 @@ inline QualType Sema::CheckBitwiseOperands(
       RHS.get()->getType()->isVectorType()) {
     if (LHS.get()->getType()->hasIntegerRepresentation() &&
         RHS.get()->getType()->hasIntegerRepresentation())
-      return CheckVectorOperands(LHS, RHS, Loc, IsCompAssign);
-    
+      return CheckVectorOperands(LHS, RHS, Loc, IsCompAssign,
+                        /*AllowBothBool*/true,
+                        /*AllowBoolConversions*/getLangOpts().ZVector);
     return InvalidOperands(Loc, LHS, RHS);
   }
 
@@ -9183,6 +9274,9 @@ static bool CheckForModifiableLvalue(Expr *E, SourceLocation Loc, Sema &S) {
     }
 
     break;
+  case Expr::MLV_ConstAddrSpace:
+    DiagnoseConstAssignment(S, E, Loc);
+    return true;
   case Expr::MLV_ArrayType:
   case Expr::MLV_ArrayTemporary:
     DiagID = diag::err_typecheck_array_not_modifiable_lvalue;
@@ -9441,6 +9535,10 @@ static QualType CheckIncrementDecrementOperand(Sema &S, Expr *Op,
                                           IsInc, IsPrefix);
   } else if (S.getLangOpts().AltiVec && ResType->isVectorType()) {
     // OK! ( C/C++ Language Extensions for CBEA(Version 2.6) 10.3 )
+  } else if (S.getLangOpts().ZVector && ResType->isVectorType() &&
+             (ResType->getAs<VectorType>()->getVectorKind() !=
+              VectorType::AltiVecBool)) {
+    // The z vector extensions allow ++ and -- for non-bool vectors.
   } else if(S.getLangOpts().OpenCL && ResType->isVectorType() &&
             ResType->getAs<VectorType>()->getElementType()->isIntegerType()) {
     // OpenCL V1.2 6.3 says dec/inc ops operate on integer vector types.
@@ -10521,8 +10619,13 @@ ExprResult Sema::CreateBuiltinUnaryOp(SourceLocation OpLoc,
     resultType = Input.get()->getType();
     if (resultType->isDependentType())
       break;
-    if (resultType->isArithmeticType() || // C99 6.5.3.3p1
-        resultType->isVectorType()) 
+    if (resultType->isArithmeticType()) // C99 6.5.3.3p1
+      break;
+    else if (resultType->isVectorType() &&
+             // The z vector extensions don't allow + or - with bool vectors.
+             (!Context.getLangOpts().ZVector ||
+              resultType->getAs<VectorType>()->getVectorKind() !=
+              VectorType::AltiVecBool))
       break;
     else if (getLangOpts().CPlusPlus && // C++ [expr.unary.op]p6
              Opc == UO_Plus &&
@@ -12232,7 +12335,7 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
     if (mightHaveNonExternalLinkage(Func))
       UndefinedButUsed.insert(std::make_pair(Func->getCanonicalDecl(), Loc));
     else if (Func->getMostRecentDecl()->isInlined() &&
-             (LangOpts.CPlusPlus || !LangOpts.GNUInline) &&
+             !LangOpts.GNUInline &&
              !Func->getMostRecentDecl()->hasAttr<GNUInlineAttr>())
       UndefinedButUsed.insert(std::make_pair(Func->getCanonicalDecl(), Loc));
   }
@@ -12502,6 +12605,8 @@ static bool captureInCapturedRegion(CapturedRegionScopeInfo *RSI,
   // By default, capture variables by reference.
   bool ByRef = true;
   // Using an LValue reference type is consistent with Lambdas (see below).
+  if (S.getLangOpts().OpenMP && S.IsOpenMPCapturedVar(Var))
+    DeclRefType = DeclRefType.getUnqualifiedType();
   CaptureType = S.Context.getLValueReferenceType(DeclRefType);
   Expr *CopyExpr = nullptr;
   if (BuildAndDiagnose) {
@@ -12534,13 +12639,11 @@ static bool captureInCapturedRegion(CapturedRegionScopeInfo *RSI,
 }
 
 /// \brief Create a field within the lambda class for the variable
-///  being captured.  Handle Array captures.  
-static ExprResult addAsFieldToClosureType(Sema &S, 
-                                 LambdaScopeInfo *LSI,
-                                  VarDecl *Var, QualType FieldType, 
-                                  QualType DeclRefType,
-                                  SourceLocation Loc,
-                                  bool RefersToCapturedVariable) {
+/// being captured.
+static void addAsFieldToClosureType(Sema &S, LambdaScopeInfo *LSI, VarDecl *Var,
+                                    QualType FieldType, QualType DeclRefType,
+                                    SourceLocation Loc,
+                                    bool RefersToCapturedVariable) {
   CXXRecordDecl *Lambda = LSI->Lambda;
 
   // Build the non-static data member.
@@ -12551,110 +12654,7 @@ static ExprResult addAsFieldToClosureType(Sema &S,
   Field->setImplicit(true);
   Field->setAccess(AS_private);
   Lambda->addDecl(Field);
-
-  // C++11 [expr.prim.lambda]p21:
-  //   When the lambda-expression is evaluated, the entities that
-  //   are captured by copy are used to direct-initialize each
-  //   corresponding non-static data member of the resulting closure
-  //   object. (For array members, the array elements are
-  //   direct-initialized in increasing subscript order.) These
-  //   initializations are performed in the (unspecified) order in
-  //   which the non-static data members are declared.
-      
-  // Introduce a new evaluation context for the initialization, so
-  // that temporaries introduced as part of the capture are retained
-  // to be re-"exported" from the lambda expression itself.
-  EnterExpressionEvaluationContext scope(S, Sema::PotentiallyEvaluated);
-
-  // C++ [expr.prim.labda]p12:
-  //   An entity captured by a lambda-expression is odr-used (3.2) in
-  //   the scope containing the lambda-expression.
-  Expr *Ref = new (S.Context) DeclRefExpr(Var, RefersToCapturedVariable, 
-                                          DeclRefType, VK_LValue, Loc);
-  Var->setReferenced(true);
-  Var->markUsed(S.Context);
-
-  // When the field has array type, create index variables for each
-  // dimension of the array. We use these index variables to subscript
-  // the source array, and other clients (e.g., CodeGen) will perform
-  // the necessary iteration with these index variables.
-  SmallVector<VarDecl *, 4> IndexVariables;
-  QualType BaseType = FieldType;
-  QualType SizeType = S.Context.getSizeType();
-  LSI->ArrayIndexStarts.push_back(LSI->ArrayIndexVars.size());
-  while (const ConstantArrayType *Array
-                        = S.Context.getAsConstantArrayType(BaseType)) {
-    // Create the iteration variable for this array index.
-    IdentifierInfo *IterationVarName = nullptr;
-    {
-      SmallString<8> Str;
-      llvm::raw_svector_ostream OS(Str);
-      OS << "__i" << IndexVariables.size();
-      IterationVarName = &S.Context.Idents.get(OS.str());
-    }
-    VarDecl *IterationVar
-      = VarDecl::Create(S.Context, S.CurContext, Loc, Loc,
-                        IterationVarName, SizeType,
-                        S.Context.getTrivialTypeSourceInfo(SizeType, Loc),
-                        SC_None);
-    IndexVariables.push_back(IterationVar);
-    LSI->ArrayIndexVars.push_back(IterationVar);
-    
-    // Create a reference to the iteration variable.
-    ExprResult IterationVarRef
-      = S.BuildDeclRefExpr(IterationVar, SizeType, VK_LValue, Loc);
-    assert(!IterationVarRef.isInvalid() &&
-           "Reference to invented variable cannot fail!");
-    IterationVarRef = S.DefaultLvalueConversion(IterationVarRef.get());
-    assert(!IterationVarRef.isInvalid() &&
-           "Conversion of invented variable cannot fail!");
-    
-    // Subscript the array with this iteration variable.
-    ExprResult Subscript = S.CreateBuiltinArraySubscriptExpr(
-                             Ref, Loc, IterationVarRef.get(), Loc);
-    if (Subscript.isInvalid()) {
-      S.CleanupVarDeclMarking();
-      S.DiscardCleanupsInEvaluationContext();
-      return ExprError();
-    }
-
-    Ref = Subscript.get();
-    BaseType = Array->getElementType();
-  }
-
-  // Construct the entity that we will be initializing. For an array, this
-  // will be first element in the array, which may require several levels
-  // of array-subscript entities. 
-  SmallVector<InitializedEntity, 4> Entities;
-  Entities.reserve(1 + IndexVariables.size());
-  Entities.push_back(
-    InitializedEntity::InitializeLambdaCapture(Var->getIdentifier(), 
-        Field->getType(), Loc));
-  for (unsigned I = 0, N = IndexVariables.size(); I != N; ++I)
-    Entities.push_back(InitializedEntity::InitializeElement(S.Context,
-                                                            0,
-                                                            Entities.back()));
-
-  InitializationKind InitKind
-    = InitializationKind::CreateDirect(Loc, Loc, Loc);
-  InitializationSequence Init(S, Entities.back(), InitKind, Ref);
-  ExprResult Result(true);
-  if (!Init.Diagnose(S, Entities.back(), InitKind, Ref))
-    Result = Init.Perform(S, Entities.back(), InitKind, Ref);
-
-  // If this initialization requires any cleanups (e.g., due to a
-  // default argument to a copy constructor), note that for the
-  // lambda.
-  if (S.ExprNeedsCleanups)
-    LSI->ExprNeedsCleanups = true;
-
-  // Exit the expression evaluation context used for the capture.
-  S.CleanupVarDeclMarking();
-  S.DiscardCleanupsInEvaluationContext();
-  return Result;
 }
-
-
 
 /// \brief Capture the given variable in the lambda.
 static bool captureInLambda(LambdaScopeInfo *LSI,
@@ -12733,14 +12733,9 @@ static bool captureInLambda(LambdaScopeInfo *LSI,
   }
 
   // Capture this variable in the lambda.
-  Expr *CopyExpr = nullptr;
-  if (BuildAndDiagnose) {
-    ExprResult Result = addAsFieldToClosureType(S, LSI, Var, 
-                                        CaptureType, DeclRefType, Loc,
-                                        RefersToCapturedVariable);
-    if (!Result.isInvalid())
-      CopyExpr = Result.get();
-  }
+  if (BuildAndDiagnose)
+    addAsFieldToClosureType(S, LSI, Var, CaptureType, DeclRefType, Loc,
+                            RefersToCapturedVariable);
     
   // Compute the type of a reference to this captured variable.
   if (ByRef)
@@ -12759,18 +12754,20 @@ static bool captureInLambda(LambdaScopeInfo *LSI,
   // Add the capture.
   if (BuildAndDiagnose)
     LSI->addCapture(Var, /*IsBlock=*/false, ByRef, RefersToCapturedVariable, 
-                    Loc, EllipsisLoc, CaptureType, CopyExpr);
+                    Loc, EllipsisLoc, CaptureType, /*CopyExpr=*/nullptr);
       
   return true;
 }
 
-bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation ExprLoc, 
-                              TryCaptureKind Kind, SourceLocation EllipsisLoc,
-                              bool BuildAndDiagnose, 
-                              QualType &CaptureType,
-                              QualType &DeclRefType,
-						                const unsigned *const FunctionScopeIndexToStopAt) {
-  bool Nested = Var->isInitCapture();
+bool Sema::tryCaptureVariable(
+    VarDecl *Var, SourceLocation ExprLoc, TryCaptureKind Kind,
+    SourceLocation EllipsisLoc, bool BuildAndDiagnose, QualType &CaptureType,
+    QualType &DeclRefType, const unsigned *const FunctionScopeIndexToStopAt) {
+  // An init-capture is notionally from the context surrounding its
+  // declaration, but its parent DC is the lambda class.
+  DeclContext *VarDC = Var->getDeclContext();
+  if (Var->isInitCapture())
+    VarDC = VarDC->getParent();
   
   DeclContext *DC = CurContext;
   const unsigned MaxFunctionScopesIndex = FunctionScopeIndexToStopAt 
@@ -12786,9 +12783,9 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation ExprLoc,
   }
 
   
-  // If the variable is declared in the current context (and is not an 
-  // init-capture), there is no need to capture it.
-  if (!Nested && Var->getDeclContext() == DC) return true;
+  // If the variable is declared in the current context, there is no need to
+  // capture it.
+  if (VarDC == DC) return true;
 
   // Capture global variables if it is required to use private copy of this
   // variable.
@@ -12806,8 +12803,10 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation ExprLoc,
   // the variable.
   CaptureType = Var->getType();
   DeclRefType = CaptureType.getNonReferenceType();
+  bool Nested = false;
   bool Explicit = (Kind != TryCapture_Implicit);
   unsigned FunctionScopesIndex = MaxFunctionScopesIndex;
+  unsigned OpenMPLevel = 0;
   do {
     // Only block literals, captured statements, and lambda expressions can
     // capture; other scopes don't work.
@@ -12834,6 +12833,21 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation ExprLoc,
     if (isVariableAlreadyCapturedInScopeInfo(CSI, Var, Nested, CaptureType, 
                                              DeclRefType)) 
       break;
+    if (getLangOpts().OpenMP) {
+      if (auto *RSI = dyn_cast<CapturedRegionScopeInfo>(CSI)) {
+        // OpenMP private variables should not be captured in outer scope, so
+        // just break here.
+        if (RSI->CapRegionKind == CR_OpenMP) {
+          if (isOpenMPPrivateVar(Var, OpenMPLevel)) {
+            Nested = true;
+            DeclRefType = DeclRefType.getUnqualifiedType();
+            CaptureType = Context.getLValueReferenceType(DeclRefType);
+            break;
+          }
+          ++OpenMPLevel;
+        }
+      }
+    }
     // If we are instantiating a generic lambda call operator body, 
     // we do not want to capture new variables.  What was captured
     // during either a lambdas transformation or initial parsing
@@ -13006,7 +13020,7 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation ExprLoc,
     FunctionScopesIndex--;
     DC = ParentDC;
     Explicit = false;
-  } while (!Var->getDeclContext()->Equals(DC));
+  } while (!VarDC->Equals(DC));
 
   // Walk back down the scope stack, (e.g. from outer lambda to inner lambda)
   // computing the type of the capture at each step, checking type-specific 
@@ -13299,7 +13313,8 @@ static void MarkExprReferenced(Sema &SemaRef, SourceLocation Loc,
   if (!MD)
     return;
   // Only attempt to devirtualize if this is truly a virtual call.
-  bool IsVirtualCall = MD->isVirtual() && !ME->hasQualifier();
+  bool IsVirtualCall = MD->isVirtual() &&
+                          ME->performsVirtualDispatch(SemaRef.getLangOpts());
   if (!IsVirtualCall)
     return;
   const Expr *Base = ME->getBase();
@@ -13333,7 +13348,7 @@ void Sema::MarkMemberReferenced(MemberExpr *E) {
   //   expression, is odr-used, unless it is a pure virtual function and its
   //   name is not explicitly qualified.
   bool OdrUse = true;
-  if (!E->hasQualifier()) {
+  if (E->performsVirtualDispatch(getLangOpts())) {
     if (CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(E->getMemberDecl()))
       if (Method->isPure())
         OdrUse = false;

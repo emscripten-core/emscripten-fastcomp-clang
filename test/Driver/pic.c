@@ -220,6 +220,8 @@
 // RUN:   | FileCheck %s --check-prefix=CHECK-PIE1
 // RUN: %clang -c %s -target powerpc-unknown-openbsd -### 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=CHECK-PIE2
+// RUN: %clang -c %s -target sparc-unknown-openbsd -### 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=CHECK-PIE2
 // RUN: %clang -c %s -target sparc64-unknown-openbsd -### 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=CHECK-PIE2
 // RUN: %clang -c %s -target i386-pc-openbsd -fno-pie -### 2>&1 \
@@ -240,3 +242,9 @@
 // RUN:   | FileCheck %s --check-prefix=CHECK-PIC1
 // RUN: %clang -c %s -target arm64-linux-android -### 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=CHECK-PIC1
+//
+// On Windows-X64 PIC is enabled by default
+// RUN: %clang -c %s -target x86_64-pc-windows-msvc18.0.0 -### 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=CHECK-PIC2
+// RUN: %clang -c %s -target x86_64-pc-windows-gnu -### 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=CHECK-PIC2

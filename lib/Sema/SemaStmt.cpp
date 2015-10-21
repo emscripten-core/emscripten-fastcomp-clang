@@ -25,6 +25,7 @@
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/AST/TypeOrdering.h"
+#include "clang/Basic/TargetInfo.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
@@ -495,6 +496,7 @@ Sema::ActOnIfStmt(SourceLocation IfLoc, FullExprArg CondVal, Decl *CondVar,
   if (CondVar) {
     ConditionVar = cast<VarDecl>(CondVar);
     CondResult = CheckConditionVariable(ConditionVar, IfLoc, true);
+    CondResult = ActOnFinishFullExpr(CondResult.get(), IfLoc);
     if (CondResult.isInvalid())
       return StmtError();
   }
@@ -649,12 +651,10 @@ Sema::ActOnStartOfSwitchStmt(SourceLocation SwitchLoc, Expr *Cond,
   if (CondResult.isInvalid()) return StmtError();
   Cond = CondResult.get();
 
-  if (!CondVar) {
-    CondResult = ActOnFinishFullExpr(Cond, SwitchLoc);
-    if (CondResult.isInvalid())
-      return StmtError();
-    Cond = CondResult.get();
-  }
+  CondResult = ActOnFinishFullExpr(Cond, SwitchLoc);
+  if (CondResult.isInvalid())
+    return StmtError();
+  Cond = CondResult.get();
 
   getCurFunction()->setHasBranchIntoScope();
 
@@ -1229,6 +1229,7 @@ Sema::ActOnWhileStmt(SourceLocation WhileLoc, FullExprArg Cond,
   if (CondVar) {
     ConditionVar = cast<VarDecl>(CondVar);
     CondResult = CheckConditionVariable(ConditionVar, WhileLoc, true);
+    CondResult = ActOnFinishFullExpr(CondResult.get(), WhileLoc);
     if (CondResult.isInvalid())
       return StmtError();
   }
@@ -1634,6 +1635,7 @@ Sema::ActOnForStmt(SourceLocation ForLoc, SourceLocation LParenLoc,
   if (secondVar) {
     ConditionVar = cast<VarDecl>(secondVar);
     SecondResult = CheckConditionVariable(ConditionVar, ForLoc, true);
+    SecondResult = ActOnFinishFullExpr(SecondResult.get(), ForLoc);
     if (SecondResult.isInvalid())
       return StmtError();
   }
@@ -1828,6 +1830,15 @@ Sema::ActOnObjCForCollectionStmt(SourceLocation ForLoc,
 /// \return true if an error occurs.
 static bool FinishForRangeVarDecl(Sema &SemaRef, VarDecl *Decl, Expr *Init,
                                   SourceLocation Loc, int DiagID) {
+  if (Decl->getType()->isUndeducedType()) {
+    ExprResult Res = SemaRef.CorrectDelayedTyposInExpr(Init);
+    if (!Res.isUsable()) {
+      Decl->setInvalidDecl();
+      return true;
+    }
+    Init = Res.get();
+  }
+
   // Deduce the type for the iterator variable now rather than leaving it to
   // AddInitializerToDecl, so we can produce a more suitable diagnostic.
   QualType InitType;
@@ -3410,6 +3421,7 @@ Sema::ActOnObjCAutoreleasePoolStmt(SourceLocation AtLoc, Stmt *Body) {
   return new (Context) ObjCAutoreleasePoolStmt(AtLoc, Body);
 }
 
+namespace {
 class CatchHandlerType {
   QualType QT;
   unsigned IsPointer : 1;
@@ -3422,7 +3434,7 @@ class CatchHandlerType {
 
 public:
   /// Used when creating a CatchHandlerType from a handler type; will determine
-  /// whether the type is a pointer or reference and will strip off the the top
+  /// whether the type is a pointer or reference and will strip off the top
   /// level pointer and cv-qualifiers.
   CatchHandlerType(QualType Q) : QT(Q), IsPointer(false) {
     if (QT->isPointerType())
@@ -3451,6 +3463,7 @@ public:
     return LHS.QT == RHS.QT;
   }
 };
+} // namespace
 
 namespace llvm {
 template <> struct DenseMapInfo<CatchHandlerType> {
@@ -3499,16 +3512,14 @@ public:
   CXXCatchStmt *getFoundHandler() const { return FoundHandler; }
   CanQualType getFoundHandlerType() const { return FoundHandlerType; }
 
-  static bool FindPublicBasesOfType(const CXXBaseSpecifier *S, CXXBasePath &,
-                                    void *User) {
-    auto &PBOT = *reinterpret_cast<CatchTypePublicBases *>(User);
+  bool operator()(const CXXBaseSpecifier *S, CXXBasePath &) {
     if (S->getAccessSpecifier() == AccessSpecifier::AS_public) {
-      CatchHandlerType Check(S->getType(), PBOT.CheckAgainstPointer);
-      auto M = PBOT.TypesToCheck;
+      CatchHandlerType Check(S->getType(), CheckAgainstPointer);
+      auto M = TypesToCheck;
       auto I = M.find(Check);
       if (I != M.end()) {
-        PBOT.FoundHandler = I->second;
-        PBOT.FoundHandlerType = PBOT.Ctx.getCanonicalType(S->getType());
+        FoundHandler = I->second;
+        FoundHandlerType = Ctx.getCanonicalType(S->getType());
         return true;
       }
     }
@@ -3576,8 +3587,7 @@ StmtResult Sema::ActOnCXXTryBlock(SourceLocation TryLoc, Stmt *TryBlock,
       CXXBasePaths Paths;
       Paths.setOrigin(RD);
       CatchTypePublicBases CTPB(Context, HandledTypes, HandlerCHT.isPointer());
-      if (RD->lookupInBases(CatchTypePublicBases::FindPublicBasesOfType, &CTPB,
-                            Paths)) {
+      if (RD->lookupInBases(CTPB, Paths)) {
         const CXXCatchStmt *Problem = CTPB.getFoundHandler();
         if (!Paths.isAmbiguous(CTPB.getFoundHandlerType())) {
           Diag(H->getExceptionDecl()->getTypeSpecStartLoc(),
@@ -3636,6 +3646,10 @@ StmtResult Sema::ActOnSEHTryBlock(bool IsCXXTry, SourceLocation TryLoc,
     FD->setUsesSEHTry(true);
   else
     Diag(TryLoc, diag::err_seh_try_outside_functions);
+
+  // Reject __try on unsupported targets.
+  if (!Context.getTargetInfo().isSEHTrySupported())
+    Diag(TryLoc, diag::err_seh_try_unsupported);
 
   return SEHTryStmt::Create(Context, IsCXXTry, TryLoc, TryBlock, Handler);
 }

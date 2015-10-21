@@ -399,10 +399,15 @@ DeclRefExpr *DeclRefExpr::Create(const ASTContext &Context,
     Size += sizeof(NestedNameSpecifierLoc);
   if (FoundD)
     Size += sizeof(NamedDecl *);
-  if (TemplateArgs)
+  if (TemplateArgs) {
+    Size = llvm::RoundUpToAlignment(Size,
+                                    llvm::alignOf<ASTTemplateKWAndArgsInfo>());
     Size += ASTTemplateKWAndArgsInfo::sizeFor(TemplateArgs->size());
-  else if (TemplateKWLoc.isValid())
+  } else if (TemplateKWLoc.isValid()) {
+    Size = llvm::RoundUpToAlignment(Size,
+                                    llvm::alignOf<ASTTemplateKWAndArgsInfo>());
     Size += ASTTemplateKWAndArgsInfo::sizeFor(0);
+  }
 
   void *Mem = Context.Allocate(Size, llvm::alignOf<DeclRefExpr>());
   return new (Mem) DeclRefExpr(Context, QualifierLoc, TemplateKWLoc, D,
@@ -420,8 +425,11 @@ DeclRefExpr *DeclRefExpr::CreateEmpty(const ASTContext &Context,
     Size += sizeof(NestedNameSpecifierLoc);
   if (HasFoundDecl)
     Size += sizeof(NamedDecl *);
-  if (HasTemplateKWAndArgsInfo)
+  if (HasTemplateKWAndArgsInfo) {
+    Size = llvm::RoundUpToAlignment(Size,
+                                    llvm::alignOf<ASTTemplateKWAndArgsInfo>());
     Size += ASTTemplateKWAndArgsInfo::sizeFor(NumTemplateArgs);
+  }
 
   void *Mem = Context.Allocate(Size, llvm::alignOf<DeclRefExpr>());
   return new (Mem) DeclRefExpr(EmptyShell());
@@ -1238,7 +1246,7 @@ unsigned CallExpr::getBuiltinCallee() const {
   return FDecl->getBuiltinID();
 }
 
-bool CallExpr::isUnevaluatedBuiltinCall(ASTContext &Ctx) const {
+bool CallExpr::isUnevaluatedBuiltinCall(const ASTContext &Ctx) const {
   if (unsigned BI = getBuiltinCallee())
     return Ctx.BuiltinInfo.isUnevaluated(BI);
   return false;
@@ -2772,6 +2780,11 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
     const Expr *Exp = cast<CompoundLiteralExpr>(this)->getInitializer();
     return Exp->isConstantInitializer(Ctx, false, Culprit);
   }
+  case DesignatedInitUpdateExprClass: {
+    const DesignatedInitUpdateExpr *DIUE = cast<DesignatedInitUpdateExpr>(this);
+    return DIUE->getBase()->isConstantInitializer(Ctx, false, Culprit) &&
+           DIUE->getUpdater()->isConstantInitializer(Ctx, false, Culprit);
+  }
   case InitListExprClass: {
     const InitListExpr *ILE = cast<InitListExpr>(this);
     if (ILE->getType()->isArrayType()) {
@@ -2818,6 +2831,7 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
     break;
   }
   case ImplicitValueInitExprClass:
+  case NoInitExprClass:
     return true;
   case ParenExprClass:
     return cast<ParenExpr>(this)->getSubExpr()
@@ -2881,6 +2895,28 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
   return false;
 }
 
+namespace {
+  /// \brief Look for any side effects within a Stmt.
+  class SideEffectFinder : public ConstEvaluatedExprVisitor<SideEffectFinder> {
+    typedef ConstEvaluatedExprVisitor<SideEffectFinder> Inherited;
+    const bool IncludePossibleEffects;
+    bool HasSideEffects;
+
+  public:
+    explicit SideEffectFinder(const ASTContext &Context, bool IncludePossible)
+      : Inherited(Context),
+        IncludePossibleEffects(IncludePossible), HasSideEffects(false) { }
+
+    bool hasSideEffects() const { return HasSideEffects; }
+
+    void VisitExpr(const Expr *E) {
+      if (!HasSideEffects &&
+          E->HasSideEffects(Context, IncludePossibleEffects))
+        HasSideEffects = true;
+    }
+  };
+}
+
 bool Expr::HasSideEffects(const ASTContext &Ctx,
                           bool IncludePossibleEffects) const {
   // In circumstances where we care about definite side effects instead of
@@ -2925,6 +2961,7 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case UnaryExprOrTypeTraitExprClass:
   case AddrLabelExprClass:
   case GNUNullExprClass:
+  case NoInitExprClass:
   case CXXBoolLiteralExprClass:
   case CXXNullPtrLiteralExprClass:
   case CXXThisExprClass:
@@ -2967,13 +3004,19 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case CompoundAssignOperatorClass:
   case VAArgExprClass:
   case AtomicExprClass:
-  case StmtExprClass:
   case CXXThrowExprClass:
   case CXXNewExprClass:
   case CXXDeleteExprClass:
   case ExprWithCleanupsClass:
     // These always have a side-effect.
     return true;
+
+  case StmtExprClass: {
+    // StmtExprs have a side-effect if any substatement does.
+    SideEffectFinder Finder(Ctx, IncludePossibleEffects);
+    Finder.Visit(cast<StmtExpr>(this)->getSubStmt());
+    return Finder.hasSideEffects();
+  }
 
   case ParenExprClass:
   case ArraySubscriptExprClass:
@@ -2983,6 +3026,7 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case CompoundLiteralExprClass:
   case ExtVectorElementExprClass:
   case DesignatedInitExprClass:
+  case DesignatedInitUpdateExprClass:
   case ParenListExprClass:
   case CXXPseudoDestructorExprClass:
   case CXXStdInitializerListExprClass:
@@ -3118,31 +3162,31 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   }
 
   // Recurse to children.
-  for (const_child_range SubStmts = children(); SubStmts; ++SubStmts)
-    if (const Stmt *S = *SubStmts)
-      if (cast<Expr>(S)->HasSideEffects(Ctx, IncludePossibleEffects))
-        return true;
+  for (const Stmt *SubStmt : children())
+    if (SubStmt &&
+        cast<Expr>(SubStmt)->HasSideEffects(Ctx, IncludePossibleEffects))
+      return true;
 
   return false;
 }
 
 namespace {
   /// \brief Look for a call to a non-trivial function within an expression.
-  class NonTrivialCallFinder : public EvaluatedExprVisitor<NonTrivialCallFinder>
+  class NonTrivialCallFinder : public ConstEvaluatedExprVisitor<NonTrivialCallFinder>
   {
-    typedef EvaluatedExprVisitor<NonTrivialCallFinder> Inherited;
-    
+    typedef ConstEvaluatedExprVisitor<NonTrivialCallFinder> Inherited;
+
     bool NonTrivial;
     
   public:
-    explicit NonTrivialCallFinder(ASTContext &Context) 
+    explicit NonTrivialCallFinder(const ASTContext &Context)
       : Inherited(Context), NonTrivial(false) { }
     
     bool hasNonTrivialCall() const { return NonTrivial; }
-    
-    void VisitCallExpr(CallExpr *E) {
-      if (CXXMethodDecl *Method
-          = dyn_cast_or_null<CXXMethodDecl>(E->getCalleeDecl())) {
+
+    void VisitCallExpr(const CallExpr *E) {
+      if (const CXXMethodDecl *Method
+          = dyn_cast_or_null<const CXXMethodDecl>(E->getCalleeDecl())) {
         if (Method->isTrivial()) {
           // Recurse to children of the call.
           Inherited::VisitStmt(E);
@@ -3152,8 +3196,8 @@ namespace {
       
       NonTrivial = true;
     }
-    
-    void VisitCXXConstructExpr(CXXConstructExpr *E) {
+
+    void VisitCXXConstructExpr(const CXXConstructExpr *E) {
       if (E->getConstructor()->isTrivial()) {
         // Recurse to children of the call.
         Inherited::VisitStmt(E);
@@ -3162,8 +3206,8 @@ namespace {
       
       NonTrivial = true;
     }
-    
-    void VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *E) {
+
+    void VisitCXXBindTemporaryExpr(const CXXBindTemporaryExpr *E) {
       if (E->getTemporary()->getDestructor()->isTrivial()) {
         Inherited::VisitStmt(E);
         return;
@@ -3174,7 +3218,7 @@ namespace {
   };
 }
 
-bool Expr::hasNonTrivialCall(ASTContext &Ctx) {
+bool Expr::hasNonTrivialCall(const ASTContext &Ctx) const {
   NonTrivialCallFinder Finder(Ctx);
   Finder.Visit(this);
   return Finder.hasNonTrivialCall();  
@@ -3428,7 +3472,7 @@ bool ExtVectorElementExpr::containsDuplicateElements() const {
 
 /// getEncodedElementAccess - We encode the fields as a llvm ConstantArray.
 void ExtVectorElementExpr::getEncodedElementAccess(
-                                  SmallVectorImpl<unsigned> &Elts) const {
+    SmallVectorImpl<uint32_t> &Elts) const {
   StringRef Comp = Accessor->getName();
   if (Comp[0] == 's' || Comp[0] == 'S')
     Comp = Comp.substr(1);
@@ -3712,6 +3756,16 @@ ObjCInterfaceDecl *ObjCMessageExpr::getReceiverInterface() const {
   return nullptr;
 }
 
+QualType ObjCPropertyRefExpr::getReceiverType(const ASTContext &ctx) const {
+  if (isClassReceiver())
+    return ctx.getObjCInterfaceType(getClassReceiver());
+
+  if (isSuperReceiver())
+    return getSuperReceiverType();
+
+  return getBase()->getType();
+}
+
 StringRef ObjCBridgedCastExpr::getBridgeKindName() const {
   switch (getBridgeKind()) {
   case OBC_Bridge:
@@ -3837,7 +3891,7 @@ DesignatedInitExpr::DesignatedInitExpr(const ASTContext &C, QualType Ty,
   this->Designators = new (C) Designator[NumDesignators];
 
   // Record the initializer itself.
-  child_range Child = children();
+  child_iterator Child = child_begin();
   *Child++ = Init;
 
   // Copy the designators and their subexpressions, computing
@@ -3893,7 +3947,8 @@ DesignatedInitExpr::Create(const ASTContext &C, Designator *Designators,
                            SourceLocation ColonOrEqualLoc,
                            bool UsesColonSyntax, Expr *Init) {
   void *Mem = C.Allocate(sizeof(DesignatedInitExpr) +
-                         sizeof(Stmt *) * (IndexExprs.size() + 1), 8);
+                             sizeof(Stmt *) * (IndexExprs.size() + 1),
+                         llvm::alignOf<DesignatedInitExpr>());
   return new (Mem) DesignatedInitExpr(C, C.VoidTy, NumDesignators, Designators,
                                       ColonOrEqualLoc, UsesColonSyntax,
                                       IndexExprs, Init);
@@ -3987,6 +4042,25 @@ void DesignatedInitExpr::ExpandDesignator(const ASTContext &C, unsigned Idx,
             NewDesignators + Idx + NumNewDesignators);
   Designators = NewDesignators;
   NumDesignators = NumDesignators - 1 + NumNewDesignators;
+}
+
+DesignatedInitUpdateExpr::DesignatedInitUpdateExpr(const ASTContext &C,
+    SourceLocation lBraceLoc, Expr *baseExpr, SourceLocation rBraceLoc)
+  : Expr(DesignatedInitUpdateExprClass, baseExpr->getType(), VK_RValue,
+         OK_Ordinary, false, false, false, false) {
+  BaseAndUpdaterExprs[0] = baseExpr;
+
+  InitListExpr *ILE = new (C) InitListExpr(C, lBraceLoc, None, rBraceLoc);
+  ILE->setType(baseExpr->getType());
+  BaseAndUpdaterExprs[1] = ILE;
+}
+
+SourceLocation DesignatedInitUpdateExpr::getLocStart() const {
+  return getBase()->getLocStart();
+}
+
+SourceLocation DesignatedInitUpdateExpr::getLocEnd() const {
+  return getBase()->getLocEnd();
 }
 
 ParenListExpr::ParenListExpr(const ASTContext& C, SourceLocation lparenloc,
@@ -4089,19 +4163,6 @@ PseudoObjectExpr::PseudoObjectExpr(QualType type, ExprValueKind VK,
 }
 
 //===----------------------------------------------------------------------===//
-//  ExprIterator.
-//===----------------------------------------------------------------------===//
-
-Expr* ExprIterator::operator[](size_t idx) { return cast<Expr>(I[idx]); }
-Expr* ExprIterator::operator*() const { return cast<Expr>(*I); }
-Expr* ExprIterator::operator->() const { return cast<Expr>(*I); }
-const Expr* ConstExprIterator::operator[](size_t idx) const {
-  return cast<Expr>(I[idx]);
-}
-const Expr* ConstExprIterator::operator*() const { return cast<Expr>(*I); }
-const Expr* ConstExprIterator::operator->() const { return cast<Expr>(*I); }
-
-//===----------------------------------------------------------------------===//
 //  Child Iterators for iterating over subexpressions/substatements
 //===----------------------------------------------------------------------===//
 
@@ -4114,7 +4175,7 @@ Stmt::child_range UnaryExprOrTypeTraitExpr::children() {
     if (const VariableArrayType* T = dyn_cast<VariableArrayType>(
                                    getArgumentType().getTypePtr()))
       return child_range(child_iterator(T), child_iterator());
-    return child_range();
+    return child_range(child_iterator(), child_iterator());
   }
   return child_range(&Argument.Ex, &Argument.Ex + 1);
 }
