@@ -133,6 +133,13 @@ std::string getClangToolFullVersion(StringRef ToolName) {
   OS << " (based on " << BACKEND_PACKAGE_STRING << ")";
 #endif
 
+  // XXX EMSCRIPTEN: show our versions
+  OS <<  " (emscripten "
+#include "../../../../emscripten-version.txt"
+         " : "
+#include "../../../../tools/clang/emscripten-version.txt"
+         ")";
+
   return OS.str();
 }
 
