@@ -31,9 +31,9 @@ else
 TOOL_NO_EXPORTS := 1
 endif
 
-LINK_COMPONENTS := nacltransforms $(TARGETS_TO_BUILD) asmparser bitreader bitwriter codegen \
+LINK_COMPONENTS := $(TARGETS_TO_BUILD) asmparser bitreader bitwriter codegen \
                    instrumentation ipo irreader linker objcarcopts option \
-                   profiledata selectiondag nacltransforms
+                   profiledata selectiondag
 USEDLIBS = clangFrontendTool.a clangFrontend.a clangDriver.a \
            clangSerialization.a clangCodeGen.a clangParse.a clangSema.a \
            clangRewriteFrontend.a clangRewrite.a

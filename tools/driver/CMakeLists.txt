@@ -9,7 +9,6 @@ set( LLVM_LINK_COMPONENTS
   Instrumentation
   MC
   MCParser
-  NaClTransforms
   ObjCARCOpts
   Option
   ScalarOpts
