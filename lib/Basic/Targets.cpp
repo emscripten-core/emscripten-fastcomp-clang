@@ -318,6 +318,9 @@ public:
     // addresses.
     this->TheCXXABI.set(TargetCXXABI::Emscripten);
   }
+  ArrayRef<Builtin::Info> getTargetBuiltins() const override {
+    return None;
+  }
 };
 // @LOCALMOD-END Emscripten
 
@@ -6945,29 +6948,21 @@ public:
     //
     // Set the natural stack alignment to 16 bytes to accomodate 128-bit aligned
     // vectors.
-    DescriptionString = "e-p:32:32-i64:64-v128:32:128-n32-S128";
+    DataLayoutString = "e-p:32:32-i64:64-v128:32:128-n32-S128";
   }
-
-  void getDefaultFeatures(llvm::StringMap<bool> &Features) const override {}
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
     defineCPUMacros(Builder, "asmjs", /*Tuning=*/false);
   }
-  void getTargetBuiltins(const Builtin::Info *&Records,
-                         unsigned &NumRecords) const override {}
   BuiltinVaListKind getBuiltinVaListKind() const override {
     // Reuse PNaCl's va_list lowering.
     return TargetInfo::PNaClABIBuiltinVaList;
   }
-  void getGCCRegNames(const char *const *&Names,
-                      unsigned &NumNames) const override {
-    Names = nullptr;
-    NumNames = 0;
+  ArrayRef<const char *> getGCCRegNames() const {
+    return None;
   }
-  void getGCCRegAliases(const GCCRegAlias *&Aliases,
-                        unsigned &NumAliases) const override {
-    Aliases = nullptr;
-    NumAliases = 0;
+  ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const {
+    return None;
   }
   bool validateAsmConstraint(const char *&Name,
                              TargetInfo::ConstraintInfo &Info) const override {

@@ -614,11 +614,9 @@ public:
 /// \brief Classify argument of given type \p Ty.
 ABIArgInfo EmscriptenABIInfo::classifyArgumentType(QualType Ty) const {
   if (isAggregateTypeForABI(Ty)) {
-    unsigned TypeAlign = getContext().getTypeAlignInChars(Ty).getQuantity();
     if (auto RAA = getRecordArgABI(Ty, getCXXABI()))
-      return ABIArgInfo::getIndirect(TypeAlign,
-                                     RAA == CGCXXABI::RAA_DirectInMemory);
-    return ABIArgInfo::getIndirect(TypeAlign);
+      return getNaturalAlignIndirect(Ty, RAA == CGCXXABI::RAA_DirectInMemory);
+    return getNaturalAlignIndirect(Ty);
   }
 
   // Otherwise just do the default thing.
