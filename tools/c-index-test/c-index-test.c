@@ -255,6 +255,17 @@ static int parse_remapped_files_with_try(int try_idx,
   if (ret)
     return ret;
 
+  if (num_unsaved_files_no_try_idx == 0) {
+    *unsaved_files = unsaved_files_try_idx;
+    *num_unsaved_files = num_unsaved_files_try_idx;
+    return 0;
+  }
+  if (num_unsaved_files_try_idx == 0) {
+    *unsaved_files = unsaved_files_no_try_idx;
+    *num_unsaved_files = num_unsaved_files_no_try_idx;
+    return 0;
+  }
+
   *num_unsaved_files = num_unsaved_files_no_try_idx + num_unsaved_files_try_idx;
   *unsaved_files
     = (struct CXUnsavedFile *)realloc(unsaved_files_no_try_idx,
@@ -756,6 +767,8 @@ static void PrintCursor(CXCursor Cursor, const char *CommentSchemaFile) {
     clang_disposeString(DeprecatedMessage);
     clang_disposeString(UnavailableMessage);
     
+    if (clang_CXXField_isMutable(Cursor))
+      printf(" (mutable)");
     if (clang_CXXMethod_isStatic(Cursor))
       printf(" (static)");
     if (clang_CXXMethod_isVirtual(Cursor))
@@ -1419,6 +1432,8 @@ static enum CXChildVisitResult PrintTypeSize(CXCursor cursor, CXCursor p,
 static enum CXChildVisitResult PrintMangledName(CXCursor cursor, CXCursor p,
                                                 CXClientData d) {
   CXString MangledName;
+  if (clang_isUnexposed(clang_getCursorKind(cursor)))
+    return CXChildVisit_Recurse;
   PrintCursor(cursor, NULL);
   MangledName = clang_Cursor_getMangling(cursor);
   printf(" [mangled=%s]\n", clang_getCString(MangledName));

@@ -69,6 +69,45 @@ public:
     return RAA_Default;
   }
 
+  bool isThisCompleteObject(GlobalDecl GD) const override {
+    // The Itanium ABI has separate complete-object vs.  base-object
+    // variants of both constructors and destructors.
+    if (isa<CXXDestructorDecl>(GD.getDecl())) {
+      switch (GD.getDtorType()) {
+      case Dtor_Complete:
+      case Dtor_Deleting:
+        return true;
+
+      case Dtor_Base:
+        return false;
+
+      case Dtor_Comdat:
+        llvm_unreachable("emitting dtor comdat as function?");
+      }
+      llvm_unreachable("bad dtor kind");
+    }
+    if (isa<CXXConstructorDecl>(GD.getDecl())) {
+      switch (GD.getCtorType()) {
+      case Ctor_Complete:
+        return true;
+
+      case Ctor_Base:
+        return false;
+
+      case Ctor_CopyingClosure:
+      case Ctor_DefaultClosure:
+        llvm_unreachable("closure ctors in Itanium ABI?");
+
+      case Ctor_Comdat:
+        llvm_unreachable("emitting ctor comdat as function?");
+      }
+      llvm_unreachable("bad dtor kind");
+    }
+
+    // No other kinds.
+    return false;
+  }
+
   bool isZeroInitializable(const MemberPointerType *MPT) override;
 
   llvm::Type *ConvertMemberPointerType(const MemberPointerType *MPT) override;
@@ -76,13 +115,14 @@ public:
   llvm::Value *
     EmitLoadOfMemberFunctionPointer(CodeGenFunction &CGF,
                                     const Expr *E,
-                                    llvm::Value *&This,
+                                    Address This,
+                                    llvm::Value *&ThisPtrForCall,
                                     llvm::Value *MemFnPtr,
                                     const MemberPointerType *MPT) override;
 
   llvm::Value *
     EmitMemberDataPointerAddress(CodeGenFunction &CGF, const Expr *E,
-                                 llvm::Value *Base,
+                                 Address Base,
                                  llvm::Value *MemPtr,
                                  const MemberPointerType *MPT) override;
 
@@ -111,8 +151,21 @@ public:
                                          const MemberPointerType *MPT) override;
 
   void emitVirtualObjectDelete(CodeGenFunction &CGF, const CXXDeleteExpr *DE,
-                               llvm::Value *Ptr, QualType ElementType,
+                               Address Ptr, QualType ElementType,
                                const CXXDestructorDecl *Dtor) override;
+
+  /// Itanium says that an _Unwind_Exception has to be "double-word"
+  /// aligned (and thus the end of it is also so-aligned), meaning 16
+  /// bytes.  Of course, that was written for the actual Itanium,
+  /// which is a 64-bit platform.  Classically, the ABI doesn't really
+  /// specify the alignment on other platforms, but in practice
+  /// libUnwind declares the struct with __attribute__((aligned)), so
+  /// we assume that alignment here.  (It's generally 16 bytes, but
+  /// some targets overwrite it.)
+  CharUnits getAlignmentOfExnObject() {
+    auto align = CGM.getContext().getTargetDefaultAlignForAttributeAligned();
+    return CGM.getContext().toCharUnitsFromBits(align);
+  }
 
   void emitRethrow(CodeGenFunction &CGF, bool isNoReturn) override;
   void emitThrow(CodeGenFunction &CGF, const CXXThrowExpr *E) override;
@@ -126,34 +179,34 @@ public:
   void EmitFundamentalRTTIDescriptor(QualType Type);
   void EmitFundamentalRTTIDescriptors();
   llvm::Constant *getAddrOfRTTIDescriptor(QualType Ty) override;
-  llvm::Constant *
+  CatchTypeInfo
   getAddrOfCXXCatchHandlerType(QualType Ty,
                                QualType CatchHandlerType) override {
-    return getAddrOfRTTIDescriptor(Ty);
+    return CatchTypeInfo{getAddrOfRTTIDescriptor(Ty), 0};
   }
 
   bool shouldTypeidBeNullChecked(bool IsDeref, QualType SrcRecordTy) override;
   void EmitBadTypeidCall(CodeGenFunction &CGF) override;
   llvm::Value *EmitTypeid(CodeGenFunction &CGF, QualType SrcRecordTy,
-                          llvm::Value *ThisPtr,
+                          Address ThisPtr,
                           llvm::Type *StdTypeInfoPtrTy) override;
 
   bool shouldDynamicCastCallBeNullChecked(bool SrcIsPtr,
                                           QualType SrcRecordTy) override;
 
-  llvm::Value *EmitDynamicCastCall(CodeGenFunction &CGF, llvm::Value *Value,
+  llvm::Value *EmitDynamicCastCall(CodeGenFunction &CGF, Address Value,
                                    QualType SrcRecordTy, QualType DestTy,
                                    QualType DestRecordTy,
                                    llvm::BasicBlock *CastEnd) override;
 
-  llvm::Value *EmitDynamicCastToVoid(CodeGenFunction &CGF, llvm::Value *Value,
+  llvm::Value *EmitDynamicCastToVoid(CodeGenFunction &CGF, Address Value,
                                      QualType SrcRecordTy,
                                      QualType DestTy) override;
 
   bool EmitBadCastCall(CodeGenFunction &CGF) override;
 
   llvm::Value *
-    GetVirtualBaseClassOffset(CodeGenFunction &CGF, llvm::Value *This,
+    GetVirtualBaseClassOffset(CodeGenFunction &CGF, Address This,
                               const CXXRecordDecl *ClassDecl,
                               const CXXRecordDecl *BaseClassDecl) override;
 
@@ -185,15 +238,29 @@ public:
 
   void EmitDestructorCall(CodeGenFunction &CGF, const CXXDestructorDecl *DD,
                           CXXDtorType Type, bool ForVirtualBase,
-                          bool Delegating, llvm::Value *This) override;
+                          bool Delegating, Address This) override;
 
   void emitVTableDefinitions(CodeGenVTables &CGVT,
                              const CXXRecordDecl *RD) override;
 
+  bool isVirtualOffsetNeededForVTableField(CodeGenFunction &CGF,
+                                           CodeGenFunction::VPtr Vptr) override;
+
+  bool doStructorsInitializeVPtrs(const CXXRecordDecl *VTableClass) override {
+    return true;
+  }
+
+  llvm::Constant *
+  getVTableAddressPoint(BaseSubobject Base,
+                        const CXXRecordDecl *VTableClass) override;
+
   llvm::Value *getVTableAddressPointInStructor(
       CodeGenFunction &CGF, const CXXRecordDecl *VTableClass,
-      BaseSubobject Base, const CXXRecordDecl *NearestVBase,
-      bool &NeedsVirtualOffset) override;
+      BaseSubobject Base, const CXXRecordDecl *NearestVBase) override;
+
+  llvm::Value *getVTableAddressPointInStructorWithVTT(
+      CodeGenFunction &CGF, const CXXRecordDecl *VTableClass,
+      BaseSubobject Base, const CXXRecordDecl *NearestVBase);
 
   llvm::Constant *
   getVTableAddressPointForConstExpr(BaseSubobject Base,
@@ -203,19 +270,18 @@ public:
                                         CharUnits VPtrOffset) override;
 
   llvm::Value *getVirtualFunctionPointer(CodeGenFunction &CGF, GlobalDecl GD,
-                                         llvm::Value *This,
-                                         llvm::Type *Ty,
+                                         Address This, llvm::Type *Ty,
                                          SourceLocation Loc) override;
 
   llvm::Value *EmitVirtualDestructorCall(CodeGenFunction &CGF,
                                          const CXXDestructorDecl *Dtor,
                                          CXXDtorType DtorType,
-                                         llvm::Value *This,
+                                         Address This,
                                          const CXXMemberCallExpr *CE) override;
 
   void emitVirtualInheritanceTables(const CXXRecordDecl *RD) override;
 
-  bool canEmitAvailableExternallyVTable(const CXXRecordDecl *RD) const override;
+  bool canSpeculativelyEmitVTable(const CXXRecordDecl *RD) const override;
 
   void setThunkLinkage(llvm::Function *Thunk, bool ForVTable, GlobalDecl GD,
                        bool ReturnAdjustment) override {
@@ -225,10 +291,10 @@ public:
       Thunk->setLinkage(llvm::GlobalValue::AvailableExternallyLinkage);
   }
 
-  llvm::Value *performThisAdjustment(CodeGenFunction &CGF, llvm::Value *This,
+  llvm::Value *performThisAdjustment(CodeGenFunction &CGF, Address This,
                                      const ThisAdjustment &TA) override;
 
-  llvm::Value *performReturnAdjustment(CodeGenFunction &CGF, llvm::Value *Ret,
+  llvm::Value *performReturnAdjustment(CodeGenFunction &CGF, Address Ret,
                                        const ReturnAdjustment &RA) override;
 
   size_t getSrcArgforCopyCtor(const CXXConstructorDecl *,
@@ -242,13 +308,13 @@ public:
     { return "__cxa_deleted_virtual"; }
 
   CharUnits getArrayCookieSizeImpl(QualType elementType) override;
-  llvm::Value *InitializeArrayCookie(CodeGenFunction &CGF,
-                                     llvm::Value *NewPtr,
-                                     llvm::Value *NumElements,
-                                     const CXXNewExpr *expr,
-                                     QualType ElementType) override;
+  Address InitializeArrayCookie(CodeGenFunction &CGF,
+                                Address NewPtr,
+                                llvm::Value *NumElements,
+                                const CXXNewExpr *expr,
+                                QualType ElementType) override;
   llvm::Value *readArrayCookieImpl(CodeGenFunction &CGF,
-                                   llvm::Value *allocPtr,
+                                   Address allocPtr,
                                    CharUnits cookieSize) override;
 
   void EmitGuardedInit(CodeGenFunction &CGF, const VarDecl &D,
@@ -306,19 +372,36 @@ public:
   void emitCXXStructor(const CXXMethodDecl *MD, StructorType Type) override;
 
  private:
-  /// Checks if function has any virtual inline function.
-  bool hasAnyVirtualInlineFunction(const CXXRecordDecl *RD) const {
+   bool hasAnyUsedVirtualInlineFunction(const CXXRecordDecl *RD) const {
     const auto &VtableLayout =
         CGM.getItaniumVTableContext().getVTableLayout(RD);
 
     for (const auto &VtableComponent : VtableLayout.vtable_components()) {
-      if (VtableComponent.getKind() !=
-          VTableComponent::Kind::CK_FunctionPointer)
+      if (!VtableComponent.isUsedFunctionPointerKind())
         continue;
 
-      const auto &Method = VtableComponent.getFunctionDecl();
+      const CXXMethodDecl *Method = VtableComponent.getFunctionDecl();
       if (Method->getCanonicalDecl()->isInlined())
         return true;
+    }
+    return false;
+  }
+
+  bool isVTableHidden(const CXXRecordDecl *RD) const {
+    const auto &VtableLayout =
+            CGM.getItaniumVTableContext().getVTableLayout(RD);
+
+    for (const auto &VtableComponent : VtableLayout.vtable_components()) {
+      if (VtableComponent.isRTTIKind()) {
+        const CXXRecordDecl *RTTIDecl = VtableComponent.getRTTIDecl();
+        if (RTTIDecl->getVisibility() == Visibility::HiddenVisibility)
+          return true;
+      } else if (VtableComponent.isUsedFunctionPointerKind()) {
+        const CXXMethodDecl *Method = VtableComponent.getFunctionDecl();
+        if (Method->getVisibility() == Visibility::HiddenVisibility &&
+            !Method->isDefined())
+          return true;
+      }
     }
     return false;
   }
@@ -340,12 +423,12 @@ public:
                            QualType ResTy) override;
 
   CharUnits getArrayCookieSizeImpl(QualType elementType) override;
-  llvm::Value *InitializeArrayCookie(CodeGenFunction &CGF,
-                                     llvm::Value *NewPtr,
-                                     llvm::Value *NumElements,
-                                     const CXXNewExpr *expr,
-                                     QualType ElementType) override;
-  llvm::Value *readArrayCookieImpl(CodeGenFunction &CGF, llvm::Value *allocPtr,
+  Address InitializeArrayCookie(CodeGenFunction &CGF,
+                                Address NewPtr,
+                                llvm::Value *NumElements,
+                                const CXXNewExpr *expr,
+                                QualType ElementType) override;
+  llvm::Value *readArrayCookieImpl(CodeGenFunction &CGF, Address allocPtr,
                                    CharUnits cookieSize) override;
 };
 
@@ -356,6 +439,20 @@ public:
   // ARM64 libraries are prepared for non-unique RTTI.
   bool shouldRTTIBeUnique() const override { return false; }
 };
+
+class WebAssemblyCXXABI final : public ItaniumCXXABI {
+public:
+  explicit WebAssemblyCXXABI(CodeGen::CodeGenModule &CGM)
+      : ItaniumCXXABI(CGM, /*UseARMMethodPtrABI=*/true,
+                      /*UseARMGuardVarABI=*/true) {}
+
+private:
+  bool HasThisReturn(GlobalDecl GD) const override {
+    return isa<CXXConstructorDecl>(GD.getDecl()) ||
+           (isa<CXXDestructorDecl>(GD.getDecl()) &&
+            GD.getDtorType() != Dtor_Deleting);
+  }
+};
 }
 
 CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
@@ -364,6 +461,7 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
   // between the ARM and iOS ABIs.
   case TargetCXXABI::GenericARM:
   case TargetCXXABI::iOS:
+  case TargetCXXABI::WatchOS:
     return new ARMCXXABI(CGM);
 
   case TargetCXXABI::iOS64:
@@ -386,6 +484,9 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
     return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true,
                              /* UseARMGuardVarABI = */ false);
   // @LOCALMOD-END Emscripten
+
+  case TargetCXXABI::WebAssembly:
+    return new WebAssemblyCXXABI(CGM);
 
   case TargetCXXABI::GenericItanium:
     if (CGM.getContext().getTargetInfo().getTriple().getArch()
@@ -432,7 +533,8 @@ ItaniumCXXABI::ConvertMemberPointerType(const MemberPointerType *MPT) {
 /// If the member is non-virtual, memptr.ptr is the address of
 /// the function to call.
 llvm::Value *ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
-    CodeGenFunction &CGF, const Expr *E, llvm::Value *&This,
+    CodeGenFunction &CGF, const Expr *E, Address ThisAddr,
+    llvm::Value *&ThisPtrForCall,
     llvm::Value *MemFnPtr, const MemberPointerType *MPT) {
   CGBuilderTy &Builder = CGF.Builder;
 
@@ -461,9 +563,11 @@ llvm::Value *ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
 
   // Apply the adjustment and cast back to the original struct type
   // for consistency.
+  llvm::Value *This = ThisAddr.getPointer();
   llvm::Value *Ptr = Builder.CreateBitCast(This, Builder.getInt8PtrTy());
   Ptr = Builder.CreateInBoundsGEP(Ptr, Adj);
   This = Builder.CreateBitCast(Ptr, This->getType(), "this.adjusted");
+  ThisPtrForCall = This;
   
   // Load the function pointer.
   llvm::Value *FnAsInt = Builder.CreateExtractValue(MemFnPtr, 0, "memptr.ptr");
@@ -485,7 +589,11 @@ llvm::Value *ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
 
   // Cast the adjusted this to a pointer to vtable pointer and load.
   llvm::Type *VTableTy = Builder.getInt8PtrTy();
-  llvm::Value *VTable = CGF.GetVTablePtr(This, VTableTy);
+  CharUnits VTablePtrAlign =
+    CGF.CGM.getDynamicOffsetAlignment(ThisAddr.getAlignment(), RD,
+                                      CGF.getPointerAlign());
+  llvm::Value *VTable =
+    CGF.GetVTablePtr(Address(This, VTablePtrAlign), VTableTy, RD);
 
   // Apply the offset.
   llvm::Value *VTableOffset = FnAsInt;
@@ -495,7 +603,9 @@ llvm::Value *ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
 
   // Load the virtual function to call.
   VTable = Builder.CreateBitCast(VTable, FTy->getPointerTo()->getPointerTo());
-  llvm::Value *VirtualFn = Builder.CreateLoad(VTable, "memptr.virtualfn");
+  llvm::Value *VirtualFn =
+    Builder.CreateAlignedLoad(VTable, CGF.getPointerAlign(),
+                              "memptr.virtualfn");
   CGF.EmitBranch(FnEnd);
 
   // In the non-virtual path, the function pointer is actually a
@@ -515,24 +625,23 @@ llvm::Value *ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
 /// Compute an l-value by applying the given pointer-to-member to a
 /// base object.
 llvm::Value *ItaniumCXXABI::EmitMemberDataPointerAddress(
-    CodeGenFunction &CGF, const Expr *E, llvm::Value *Base, llvm::Value *MemPtr,
+    CodeGenFunction &CGF, const Expr *E, Address Base, llvm::Value *MemPtr,
     const MemberPointerType *MPT) {
   assert(MemPtr->getType() == CGM.PtrDiffTy);
 
   CGBuilderTy &Builder = CGF.Builder;
 
-  unsigned AS = Base->getType()->getPointerAddressSpace();
-
   // Cast to char*.
-  Base = Builder.CreateBitCast(Base, Builder.getInt8Ty()->getPointerTo(AS));
+  Base = Builder.CreateElementBitCast(Base, CGF.Int8Ty);
 
   // Apply the offset, which we assume is non-null.
-  llvm::Value *Addr = Builder.CreateInBoundsGEP(Base, MemPtr, "memptr.offset");
+  llvm::Value *Addr =
+    Builder.CreateInBoundsGEP(Base.getPointer(), MemPtr, "memptr.offset");
 
   // Cast the address to the appropriate pointer type, adopting the
   // address space of the base pointer.
-  llvm::Type *PType
-    = CGF.ConvertTypeForMem(MPT->getPointeeType())->getPointerTo(AS);
+  llvm::Type *PType = CGF.ConvertTypeForMem(MPT->getPointeeType())
+                            ->getPointerTo(Base.getAddressSpace());
   return Builder.CreateBitCast(Addr, PType);
 }
 
@@ -886,7 +995,8 @@ bool ItaniumCXXABI::classifyReturnType(CGFunctionInfo &FI) const {
   // FIXME: Use canCopyArgument() when it is fixed to handle lazily declared
   // special members.
   if (RD->hasNonTrivialDestructor() || RD->hasNonTrivialCopyConstructor()) {
-    FI.getReturnInfo() = ABIArgInfo::getIndirect(0, /*ByVal=*/false);
+    auto Align = CGM.getContext().getTypeAlignInChars(FI.getReturnType());
+    FI.getReturnInfo() = ABIArgInfo::getIndirect(Align, /*ByVal=*/false);
     return true;
   }
   return false;
@@ -902,7 +1012,7 @@ bool ItaniumCXXABI::isZeroInitializable(const MemberPointerType *MPT) {
 /// at entry -2 in the vtable.
 void ItaniumCXXABI::emitVirtualObjectDelete(CodeGenFunction &CGF,
                                             const CXXDeleteExpr *DE,
-                                            llvm::Value *Ptr,
+                                            Address Ptr,
                                             QualType ElementType,
                                             const CXXDestructorDecl *Dtor) {
   bool UseGlobalDelete = DE->isGlobalDelete();
@@ -911,16 +1021,20 @@ void ItaniumCXXABI::emitVirtualObjectDelete(CodeGenFunction &CGF,
     // to pass to the deallocation function.
 
     // Grab the vtable pointer as an intptr_t*.
-    llvm::Value *VTable = CGF.GetVTablePtr(Ptr, CGF.IntPtrTy->getPointerTo());
+    auto *ClassDecl =
+        cast<CXXRecordDecl>(ElementType->getAs<RecordType>()->getDecl());
+    llvm::Value *VTable =
+        CGF.GetVTablePtr(Ptr, CGF.IntPtrTy->getPointerTo(), ClassDecl);
 
     // Track back to entry -2 and pull out the offset there.
     llvm::Value *OffsetPtr = CGF.Builder.CreateConstInBoundsGEP1_64(
         VTable, -2, "complete-offset.ptr");
-    llvm::LoadInst *Offset = CGF.Builder.CreateLoad(OffsetPtr);
-    Offset->setAlignment(CGF.PointerAlignInBytes);
+    llvm::Value *Offset =
+      CGF.Builder.CreateAlignedLoad(OffsetPtr, CGF.getPointerAlign());
 
     // Apply the offset.
-    llvm::Value *CompletePtr = CGF.Builder.CreateBitCast(Ptr, CGF.Int8PtrTy);
+    llvm::Value *CompletePtr =
+      CGF.Builder.CreateBitCast(Ptr.getPointer(), CGF.Int8PtrTy);
     CompletePtr = CGF.Builder.CreateInBoundsGEP(CompletePtr, Offset);
 
     // If we're supposed to call the global delete, make sure we do so
@@ -982,7 +1096,8 @@ void ItaniumCXXABI::emitThrow(CodeGenFunction &CGF, const CXXThrowExpr *E) {
   llvm::CallInst *ExceptionPtr = CGF.EmitNounwindRuntimeCall(
       AllocExceptionFn, llvm::ConstantInt::get(SizeTy, TypeSize), "exception");
 
-  CGF.EmitAnyExprToExn(E->getSubExpr(), ExceptionPtr);
+  CharUnits ExnAlign = getAlignmentOfExnObject();
+  CGF.EmitAnyExprToExn(E->getSubExpr(), Address(ExceptionPtr, ExnAlign));
 
   // Now throw the exception.
   llvm::Constant *TypeInfo = CGM.GetAddrOfRTTIDescriptor(ThrowType,
@@ -1106,14 +1221,16 @@ void ItaniumCXXABI::EmitBadTypeidCall(CodeGenFunction &CGF) {
 
 llvm::Value *ItaniumCXXABI::EmitTypeid(CodeGenFunction &CGF,
                                        QualType SrcRecordTy,
-                                       llvm::Value *ThisPtr,
+                                       Address ThisPtr,
                                        llvm::Type *StdTypeInfoPtrTy) {
+  auto *ClassDecl =
+      cast<CXXRecordDecl>(SrcRecordTy->getAs<RecordType>()->getDecl());
   llvm::Value *Value =
-      CGF.GetVTablePtr(ThisPtr, StdTypeInfoPtrTy->getPointerTo());
+      CGF.GetVTablePtr(ThisPtr, StdTypeInfoPtrTy->getPointerTo(), ClassDecl);
 
   // Load the type info.
   Value = CGF.Builder.CreateConstInBoundsGEP1_64(Value, -1ULL);
-  return CGF.Builder.CreateLoad(Value);
+  return CGF.Builder.CreateAlignedLoad(Value, CGF.getPointerAlign());
 }
 
 bool ItaniumCXXABI::shouldDynamicCastCallBeNullChecked(bool SrcIsPtr,
@@ -1122,7 +1239,7 @@ bool ItaniumCXXABI::shouldDynamicCastCallBeNullChecked(bool SrcIsPtr,
 }
 
 llvm::Value *ItaniumCXXABI::EmitDynamicCastCall(
-    CodeGenFunction &CGF, llvm::Value *Value, QualType SrcRecordTy,
+    CodeGenFunction &CGF, Address ThisAddr, QualType SrcRecordTy,
     QualType DestTy, QualType DestRecordTy, llvm::BasicBlock *CastEnd) {
   llvm::Type *PtrDiffLTy =
       CGF.ConvertType(CGF.getContext().getPointerDiffType());
@@ -1141,6 +1258,7 @@ llvm::Value *ItaniumCXXABI::EmitDynamicCastCall(
       computeOffsetHint(CGF.getContext(), SrcDecl, DestDecl).getQuantity());
 
   // Emit the call to __dynamic_cast.
+  llvm::Value *Value = ThisAddr.getPointer();
   Value = CGF.EmitCastToVoidPtr(Value);
 
   llvm::Value *args[] = {Value, SrcRTTI, DestRTTI, OffsetHint};
@@ -1164,22 +1282,28 @@ llvm::Value *ItaniumCXXABI::EmitDynamicCastCall(
 }
 
 llvm::Value *ItaniumCXXABI::EmitDynamicCastToVoid(CodeGenFunction &CGF,
-                                                  llvm::Value *Value,
+                                                  Address ThisAddr,
                                                   QualType SrcRecordTy,
                                                   QualType DestTy) {
   llvm::Type *PtrDiffLTy =
       CGF.ConvertType(CGF.getContext().getPointerDiffType());
   llvm::Type *DestLTy = CGF.ConvertType(DestTy);
 
+  auto *ClassDecl =
+      cast<CXXRecordDecl>(SrcRecordTy->getAs<RecordType>()->getDecl());
   // Get the vtable pointer.
-  llvm::Value *VTable = CGF.GetVTablePtr(Value, PtrDiffLTy->getPointerTo());
+  llvm::Value *VTable = CGF.GetVTablePtr(ThisAddr, PtrDiffLTy->getPointerTo(),
+      ClassDecl);
 
   // Get the offset-to-top from the vtable.
   llvm::Value *OffsetToTop =
       CGF.Builder.CreateConstInBoundsGEP1_64(VTable, -2ULL);
-  OffsetToTop = CGF.Builder.CreateLoad(OffsetToTop, "offset.to.top");
+  OffsetToTop =
+    CGF.Builder.CreateAlignedLoad(OffsetToTop, CGF.getPointerAlign(),
+                                  "offset.to.top");
 
   // Finally, add the offset to the pointer.
+  llvm::Value *Value = ThisAddr.getPointer();
   Value = CGF.EmitCastToVoidPtr(Value);
   Value = CGF.Builder.CreateInBoundsGEP(Value, OffsetToTop);
 
@@ -1195,10 +1319,10 @@ bool ItaniumCXXABI::EmitBadCastCall(CodeGenFunction &CGF) {
 
 llvm::Value *
 ItaniumCXXABI::GetVirtualBaseClassOffset(CodeGenFunction &CGF,
-                                         llvm::Value *This,
+                                         Address This,
                                          const CXXRecordDecl *ClassDecl,
                                          const CXXRecordDecl *BaseClassDecl) {
-  llvm::Value *VTablePtr = CGF.GetVTablePtr(This, CGM.Int8PtrTy);
+  llvm::Value *VTablePtr = CGF.GetVTablePtr(This, CGM.Int8PtrTy, ClassDecl);
   CharUnits VBaseOffsetOffset =
       CGM.getItaniumVTableContext().getVirtualBaseOffsetOffset(ClassDecl,
                                                                BaseClassDecl);
@@ -1210,7 +1334,8 @@ ItaniumCXXABI::GetVirtualBaseClassOffset(CodeGenFunction &CGF,
                                              CGM.PtrDiffTy->getPointerTo());
 
   llvm::Value *VBaseOffset =
-    CGF.Builder.CreateLoad(VBaseOffsetPtr, "vbase.offset");
+    CGF.Builder.CreateAlignedLoad(VBaseOffsetPtr, CGF.getPointerAlign(),
+                                  "vbase.offset");
 
   return VBaseOffset;
 }
@@ -1321,7 +1446,7 @@ unsigned ItaniumCXXABI::addImplicitConstructorArgs(
 void ItaniumCXXABI::EmitDestructorCall(CodeGenFunction &CGF,
                                        const CXXDestructorDecl *DD,
                                        CXXDtorType Type, bool ForVirtualBase,
-                                       bool Delegating, llvm::Value *This) {
+                                       bool Delegating, Address This) {
   GlobalDecl GD(DD, Type);
   llvm::Value *VTT = CGF.GetVTTParameter(GD, ForVirtualBase, Delegating);
   QualType VTTTy = getContext().getPointerType(getContext().VoidPtrTy);
@@ -1333,8 +1458,8 @@ void ItaniumCXXABI::EmitDestructorCall(CodeGenFunction &CGF,
   if (!Callee)
     Callee = CGM.getAddrOfCXXStructor(DD, getFromDtorType(Type));
 
-  CGF.EmitCXXMemberOrOperatorCall(DD, Callee, ReturnValueSlot(), This, VTT,
-                                  VTTTy, nullptr);
+  CGF.EmitCXXMemberOrOperatorCall(DD, Callee, ReturnValueSlot(),
+                                  This.getPointer(), VTT, VTTTy, nullptr);
 }
 
 void ItaniumCXXABI::emitVTableDefinitions(CodeGenVTables &CGVT,
@@ -1384,41 +1509,29 @@ void ItaniumCXXABI::emitVTableDefinitions(CodeGenVTables &CGVT,
   CGM.EmitVTableBitSetEntries(VTable, VTLayout);
 }
 
-llvm::Value *ItaniumCXXABI::getVTableAddressPointInStructor(
-    CodeGenFunction &CGF, const CXXRecordDecl *VTableClass, BaseSubobject Base,
-    const CXXRecordDecl *NearestVBase, bool &NeedsVirtualOffset) {
-  bool NeedsVTTParam = CGM.getCXXABI().NeedsVTTParameter(CGF.CurGD);
-  NeedsVirtualOffset = (NeedsVTTParam && NearestVBase);
-
-  llvm::Value *VTableAddressPoint;
-  if (NeedsVTTParam && (Base.getBase()->getNumVBases() || NearestVBase)) {
-    // Get the secondary vpointer index.
-    uint64_t VirtualPointerIndex =
-        CGM.getVTables().getSecondaryVirtualPointerIndex(VTableClass, Base);
-
-    /// Load the VTT.
-    llvm::Value *VTT = CGF.LoadCXXVTT();
-    if (VirtualPointerIndex)
-      VTT = CGF.Builder.CreateConstInBoundsGEP1_64(VTT, VirtualPointerIndex);
-
-    // And load the address point from the VTT.
-    VTableAddressPoint = CGF.Builder.CreateLoad(VTT);
-  } else {
-    llvm::Constant *VTable =
-        CGM.getCXXABI().getAddrOfVTable(VTableClass, CharUnits());
-    uint64_t AddressPoint = CGM.getItaniumVTableContext()
-                                .getVTableLayout(VTableClass)
-                                .getAddressPoint(Base);
-    VTableAddressPoint =
-        CGF.Builder.CreateConstInBoundsGEP2_64(VTable, 0, AddressPoint);
-  }
-
-  return VTableAddressPoint;
+bool ItaniumCXXABI::isVirtualOffsetNeededForVTableField(
+    CodeGenFunction &CGF, CodeGenFunction::VPtr Vptr) {
+  if (Vptr.NearestVBase == nullptr)
+    return false;
+  return NeedsVTTParameter(CGF.CurGD);
 }
 
-llvm::Constant *ItaniumCXXABI::getVTableAddressPointForConstExpr(
-    BaseSubobject Base, const CXXRecordDecl *VTableClass) {
-  auto *VTable = getAddrOfVTable(VTableClass, CharUnits());
+llvm::Value *ItaniumCXXABI::getVTableAddressPointInStructor(
+    CodeGenFunction &CGF, const CXXRecordDecl *VTableClass, BaseSubobject Base,
+    const CXXRecordDecl *NearestVBase) {
+
+  if ((Base.getBase()->getNumVBases() || NearestVBase != nullptr) &&
+      NeedsVTTParameter(CGF.CurGD)) {
+    return getVTableAddressPointInStructorWithVTT(CGF, VTableClass, Base,
+                                                  NearestVBase);
+  }
+  return getVTableAddressPoint(Base, VTableClass);
+}
+
+llvm::Constant *
+ItaniumCXXABI::getVTableAddressPoint(BaseSubobject Base,
+                                     const CXXRecordDecl *VTableClass) {
+  llvm::GlobalValue *VTable = getAddrOfVTable(VTableClass, CharUnits());
 
   // Find the appropriate vtable within the vtable group.
   uint64_t AddressPoint = CGM.getItaniumVTableContext()
@@ -1431,6 +1544,30 @@ llvm::Constant *ItaniumCXXABI::getVTableAddressPointForConstExpr(
 
   return llvm::ConstantExpr::getInBoundsGetElementPtr(VTable->getValueType(),
                                                       VTable, Indices);
+}
+
+llvm::Value *ItaniumCXXABI::getVTableAddressPointInStructorWithVTT(
+    CodeGenFunction &CGF, const CXXRecordDecl *VTableClass, BaseSubobject Base,
+    const CXXRecordDecl *NearestVBase) {
+  assert((Base.getBase()->getNumVBases() || NearestVBase != nullptr) &&
+         NeedsVTTParameter(CGF.CurGD) && "This class doesn't have VTT");
+
+  // Get the secondary vpointer index.
+  uint64_t VirtualPointerIndex =
+      CGM.getVTables().getSecondaryVirtualPointerIndex(VTableClass, Base);
+
+  /// Load the VTT.
+  llvm::Value *VTT = CGF.LoadCXXVTT();
+  if (VirtualPointerIndex)
+    VTT = CGF.Builder.CreateConstInBoundsGEP1_64(VTT, VirtualPointerIndex);
+
+  // And load the address point from the VTT.
+  return CGF.Builder.CreateAlignedLoad(VTT, CGF.getPointerAlign());
+}
+
+llvm::Constant *ItaniumCXXABI::getVTableAddressPointForConstExpr(
+    BaseSubobject Base, const CXXRecordDecl *VTableClass) {
+  return getVTableAddressPoint(Base, VTableClass);
 }
 
 llvm::GlobalVariable *ItaniumCXXABI::getAddrOfVTable(const CXXRecordDecl *RD,
@@ -1447,7 +1584,6 @@ llvm::GlobalVariable *ItaniumCXXABI::getAddrOfVTable(const CXXRecordDecl *RD,
   SmallString<256> Name;
   llvm::raw_svector_ostream Out(Name);
   getMangleContext().mangleCXXVTable(RD, Out);
-  Out.flush();
 
   ItaniumVTableContext &VTContext = CGM.getItaniumVTableContext();
   llvm::ArrayType *ArrayType = llvm::ArrayType::get(
@@ -1467,26 +1603,27 @@ llvm::GlobalVariable *ItaniumCXXABI::getAddrOfVTable(const CXXRecordDecl *RD,
 
 llvm::Value *ItaniumCXXABI::getVirtualFunctionPointer(CodeGenFunction &CGF,
                                                       GlobalDecl GD,
-                                                      llvm::Value *This,
+                                                      Address This,
                                                       llvm::Type *Ty,
                                                       SourceLocation Loc) {
   GD = GD.getCanonicalDecl();
   Ty = Ty->getPointerTo()->getPointerTo();
-  llvm::Value *VTable = CGF.GetVTablePtr(This, Ty);
+  auto *MethodDecl = cast<CXXMethodDecl>(GD.getDecl());
+  llvm::Value *VTable = CGF.GetVTablePtr(This, Ty, MethodDecl->getParent());
 
   if (CGF.SanOpts.has(SanitizerKind::CFIVCall))
-    CGF.EmitVTablePtrCheckForCall(cast<CXXMethodDecl>(GD.getDecl()), VTable,
+    CGF.EmitVTablePtrCheckForCall(MethodDecl, VTable,
                                   CodeGenFunction::CFITCK_VCall, Loc);
 
   uint64_t VTableIndex = CGM.getItaniumVTableContext().getMethodVTableIndex(GD);
   llvm::Value *VFuncPtr =
       CGF.Builder.CreateConstInBoundsGEP1_64(VTable, VTableIndex, "vfn");
-  return CGF.Builder.CreateLoad(VFuncPtr);
+  return CGF.Builder.CreateAlignedLoad(VFuncPtr, CGF.getPointerAlign());
 }
 
 llvm::Value *ItaniumCXXABI::EmitVirtualDestructorCall(
     CodeGenFunction &CGF, const CXXDestructorDecl *Dtor, CXXDtorType DtorType,
-    llvm::Value *This, const CXXMemberCallExpr *CE) {
+    Address This, const CXXMemberCallExpr *CE) {
   assert(CE == nullptr || CE->arg_begin() == CE->arg_end());
   assert(DtorType == Dtor_Deleting || DtorType == Dtor_Complete);
 
@@ -1497,8 +1634,9 @@ llvm::Value *ItaniumCXXABI::EmitVirtualDestructorCall(
       getVirtualFunctionPointer(CGF, GlobalDecl(Dtor, DtorType), This, Ty,
                                 CE ? CE->getLocStart() : SourceLocation());
 
-  CGF.EmitCXXMemberOrOperatorCall(Dtor, Callee, ReturnValueSlot(), This,
-                                  /*ImplicitParam=*/nullptr, QualType(), CE);
+  CGF.EmitCXXMemberOrOperatorCall(Dtor, Callee, ReturnValueSlot(),
+                                  This.getPointer(), /*ImplicitParam=*/nullptr,
+                                  QualType(), CE);
   return nullptr;
 }
 
@@ -1508,43 +1646,41 @@ void ItaniumCXXABI::emitVirtualInheritanceTables(const CXXRecordDecl *RD) {
   VTables.EmitVTTDefinition(VTT, CGM.getVTableLinkage(RD), RD);
 }
 
-bool ItaniumCXXABI::canEmitAvailableExternallyVTable(
-    const CXXRecordDecl *RD) const {
+bool ItaniumCXXABI::canSpeculativelyEmitVTable(const CXXRecordDecl *RD) const {
   // We don't emit available_externally vtables if we are in -fapple-kext mode
   // because kext mode does not permit devirtualization.
   if (CGM.getLangOpts().AppleKext)
     return false;
 
-  // If we don't have any inline virtual functions,
+  // If we don't have any inline virtual functions, and if vtable is not hidden,
   // then we are safe to emit available_externally copy of vtable.
   // FIXME we can still emit a copy of the vtable if we
   // can emit definition of the inline functions.
-  return !hasAnyVirtualInlineFunction(RD);
+  return !hasAnyUsedVirtualInlineFunction(RD) && !isVTableHidden(RD);
 }
 static llvm::Value *performTypeAdjustment(CodeGenFunction &CGF,
-                                          llvm::Value *Ptr,
+                                          Address InitialPtr,
                                           int64_t NonVirtualAdjustment,
                                           int64_t VirtualAdjustment,
                                           bool IsReturnAdjustment) {
   if (!NonVirtualAdjustment && !VirtualAdjustment)
-    return Ptr;
+    return InitialPtr.getPointer();
 
-  llvm::Type *Int8PtrTy = CGF.Int8PtrTy;
-  llvm::Value *V = CGF.Builder.CreateBitCast(Ptr, Int8PtrTy);
+  Address V = CGF.Builder.CreateElementBitCast(InitialPtr, CGF.Int8Ty);
 
+  // In a base-to-derived cast, the non-virtual adjustment is applied first.
   if (NonVirtualAdjustment && !IsReturnAdjustment) {
-    // Perform the non-virtual adjustment for a base-to-derived cast.
-    V = CGF.Builder.CreateConstInBoundsGEP1_64(V, NonVirtualAdjustment);
+    V = CGF.Builder.CreateConstInBoundsByteGEP(V,
+                              CharUnits::fromQuantity(NonVirtualAdjustment));
   }
 
+  // Perform the virtual adjustment if we have one.
+  llvm::Value *ResultPtr;
   if (VirtualAdjustment) {
     llvm::Type *PtrDiffTy =
         CGF.ConvertType(CGF.getContext().getPointerDiffType());
 
-    // Perform the virtual adjustment.
-    llvm::Value *VTablePtrPtr =
-        CGF.Builder.CreateBitCast(V, Int8PtrTy->getPointerTo());
-
+    Address VTablePtrPtr = CGF.Builder.CreateElementBitCast(V, CGF.Int8PtrTy);
     llvm::Value *VTablePtr = CGF.Builder.CreateLoad(VTablePtrPtr);
 
     llvm::Value *OffsetPtr =
@@ -1553,23 +1689,28 @@ static llvm::Value *performTypeAdjustment(CodeGenFunction &CGF,
     OffsetPtr = CGF.Builder.CreateBitCast(OffsetPtr, PtrDiffTy->getPointerTo());
 
     // Load the adjustment offset from the vtable.
-    llvm::Value *Offset = CGF.Builder.CreateLoad(OffsetPtr);
+    llvm::Value *Offset =
+      CGF.Builder.CreateAlignedLoad(OffsetPtr, CGF.getPointerAlign());
 
     // Adjust our pointer.
-    V = CGF.Builder.CreateInBoundsGEP(V, Offset);
+    ResultPtr = CGF.Builder.CreateInBoundsGEP(V.getPointer(), Offset);
+  } else {
+    ResultPtr = V.getPointer();
   }
 
+  // In a derived-to-base conversion, the non-virtual adjustment is
+  // applied second.
   if (NonVirtualAdjustment && IsReturnAdjustment) {
-    // Perform the non-virtual adjustment for a derived-to-base cast.
-    V = CGF.Builder.CreateConstInBoundsGEP1_64(V, NonVirtualAdjustment);
+    ResultPtr = CGF.Builder.CreateConstInBoundsGEP1_64(ResultPtr,
+                                                       NonVirtualAdjustment);
   }
 
   // Cast back to the original type.
-  return CGF.Builder.CreateBitCast(V, Ptr->getType());
+  return CGF.Builder.CreateBitCast(ResultPtr, InitialPtr.getType());
 }
 
 llvm::Value *ItaniumCXXABI::performThisAdjustment(CodeGenFunction &CGF,
-                                                  llvm::Value *This,
+                                                  Address This,
                                                   const ThisAdjustment &TA) {
   return performTypeAdjustment(CGF, This, TA.NonVirtual,
                                TA.Virtual.Itanium.VCallOffsetOffset,
@@ -1577,7 +1718,7 @@ llvm::Value *ItaniumCXXABI::performThisAdjustment(CodeGenFunction &CGF,
 }
 
 llvm::Value *
-ItaniumCXXABI::performReturnAdjustment(CodeGenFunction &CGF, llvm::Value *Ret,
+ItaniumCXXABI::performReturnAdjustment(CodeGenFunction &CGF, Address Ret,
                                        const ReturnAdjustment &RA) {
   return performTypeAdjustment(CGF, Ret, RA.NonVirtual,
                                RA.Virtual.Itanium.VBaseOffsetOffset,
@@ -1590,8 +1731,7 @@ void ARMCXXABI::EmitReturnFromThunk(CodeGenFunction &CGF,
     return ItaniumCXXABI::EmitReturnFromThunk(CGF, RV, ResultType);
 
   // Destructor thunks in the ARM ABI have indeterminate results.
-  llvm::Type *T =
-    cast<llvm::PointerType>(CGF.ReturnValue->getType())->getElementType();
+  llvm::Type *T = CGF.ReturnValue.getElementType();
   RValue Undef = RValue::get(llvm::UndefValue::get(T));
   return ItaniumCXXABI::EmitReturnFromThunk(CGF, Undef, ResultType);
 }
@@ -1605,18 +1745,17 @@ CharUnits ItaniumCXXABI::getArrayCookieSizeImpl(QualType elementType) {
                   CGM.getContext().getTypeAlignInChars(elementType));
 }
 
-llvm::Value *ItaniumCXXABI::InitializeArrayCookie(CodeGenFunction &CGF,
-                                                  llvm::Value *NewPtr,
-                                                  llvm::Value *NumElements,
-                                                  const CXXNewExpr *expr,
-                                                  QualType ElementType) {
+Address ItaniumCXXABI::InitializeArrayCookie(CodeGenFunction &CGF,
+                                             Address NewPtr,
+                                             llvm::Value *NumElements,
+                                             const CXXNewExpr *expr,
+                                             QualType ElementType) {
   assert(requiresArrayCookie(expr));
 
-  unsigned AS = NewPtr->getType()->getPointerAddressSpace();
+  unsigned AS = NewPtr.getAddressSpace();
 
   ASTContext &Ctx = getContext();
-  QualType SizeTy = Ctx.getSizeType();
-  CharUnits SizeSize = Ctx.getTypeSizeInChars(SizeTy);
+  CharUnits SizeSize = CGF.getSizeSize();
 
   // The size of the cookie.
   CharUnits CookieSize =
@@ -1624,49 +1763,45 @@ llvm::Value *ItaniumCXXABI::InitializeArrayCookie(CodeGenFunction &CGF,
   assert(CookieSize == getArrayCookieSizeImpl(ElementType));
 
   // Compute an offset to the cookie.
-  llvm::Value *CookiePtr = NewPtr;
+  Address CookiePtr = NewPtr;
   CharUnits CookieOffset = CookieSize - SizeSize;
   if (!CookieOffset.isZero())
-    CookiePtr = CGF.Builder.CreateConstInBoundsGEP1_64(CookiePtr,
-                                                 CookieOffset.getQuantity());
+    CookiePtr = CGF.Builder.CreateConstInBoundsByteGEP(CookiePtr, CookieOffset);
 
   // Write the number of elements into the appropriate slot.
-  llvm::Type *NumElementsTy = CGF.ConvertType(SizeTy)->getPointerTo(AS);
-  llvm::Value *NumElementsPtr =
-      CGF.Builder.CreateBitCast(CookiePtr, NumElementsTy);
+  Address NumElementsPtr =
+      CGF.Builder.CreateElementBitCast(CookiePtr, CGF.SizeTy);
   llvm::Instruction *SI = CGF.Builder.CreateStore(NumElements, NumElementsPtr);
+
+  // Handle the array cookie specially in ASan.
   if (CGM.getLangOpts().Sanitize.has(SanitizerKind::Address) && AS == 0 &&
       expr->getOperatorNew()->isReplaceableGlobalAllocationFunction()) {
     // The store to the CookiePtr does not need to be instrumented.
     CGM.getSanitizerMetadata()->disableSanitizerForInstruction(SI);
     llvm::FunctionType *FTy =
-        llvm::FunctionType::get(CGM.VoidTy, NumElementsTy, false);
+        llvm::FunctionType::get(CGM.VoidTy, NumElementsPtr.getType(), false);
     llvm::Constant *F =
         CGM.CreateRuntimeFunction(FTy, "__asan_poison_cxx_array_cookie");
-    CGF.Builder.CreateCall(F, NumElementsPtr);
+    CGF.Builder.CreateCall(F, NumElementsPtr.getPointer());
   }
 
   // Finally, compute a pointer to the actual data buffer by skipping
   // over the cookie completely.
-  return CGF.Builder.CreateConstInBoundsGEP1_64(NewPtr,
-                                                CookieSize.getQuantity());  
+  return CGF.Builder.CreateConstInBoundsByteGEP(NewPtr, CookieSize);
 }
 
 llvm::Value *ItaniumCXXABI::readArrayCookieImpl(CodeGenFunction &CGF,
-                                                llvm::Value *allocPtr,
+                                                Address allocPtr,
                                                 CharUnits cookieSize) {
   // The element size is right-justified in the cookie.
-  llvm::Value *numElementsPtr = allocPtr;
-  CharUnits numElementsOffset =
-    cookieSize - CharUnits::fromQuantity(CGF.SizeSizeInBytes);
+  Address numElementsPtr = allocPtr;
+  CharUnits numElementsOffset = cookieSize - CGF.getSizeSize();
   if (!numElementsOffset.isZero())
     numElementsPtr =
-      CGF.Builder.CreateConstInBoundsGEP1_64(numElementsPtr,
-                                             numElementsOffset.getQuantity());
+      CGF.Builder.CreateConstInBoundsByteGEP(numElementsPtr, numElementsOffset);
 
-  unsigned AS = allocPtr->getType()->getPointerAddressSpace();
-  numElementsPtr = 
-    CGF.Builder.CreateBitCast(numElementsPtr, CGF.SizeTy->getPointerTo(AS));
+  unsigned AS = allocPtr.getAddressSpace();
+  numElementsPtr = CGF.Builder.CreateElementBitCast(numElementsPtr, CGF.SizeTy);
   if (!CGM.getLangOpts().Sanitize.has(SanitizerKind::Address) || AS != 0)
     return CGF.Builder.CreateLoad(numElementsPtr);
   // In asan mode emit a function call instead of a regular load and let the
@@ -1678,7 +1813,7 @@ llvm::Value *ItaniumCXXABI::readArrayCookieImpl(CodeGenFunction &CGF,
       llvm::FunctionType::get(CGF.SizeTy, CGF.SizeTy->getPointerTo(0), false);
   llvm::Constant *F =
       CGM.CreateRuntimeFunction(FTy, "__asan_load_cxx_array_cookie");
-  return CGF.Builder.CreateCall(F, numElementsPtr);
+  return CGF.Builder.CreateCall(F, numElementsPtr.getPointer());
 }
 
 CharUnits ARMCXXABI::getArrayCookieSizeImpl(QualType elementType) {
@@ -1694,47 +1829,41 @@ CharUnits ARMCXXABI::getArrayCookieSizeImpl(QualType elementType) {
                   CGM.getContext().getTypeAlignInChars(elementType));
 }
 
-llvm::Value *ARMCXXABI::InitializeArrayCookie(CodeGenFunction &CGF,
-                                              llvm::Value *newPtr,
-                                              llvm::Value *numElements,
-                                              const CXXNewExpr *expr,
-                                              QualType elementType) {
+Address ARMCXXABI::InitializeArrayCookie(CodeGenFunction &CGF,
+                                         Address newPtr,
+                                         llvm::Value *numElements,
+                                         const CXXNewExpr *expr,
+                                         QualType elementType) {
   assert(requiresArrayCookie(expr));
 
-  // NewPtr is a char*, but we generalize to arbitrary addrspaces.
-  unsigned AS = newPtr->getType()->getPointerAddressSpace();
-
   // The cookie is always at the start of the buffer.
-  llvm::Value *cookie = newPtr;
+  Address cookie = newPtr;
 
   // The first element is the element size.
-  cookie = CGF.Builder.CreateBitCast(cookie, CGF.SizeTy->getPointerTo(AS));
+  cookie = CGF.Builder.CreateElementBitCast(cookie, CGF.SizeTy);
   llvm::Value *elementSize = llvm::ConstantInt::get(CGF.SizeTy,
                  getContext().getTypeSizeInChars(elementType).getQuantity());
   CGF.Builder.CreateStore(elementSize, cookie);
 
   // The second element is the element count.
-  cookie = CGF.Builder.CreateConstInBoundsGEP1_32(CGF.SizeTy, cookie, 1);
+  cookie = CGF.Builder.CreateConstInBoundsGEP(cookie, 1, CGF.getSizeSize());
   CGF.Builder.CreateStore(numElements, cookie);
 
   // Finally, compute a pointer to the actual data buffer by skipping
   // over the cookie completely.
   CharUnits cookieSize = ARMCXXABI::getArrayCookieSizeImpl(elementType);
-  return CGF.Builder.CreateConstInBoundsGEP1_64(newPtr,
-                                                cookieSize.getQuantity());
+  return CGF.Builder.CreateConstInBoundsByteGEP(newPtr, cookieSize);
 }
 
 llvm::Value *ARMCXXABI::readArrayCookieImpl(CodeGenFunction &CGF,
-                                            llvm::Value *allocPtr,
+                                            Address allocPtr,
                                             CharUnits cookieSize) {
   // The number of elements is at offset sizeof(size_t) relative to
   // the allocated pointer.
-  llvm::Value *numElementsPtr
-    = CGF.Builder.CreateConstInBoundsGEP1_64(allocPtr, CGF.SizeSizeInBytes);
+  Address numElementsPtr
+    = CGF.Builder.CreateConstInBoundsByteGEP(allocPtr, CGF.getSizeSize());
 
-  unsigned AS = allocPtr->getType()->getPointerAddressSpace();
-  numElementsPtr = 
-    CGF.Builder.CreateBitCast(numElementsPtr, CGF.SizeTy->getPointerTo(AS));
+  numElementsPtr = CGF.Builder.CreateElementBitCast(numElementsPtr, CGF.SizeTy);
   return CGF.Builder.CreateLoad(numElementsPtr);
 }
 
@@ -1775,7 +1904,7 @@ static llvm::Constant *getGuardAbortFn(CodeGenModule &CGM,
 }
 
 namespace {
-  struct CallGuardAbort : EHScopeStack::Cleanup {
+  struct CallGuardAbort final : EHScopeStack::Cleanup {
     llvm::GlobalVariable *Guard;
     CallGuardAbort(llvm::GlobalVariable *Guard) : Guard(Guard) {}
 
@@ -1804,12 +1933,21 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
   bool useInt8GuardVariable = !threadsafe && var->hasInternalLinkage();
 
   llvm::IntegerType *guardTy;
+  CharUnits guardAlignment;
   if (useInt8GuardVariable) {
     guardTy = CGF.Int8Ty;
+    guardAlignment = CharUnits::One();
   } else {
     // Guard variables are 64 bits in the generic ABI and size width on ARM
     // (i.e. 32-bit on AArch32, 64-bit on AArch64).
-    guardTy = (UseARMGuardVarABI ? CGF.SizeTy : CGF.Int64Ty);
+    if (UseARMGuardVarABI) {
+      guardTy = CGF.SizeTy;
+      guardAlignment = CGF.getSizeAlign();
+    } else {
+      guardTy = CGF.Int64Ty;
+      guardAlignment = CharUnits::fromQuantity(
+                             CGM.getDataLayout().getABITypeAlignment(guardTy));
+    }
   }
   llvm::PointerType *guardPtrTy = guardTy->getPointerTo();
 
@@ -1822,7 +1960,6 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
     {
       llvm::raw_svector_ostream out(guardName);
       getMangleContext().mangleStaticGuardVariable(&D, out);
-      out.flush();
     }
 
     // Create the guard variable with a zero-initializer.
@@ -1834,11 +1971,14 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
     guard->setVisibility(var->getVisibility());
     // If the variable is thread-local, so is its guard variable.
     guard->setThreadLocalMode(var->getThreadLocalMode());
+    guard->setAlignment(guardAlignment.getQuantity());
 
-    // The ABI says: It is suggested that it be emitted in the same COMDAT group
-    // as the associated data object
+    // The ABI says: "It is suggested that it be emitted in the same COMDAT
+    // group as the associated data object." In practice, this doesn't work for
+    // non-ELF object formats, so only do it for ELF.
     llvm::Comdat *C = var->getComdat();
-    if (!D.isLocalVarDecl() && C) {
+    if (!D.isLocalVarDecl() && C &&
+        CGM.getTarget().getTriple().isOSBinFormatELF()) {
       guard->setComdat(C);
       CGF.CurFn->setComdat(C);
     } else if (CGM.supportsCOMDAT() && guard->isWeakForLinker()) {
@@ -1847,6 +1987,8 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
 
     CGM.setStaticLocalDeclGuardAddress(&D, guard);
   }
+
+  Address guardAddr = Address(guard, guardAlignment);
 
   // Test whether the variable has completed initialization.
   //
@@ -1867,8 +2009,7 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
 
   // Load the first byte of the guard variable.
   llvm::LoadInst *LI =
-      Builder.CreateLoad(Builder.CreateBitCast(guard, CGM.Int8PtrTy));
-  LI->setAlignment(1);
+      Builder.CreateLoad(Builder.CreateElementBitCast(guardAddr, CGM.Int8Ty));
 
   // Itanium ABI:
   //   An implementation supporting thread-safety on multiprocessor
@@ -1938,9 +2079,10 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
     CGF.PopCleanupBlock();
 
     // Call __cxa_guard_release.  This cannot throw.
-    CGF.EmitNounwindRuntimeCall(getGuardReleaseFn(CGM, guardPtrTy), guard);
+    CGF.EmitNounwindRuntimeCall(getGuardReleaseFn(CGM, guardPtrTy),
+                                guardAddr.getPointer());
   } else {
-    Builder.CreateStore(llvm::ConstantInt::get(guardTy, 1), guard);
+    Builder.CreateStore(llvm::ConstantInt::get(guardTy, 1), guardAddr);
   }
 
   CGF.EmitBlock(EndBlock);
@@ -2046,7 +2188,6 @@ ItaniumCXXABI::getOrCreateThreadLocalWrapper(const VarDecl *VD,
   {
     llvm::raw_svector_ostream Out(WrapperName);
     getMangleContext().mangleItaniumThreadLocalWrapper(VD, Out);
-    Out.flush();
   }
 
   if (llvm::Value *V = CGM.getModule().getNamedValue(WrapperName))
@@ -2076,7 +2217,8 @@ void ItaniumCXXABI::EmitThreadLocalInitFuncs(
     // Generate a guarded initialization function.
     llvm::FunctionType *FTy =
         llvm::FunctionType::get(CGM.VoidTy, /*isVarArg=*/false);
-    InitFunc = CGM.CreateGlobalInitOrDestructFunction(FTy, "__tls_init",
+    const CGFunctionInfo &FI = CGM.getTypes().arrangeNullaryFunction();
+    InitFunc = CGM.CreateGlobalInitOrDestructFunction(FTy, "__tls_init", FI,
                                                       SourceLocation(),
                                                       /*TLS=*/true);
     llvm::GlobalVariable *Guard = new llvm::GlobalVariable(
@@ -2084,12 +2226,17 @@ void ItaniumCXXABI::EmitThreadLocalInitFuncs(
         llvm::GlobalVariable::InternalLinkage,
         llvm::ConstantInt::get(CGM.Int8Ty, 0), "__tls_guard");
     Guard->setThreadLocal(true);
+
+    CharUnits GuardAlign = CharUnits::One();
+    Guard->setAlignment(GuardAlign.getQuantity());
+
     CodeGenFunction(CGM)
-        .GenerateCXXGlobalInitFunc(InitFunc, CXXThreadLocalInits, Guard);
+        .GenerateCXXGlobalInitFunc(InitFunc, CXXThreadLocalInits,
+                                   Address(Guard, GuardAlign));
   }
-  for (unsigned I = 0, N = CXXThreadLocals.size(); I != N; ++I) {
-    const VarDecl *VD = CXXThreadLocals[I].first;
-    llvm::GlobalVariable *Var = CXXThreadLocals[I].second;
+  for (auto &I : CXXThreadLocals) {
+    const VarDecl *VD = I.first;
+    llvm::GlobalVariable *Var = I.second;
 
     // Some targets require that all access to thread local variables go through
     // the thread wrapper.  This means that we cannot attempt to create a thread
@@ -2102,7 +2249,6 @@ void ItaniumCXXABI::EmitThreadLocalInitFuncs(
     {
       llvm::raw_svector_ostream Out(InitFnName);
       getMangleContext().mangleItaniumThreadLocalInit(VD, Out);
-      Out.flush();
     }
 
     // If we have a definition for the variable, emit the initialization
@@ -2132,7 +2278,7 @@ void ItaniumCXXABI::EmitThreadLocalInitFuncs(
     llvm::Function *Wrapper = getOrCreateThreadLocalWrapper(VD, Var);
     llvm::LLVMContext &Context = CGM.getModule().getContext();
     llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "", Wrapper);
-    CGBuilderTy Builder(Entry);
+    CGBuilderTy Builder(CGM, Entry);
     if (InitIsInitFunc) {
       if (Init)
         Builder.CreateCall(Init);
@@ -2154,9 +2300,8 @@ void ItaniumCXXABI::EmitThreadLocalInitFuncs(
     // the referenced object.
     llvm::Value *Val = Var;
     if (VD->getType()->isReferenceType()) {
-      llvm::LoadInst *LI = Builder.CreateLoad(Val);
-      LI->setAlignment(CGM.getContext().getDeclAlign(VD).getQuantity());
-      Val = LI;
+      CharUnits Align = CGM.getContext().getDeclAlign(VD);
+      Val = Builder.CreateAlignedLoad(Val, Align);
     }
     if (Val->getType() != Wrapper->getReturnType())
       Val = Builder.CreatePointerBitCastOrAddrSpaceCast(
@@ -2298,7 +2443,6 @@ llvm::GlobalVariable *ItaniumRTTIBuilder::GetAddrOfTypeName(
   SmallString<256> Name;
   llvm::raw_svector_ostream Out(Name);
   CGM.getCXXABI().getMangleContext().mangleCXXRTTIName(Ty, Out);
-  Out.flush();
 
   // We know that the mangled name of the type starts at index 4 of the
   // mangled name of the typename, so we can just index into it in order to
@@ -2320,7 +2464,6 @@ ItaniumRTTIBuilder::GetAddrOfExternalRTTIDescriptor(QualType Ty) {
   SmallString<256> Name;
   llvm::raw_svector_ostream Out(Name);
   CGM.getCXXABI().getMangleContext().mangleCXXRTTI(Ty, Out);
-  Out.flush();
 
   // Look for an existing global.
   llvm::GlobalVariable *GV = CGM.getModule().getNamedGlobal(Name);
@@ -2384,9 +2527,19 @@ static bool TypeInfoIsInStandardLibrary(const BuiltinType *Ty) {
     case BuiltinType::OCLImage1dBuffer:
     case BuiltinType::OCLImage2d:
     case BuiltinType::OCLImage2dArray:
+    case BuiltinType::OCLImage2dDepth:
+    case BuiltinType::OCLImage2dArrayDepth:
+    case BuiltinType::OCLImage2dMSAA:
+    case BuiltinType::OCLImage2dArrayMSAA:
+    case BuiltinType::OCLImage2dMSAADepth:
+    case BuiltinType::OCLImage2dArrayMSAADepth:
     case BuiltinType::OCLImage3d:
     case BuiltinType::OCLSampler:
     case BuiltinType::OCLEvent:
+    case BuiltinType::OCLClkEvent:
+    case BuiltinType::OCLQueue:
+    case BuiltinType::OCLNDRange:
+    case BuiltinType::OCLReserveID:
       return true;
 
     case BuiltinType::Dependent:
@@ -2458,10 +2611,13 @@ static bool ShouldUseExternalRTTIDescriptor(CodeGenModule &CGM,
 
     // FIXME: this may need to be reconsidered if the key function
     // changes.
+    // N.B. We must always emit the RTTI data ourselves if there exists a key
+    // function.
+    bool IsDLLImport = RD->hasAttr<DLLImportAttr>();
     if (CGM.getVTables().isVTableExternal(RD))
-      return true;
+      return IsDLLImport ? false : true;
 
-    if (RD->hasAttr<DLLImportAttr>())
+    if (IsDLLImport)
       return true;
   }
 
@@ -2691,8 +2847,15 @@ static llvm::GlobalVariable::LinkageTypes getTypeInfoLinkage(CodeGenModule &CGM,
       const CXXRecordDecl *RD = cast<CXXRecordDecl>(Record->getDecl());
       if (RD->hasAttr<WeakAttr>())
         return llvm::GlobalValue::WeakODRLinkage;
-      if (RD->isDynamicClass())
-        return CGM.getVTableLinkage(RD);
+      if (RD->isDynamicClass()) {
+        llvm::GlobalValue::LinkageTypes LT = CGM.getVTableLinkage(RD);
+        // MinGW won't export the RTTI information when there is a key function.
+        // Make sure we emit our own copy instead of attempting to dllimport it.
+        if (RD->hasAttr<DLLImportAttr>() &&
+            llvm::GlobalValue::isAvailableExternallyLinkage(LT))
+          LT = llvm::GlobalValue::LinkOnceODRLinkage;
+        return LT;
+      }
     }
 
     return llvm::GlobalValue::LinkOnceODRLinkage;
@@ -2709,7 +2872,6 @@ llvm::Constant *ItaniumRTTIBuilder::BuildTypeInfo(QualType Ty, bool Force) {
   SmallString<256> Name;
   llvm::raw_svector_ostream Out(Name);
   CGM.getCXXABI().getMangleContext().mangleCXXRTTI(Ty, Out);
-  Out.flush();
 
   llvm::GlobalVariable *OldGV = CGM.getModule().getNamedGlobal(Name);
   if (OldGV && !OldGV->isDeclaration()) {
@@ -3259,15 +3421,13 @@ static void emitConstructorDestructorAlias(CodeGenModule &CGM,
     return;
 
   auto *Aliasee = cast<llvm::GlobalValue>(CGM.GetAddrOfGlobal(TargetDecl));
-  llvm::PointerType *AliasType = Aliasee->getType();
 
   // Create the alias with no name.
-  auto *Alias = llvm::GlobalAlias::create(AliasType, Linkage, "", Aliasee,
-                                          &CGM.getModule());
+  auto *Alias = llvm::GlobalAlias::create(Linkage, "", Aliasee);
 
   // Switch any previous uses to the alias.
   if (Entry) {
-    assert(Entry->getType() == AliasType &&
+    assert(Entry->getType() == Aliasee->getType() &&
            "declaration exists with different type");
     Alias->takeName(Entry);
     Entry->replaceAllUsesWith(Alias);
@@ -3305,7 +3465,7 @@ void ItaniumCXXABI::emitCXXStructor(const CXXMethodDecl *MD,
 
     if (CGType == StructorCodegen::RAUW) {
       StringRef MangledName = CGM.getMangledName(CompleteDecl);
-      auto *Aliasee = cast<llvm::GlobalValue>(CGM.GetAddrOfGlobal(BaseDecl));
+      auto *Aliasee = CGM.GetAddrOfGlobal(BaseDecl);
       CGM.addReplacement(MangledName, Aliasee);
       return;
     }
@@ -3372,7 +3532,7 @@ namespace {
   ///     of the caught type, so we have to assume the actual thrown
   ///     exception type might have a throwing destructor, even if the
   ///     caught type's destructor is trivial or nothrow.
-  struct CallEndCatch : EHScopeStack::Cleanup {
+  struct CallEndCatch final : EHScopeStack::Cleanup {
     CallEndCatch(bool MightThrow) : MightThrow(MightThrow) {}
     bool MightThrow;
 
@@ -3406,7 +3566,7 @@ static llvm::Value *CallBeginCatch(CodeGenFunction &CGF,
 /// parameter during catch initialization.
 static void InitCatchParam(CodeGenFunction &CGF,
                            const VarDecl &CatchParam,
-                           llvm::Value *ParamAddr,
+                           Address ParamAddr,
                            SourceLocation Loc) {
   // Load the exception from where the landing pad saved it.
   llvm::Value *Exn = CGF.getExceptionFromSlot();
@@ -3460,12 +3620,13 @@ static void InitCatchParam(CodeGenFunction &CGF,
           cast<llvm::PointerType>(LLVMCatchTy)->getElementType();
 
         // Create the temporary and write the adjusted pointer into it.
-        llvm::Value *ExnPtrTmp = CGF.CreateTempAlloca(PtrTy, "exn.byref.tmp");
+        Address ExnPtrTmp =
+          CGF.CreateTempAlloca(PtrTy, CGF.getPointerAlign(), "exn.byref.tmp");
         llvm::Value *Casted = CGF.Builder.CreateBitCast(AdjustedExn, PtrTy);
         CGF.Builder.CreateStore(Casted, ExnPtrTmp);
 
         // Bind the reference to the temporary.
-        AdjustedExn = ExnPtrTmp;
+        AdjustedExn = ExnPtrTmp.getPointer();
       }
     }
 
@@ -3510,8 +3671,7 @@ static void InitCatchParam(CodeGenFunction &CGF,
     llvm::Value *Cast = CGF.Builder.CreateBitCast(AdjustedExn, PtrTy);
 
     LValue srcLV = CGF.MakeNaturalAlignAddrLValue(Cast, CatchType);
-    LValue destLV = CGF.MakeAddrLValue(ParamAddr, CatchType,
-                                  CGF.getContext().getDeclAlign(&CatchParam));
+    LValue destLV = CGF.MakeAddrLValue(ParamAddr, CatchType);
     switch (TEK) {
     case TEK_Complex:
       CGF.EmitStoreOfComplex(CGF.EmitLoadOfComplex(srcLV, Loc), destLV,
@@ -3529,6 +3689,8 @@ static void InitCatchParam(CodeGenFunction &CGF,
   }
 
   assert(isa<RecordType>(CatchType) && "unexpected catch type!");
+  auto catchRD = CatchType->getAsCXXRecordDecl();
+  CharUnits caughtExnAlignment = CGF.CGM.getClassPointerAlignment(catchRD);
 
   llvm::Type *PtrTy = LLVMCatchTy->getPointerTo(0); // addrspace 0 ok
 
@@ -3537,7 +3699,8 @@ static void InitCatchParam(CodeGenFunction &CGF,
   const Expr *copyExpr = CatchParam.getInit();
   if (!copyExpr) {
     llvm::Value *rawAdjustedExn = CallBeginCatch(CGF, Exn, true);
-    llvm::Value *adjustedExn = CGF.Builder.CreateBitCast(rawAdjustedExn, PtrTy);
+    Address adjustedExn(CGF.Builder.CreateBitCast(rawAdjustedExn, PtrTy),
+                        caughtExnAlignment);
     CGF.EmitAggregateCopy(ParamAddr, adjustedExn, CatchType);
     return;
   }
@@ -3548,7 +3711,8 @@ static void InitCatchParam(CodeGenFunction &CGF,
     CGF.EmitNounwindRuntimeCall(getGetExceptionPtrFn(CGF.CGM), Exn);
 
   // Cast that to the appropriate type.
-  llvm::Value *adjustedExn = CGF.Builder.CreateBitCast(rawAdjustedExn, PtrTy);
+  Address adjustedExn(CGF.Builder.CreateBitCast(rawAdjustedExn, PtrTy),
+                      caughtExnAlignment);
 
   // The copy expression is defined in terms of an OpaqueValueExpr.
   // Find it and map it to the adjusted expression.
@@ -3560,9 +3724,8 @@ static void InitCatchParam(CodeGenFunction &CGF,
   CGF.EHStack.pushTerminate();
 
   // Perform the copy construction.
-  CharUnits Alignment = CGF.getContext().getDeclAlign(&CatchParam);
   CGF.EmitAggExpr(copyExpr,
-                  AggValueSlot::forAddr(ParamAddr, Alignment, Qualifiers(),
+                  AggValueSlot::forAddr(ParamAddr, Qualifiers(),
                                         AggValueSlot::IsNotDestructed,
                                         AggValueSlot::DoesNotNeedGCBarriers,
                                         AggValueSlot::IsNotAliased));
@@ -3646,7 +3809,7 @@ static llvm::Constant *getClangCallTerminateFn(CodeGenModule &CGM) {
     // Set up the function.
     llvm::BasicBlock *entry =
       llvm::BasicBlock::Create(CGM.getLLVMContext(), "", fn);
-    CGBuilderTy builder(entry);
+    CGBuilderTy builder(CGM, entry);
 
     // Pull the exception pointer out of the parameter list.
     llvm::Value *exn = &*fn->arg_begin();
