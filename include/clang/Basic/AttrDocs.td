@@ -580,6 +580,14 @@ are:
   Apple's Mac OS X operating system.  The minimum deployment target is
   specified by the ``-mmacosx-version-min=*version*`` command-line argument.
 
+``tvos``
+  Apple's tvOS operating system.  The minimum deployment target is specified by
+  the ``-mtvos-version-min=*version*`` command-line argument.
+
+``watchos``
+  Apple's watchOS operating system.  The minimum deployment target is specified by
+  the ``-mwatchos-version-min=*version*`` command-line argument.
+
 A declaration can be used even when deploying back to a platform version prior
 to when the declaration was introduced.  When this happens, the declaration is
 `weakly linked
@@ -1371,7 +1379,9 @@ Loop unrolling optimization hints can be specified with ``#pragma unroll`` and
 do-while, or c++11 range-based for loop.
 
 Specifying ``#pragma unroll`` without a parameter directs the loop unroller to
-attempt to fully unroll the loop if the trip count is known at compile time:
+attempt to fully unroll the loop if the trip count is known at compile time and
+attempt to partially unroll the loop if the trip count is not known at compile
+time:
 
 .. code-block:: c++
 

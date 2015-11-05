@@ -73,7 +73,7 @@ void CodeGenPGO::createFuncNameVar(llvm::GlobalValue::LinkageTypes Linkage) {
       llvm::ConstantDataArray::getString(CGM.getLLVMContext(), FuncName, false);
   FuncNameVar =
       new llvm::GlobalVariable(CGM.getModule(), Value->getType(), true, Linkage,
-                               Value, "__llvm_profile_name_" + FuncName);
+                               Value, llvm::getInstrProfNameVarPrefix() + FuncName);
 
   // Hide the symbol so that we correctly get a copy for each executable.
   if (!llvm::GlobalValue::isLocalLinkage(FuncNameVar->getLinkage()))
@@ -604,7 +604,7 @@ struct ComputeRegionCounts : public ConstStmtVisitor<ComputeRegionCounts> {
     RecordNextStmtCount = true;
   }
 };
-}
+} // end anonymous namespace
 
 void PGOHash::combine(HashType Type) {
   // Check that we never combine 0 and only have six bits.
@@ -763,7 +763,7 @@ CodeGenPGO::applyFunctionAttributes(llvm::IndexedInstrProfReader *PGOReader,
     return;
 
   uint64_t MaxFunctionCount = PGOReader->getMaximumFunctionCount();
-  uint64_t FunctionCount = getRegionCount(0);
+  uint64_t FunctionCount = getRegionCount(nullptr);
   if (FunctionCount >= (uint64_t)(0.3 * (double)MaxFunctionCount))
     // Turn on InlineHint attribute for hot functions.
     // FIXME: 30% is from preliminary tuning on SPEC, it may not be optimal.

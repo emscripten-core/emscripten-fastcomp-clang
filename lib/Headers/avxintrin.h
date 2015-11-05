@@ -35,6 +35,10 @@ typedef int __v8si __attribute__ ((__vector_size__ (32)));
 typedef short __v16hi __attribute__ ((__vector_size__ (32)));
 typedef char __v32qi __attribute__ ((__vector_size__ (32)));
 
+/* We need an explicitly signed variant for char. Note that this shouldn't
+ * appear in the interface though. */
+typedef signed char __v32qs __attribute__((__vector_size__(32)));
+
 typedef float __m256 __attribute__ ((__vector_size__ (32)));
 typedef double __m256d __attribute__((__vector_size__(32)));
 typedef long long __m256i __attribute__((__vector_size__(32)));
@@ -831,53 +835,53 @@ _mm256_storeu_si256(__m256i *__p, __m256i __a)
 
 /* Conditional load ops */
 static __inline __m128d __DEFAULT_FN_ATTRS
-_mm_maskload_pd(double const *__p, __m128d __m)
+_mm_maskload_pd(double const *__p, __m128i __m)
 {
-  return (__m128d)__builtin_ia32_maskloadpd((const __v2df *)__p, (__v2df)__m);
+  return (__m128d)__builtin_ia32_maskloadpd((const __v2df *)__p, (__v2di)__m);
 }
 
 static __inline __m256d __DEFAULT_FN_ATTRS
-_mm256_maskload_pd(double const *__p, __m256d __m)
+_mm256_maskload_pd(double const *__p, __m256i __m)
 {
   return (__m256d)__builtin_ia32_maskloadpd256((const __v4df *)__p,
-                                               (__v4df)__m);
+                                               (__v4di)__m);
 }
 
 static __inline __m128 __DEFAULT_FN_ATTRS
-_mm_maskload_ps(float const *__p, __m128 __m)
+_mm_maskload_ps(float const *__p, __m128i __m)
 {
-  return (__m128)__builtin_ia32_maskloadps((const __v4sf *)__p, (__v4sf)__m);
+  return (__m128)__builtin_ia32_maskloadps((const __v4sf *)__p, (__v4si)__m);
 }
 
 static __inline __m256 __DEFAULT_FN_ATTRS
-_mm256_maskload_ps(float const *__p, __m256 __m)
+_mm256_maskload_ps(float const *__p, __m256i __m)
 {
-  return (__m256)__builtin_ia32_maskloadps256((const __v8sf *)__p, (__v8sf)__m);
+  return (__m256)__builtin_ia32_maskloadps256((const __v8sf *)__p, (__v8si)__m);
 }
 
 /* Conditional store ops */
 static __inline void __DEFAULT_FN_ATTRS
-_mm256_maskstore_ps(float *__p, __m256 __m, __m256 __a)
+_mm256_maskstore_ps(float *__p, __m256i __m, __m256 __a)
 {
-  __builtin_ia32_maskstoreps256((__v8sf *)__p, (__v8sf)__m, (__v8sf)__a);
+  __builtin_ia32_maskstoreps256((__v8sf *)__p, (__v8si)__m, (__v8sf)__a);
 }
 
 static __inline void __DEFAULT_FN_ATTRS
-_mm_maskstore_pd(double *__p, __m128d __m, __m128d __a)
+_mm_maskstore_pd(double *__p, __m128i __m, __m128d __a)
 {
-  __builtin_ia32_maskstorepd((__v2df *)__p, (__v2df)__m, (__v2df)__a);
+  __builtin_ia32_maskstorepd((__v2df *)__p, (__v2di)__m, (__v2df)__a);
 }
 
 static __inline void __DEFAULT_FN_ATTRS
-_mm256_maskstore_pd(double *__p, __m256d __m, __m256d __a)
+_mm256_maskstore_pd(double *__p, __m256i __m, __m256d __a)
 {
-  __builtin_ia32_maskstorepd256((__v4df *)__p, (__v4df)__m, (__v4df)__a);
+  __builtin_ia32_maskstorepd256((__v4df *)__p, (__v4di)__m, (__v4df)__a);
 }
 
 static __inline void __DEFAULT_FN_ATTRS
-_mm_maskstore_ps(float *__p, __m128 __m, __m128 __a)
+_mm_maskstore_ps(float *__p, __m128i __m, __m128 __a)
 {
-  __builtin_ia32_maskstoreps((__v4sf *)__p, (__v4sf)__m, (__v4sf)__a);
+  __builtin_ia32_maskstoreps((__v4sf *)__p, (__v4si)__m, (__v4sf)__a);
 }
 
 /* Cacheability support ops */
@@ -900,6 +904,24 @@ _mm256_stream_ps(float *__p, __m256 __a)
 }
 
 /* Create vectors */
+static __inline__ __m256d __DEFAULT_FN_ATTRS
+_mm256_undefined_pd()
+{
+  return (__m256d)__builtin_ia32_undef256();
+}
+
+static __inline__ __m256 __DEFAULT_FN_ATTRS
+_mm256_undefined_ps()
+{
+  return (__m256)__builtin_ia32_undef256();
+}
+
+static __inline__ __m256i __DEFAULT_FN_ATTRS
+_mm256_undefined_si256()
+{
+  return (__m256i)__builtin_ia32_undef256();
+}
+
 static __inline __m256d __DEFAULT_FN_ATTRS
 _mm256_set_pd(double __a, double __b, double __c, double __d)
 {
@@ -1140,7 +1162,7 @@ _mm256_castsi128_si256(__m128i __a)
   return __builtin_shufflevector(__a, __a, 0, 1, -1, -1);
 }
 
-/* 
+/*
    Vector insert.
    We use macros rather than inlines because we only want to accept
    invocations where the immediate M is a constant expression.
@@ -1176,7 +1198,7 @@ _mm256_castsi128_si256(__m128i __a)
     (((M) & 1) ? 4 : 2), \
     (((M) & 1) ? 5 : 3) );})
 
-/* 
+/*
    Vector extract.
    We use macros rather than inlines because we only want to accept
    invocations where the immediate M is a constant expression.
@@ -1222,7 +1244,7 @@ _mm256_loadu2_m128d(double const *__addr_hi, double const *__addr_lo)
   struct __loadu_pd {
     __m128d __v;
   } __attribute__((__packed__, __may_alias__));
-  
+
   __m256d __v256 = _mm256_castpd128_pd256(((struct __loadu_pd*)__addr_lo)->__v);
   return _mm256_insertf128_pd(__v256, ((struct __loadu_pd*)__addr_hi)->__v, 1);
 }

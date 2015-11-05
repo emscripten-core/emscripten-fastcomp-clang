@@ -1451,32 +1451,6 @@ void NamedDecl::getNameForDiagnostic(raw_ostream &OS,
     printName(OS);
 }
 
-static bool isKindReplaceableBy(Decl::Kind OldK, Decl::Kind NewK) {
-  // For method declarations, we never replace.
-  if (ObjCMethodDecl::classofKind(NewK))
-    return false;
-
-  if (OldK == NewK)
-    return true;
-
-  // A compatibility alias for a class can be replaced by an interface.
-  if (ObjCCompatibleAliasDecl::classofKind(OldK) &&
-      ObjCInterfaceDecl::classofKind(NewK))
-    return true;
-
-  // A typedef-declaration, alias-declaration, or Objective-C class declaration
-  // can replace another declaration of the same type. Semantic analysis checks
-  // that we have matching types.
-  if ((TypedefNameDecl::classofKind(OldK) ||
-       ObjCInterfaceDecl::classofKind(OldK)) &&
-      (TypedefNameDecl::classofKind(NewK) ||
-       ObjCInterfaceDecl::classofKind(NewK)))
-    return true;
-
-  // Otherwise, a kind mismatch implies that the declaration is not replaced.
-  return false;
-}
-
 template<typename T> static bool isRedeclarableImpl(Redeclarable<T> *) {
   return true;
 }
@@ -1500,8 +1474,18 @@ bool NamedDecl::declarationReplaces(NamedDecl *OldD, bool IsKnownNewer) const {
   if (OldD->isFromASTFile() && isFromASTFile())
     return false;
 
-  if (!isKindReplaceableBy(OldD->getKind(), getKind()))
+  // A kind mismatch implies that the declaration is not replaced.
+  if (OldD->getKind() != getKind())
     return false;
+
+  // For method declarations, we never replace. (Why?)
+  if (isa<ObjCMethodDecl>(this))
+    return false;
+
+  // For parameters, pick the newer one. This is either an error or (in
+  // Objective-C) permitted as an extension.
+  if (isa<ParmVarDecl>(this))
+    return true;
 
   // Inline namespaces can give us two declarations with the same
   // name and kind in the same scope but different contexts; we should
@@ -1510,28 +1494,8 @@ bool NamedDecl::declarationReplaces(NamedDecl *OldD, bool IsKnownNewer) const {
           OldD->getDeclContext()->getRedeclContext()))
     return false;
 
-  if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(this))
-    // For function declarations, we keep track of redeclarations.
-    // FIXME: This returns false for functions that should in fact be replaced.
-    // Instead, perform some kind of type check?
-    if (FD->getPreviousDecl() != OldD)
-      return false;
-
-  // For function templates, the underlying function declarations are linked.
-  if (const FunctionTemplateDecl *FunctionTemplate =
-          dyn_cast<FunctionTemplateDecl>(this))
-    return FunctionTemplate->getTemplatedDecl()->declarationReplaces(
-        cast<FunctionTemplateDecl>(OldD)->getTemplatedDecl());
-
-  // Using shadow declarations can be overloaded on their target declarations
-  // if they introduce functions.
-  // FIXME: If our target replaces the old target, can we replace the old
-  //        shadow declaration?
-  if (auto *USD = dyn_cast<UsingShadowDecl>(this))
-    if (USD->getTargetDecl() != cast<UsingShadowDecl>(OldD)->getTargetDecl())
-      return false;
-
-  // Using declarations can be overloaded if they introduce functions.
+  // Using declarations can be replaced if they import the same name from the
+  // same context.
   if (auto *UD = dyn_cast<UsingDecl>(this)) {
     ASTContext &Context = getASTContext();
     return Context.getCanonicalNestedNameSpecifier(UD->getQualifier()) ==
@@ -1546,13 +1510,20 @@ bool NamedDecl::declarationReplaces(NamedDecl *OldD, bool IsKnownNewer) const {
   }
 
   // UsingDirectiveDecl's are not really NamedDecl's, and all have same name.
-  // We want to keep it, unless it nominates same namespace.
+  // They can be replaced if they nominate the same namespace.
+  // FIXME: Is this true even if they have different module visibility?
   if (auto *UD = dyn_cast<UsingDirectiveDecl>(this))
     return UD->getNominatedNamespace()->getOriginalNamespace() ==
            cast<UsingDirectiveDecl>(OldD)->getNominatedNamespace()
                ->getOriginalNamespace();
 
-  if (!IsKnownNewer && isRedeclarable(getKind())) {
+  if (isRedeclarable(getKind())) {
+    if (getCanonicalDecl() != OldD->getCanonicalDecl())
+      return false;
+
+    if (IsKnownNewer)
+      return true;
+
     // Check whether this is actually newer than OldD. We want to keep the
     // newer declaration. This loop will usually only iterate once, because
     // OldD is usually the previous declaration.
@@ -1567,11 +1538,16 @@ bool NamedDecl::declarationReplaces(NamedDecl *OldD, bool IsKnownNewer) const {
       if (D->isCanonicalDecl())
         return false;
     }
+
+    // It's a newer declaration of the same kind of declaration in the same
+    // scope: we want this decl instead of the existing one.
+    return true;
   }
 
-  // It's a newer declaration of the same kind of declaration in the same scope,
-  // and not an overload: we want this decl instead of the existing one.
-  return true;
+  // In all other cases, we need to keep both declarations in case they have
+  // different visibility. Any attempt to use the name will result in an
+  // ambiguity if more than one is visible.
+  return false;
 }
 
 bool NamedDecl::hasLinkage() const {
@@ -1653,11 +1629,9 @@ void DeclaratorDecl::setQualifierInfo(NestedNameSpecifierLoc QualifierLoc) {
   }
 }
 
-void
-DeclaratorDecl::setTemplateParameterListsInfo(ASTContext &Context,
-                                              unsigned NumTPLists,
-                                              TemplateParameterList **TPLists) {
-  assert(NumTPLists > 0);
+void DeclaratorDecl::setTemplateParameterListsInfo(
+    ASTContext &Context, ArrayRef<TemplateParameterList *> TPLists) {
+  assert(!TPLists.empty());
   // Make sure the extended decl info is allocated.
   if (!hasExtInfo()) {
     // Save (non-extended) type source info pointer.
@@ -1668,7 +1642,7 @@ DeclaratorDecl::setTemplateParameterListsInfo(ASTContext &Context,
     getExtInfo()->TInfo = savedTInfo;
   }
   // Set the template parameter lists info.
-  getExtInfo()->setTemplateParameterListsInfo(Context, NumTPLists, TPLists);
+  getExtInfo()->setTemplateParameterListsInfo(Context, TPLists);
 }
 
 SourceLocation DeclaratorDecl::getOuterLocStart() const {
@@ -1726,13 +1700,8 @@ SourceRange DeclaratorDecl::getSourceRange() const {
   return SourceRange(getOuterLocStart(), RangeEnd);
 }
 
-void
-QualifierInfo::setTemplateParameterListsInfo(ASTContext &Context,
-                                             unsigned NumTPLists,
-                                             TemplateParameterList **TPLists) {
-  assert((NumTPLists == 0 || TPLists != nullptr) &&
-         "Empty array of template parameters with positive size!");
-
+void QualifierInfo::setTemplateParameterListsInfo(
+    ASTContext &Context, ArrayRef<TemplateParameterList *> TPLists) {
   // Free previous template parameters (if any).
   if (NumTemplParamLists > 0) {
     Context.Deallocate(TemplParamLists);
@@ -1740,10 +1709,10 @@ QualifierInfo::setTemplateParameterListsInfo(ASTContext &Context,
     NumTemplParamLists = 0;
   }
   // Set info on matched template parameter lists (if any).
-  if (NumTPLists > 0) {
-    TemplParamLists = new (Context) TemplateParameterList*[NumTPLists];
-    NumTemplParamLists = NumTPLists;
-    std::copy(TPLists, TPLists + NumTPLists, TemplParamLists);
+  if (!TPLists.empty()) {
+    TemplParamLists = new (Context) TemplateParameterList *[TPLists.size()];
+    NumTemplParamLists = TPLists.size();
+    std::copy(TPLists.begin(), TPLists.end(), TemplParamLists);
   }
 }
 
@@ -1756,7 +1725,6 @@ const char *VarDecl::getStorageClassSpecifierString(StorageClass SC) {
   case SC_None:                 break;
   case SC_Auto:                 return "auto";
   case SC_Extern:               return "extern";
-  case SC_OpenCLWorkGroupLocal: return "<<work-group-local>>";
   case SC_PrivateExtern:        return "__private_extern__";
   case SC_Register:             return "register";
   case SC_Static:               return "static";
@@ -2711,7 +2679,8 @@ bool FunctionDecl::isMSExternInline() const {
   assert(isInlined() && "expected to get called on an inlined function!");
 
   const ASTContext &Context = getASTContext();
-  if (!Context.getLangOpts().MSVCCompat && !hasAttr<DLLExportAttr>())
+  if (!Context.getTargetInfo().getCXXABI().isMicrosoft() &&
+      !hasAttr<DLLExportAttr>())
     return false;
 
   for (const FunctionDecl *FD = getMostRecentDecl(); FD;
@@ -3115,33 +3084,35 @@ FunctionDecl::setDependentTemplateSpecialization(ASTContext &Context,
                                     const UnresolvedSetImpl &Templates,
                              const TemplateArgumentListInfo &TemplateArgs) {
   assert(TemplateOrSpecialization.isNull());
-  size_t Size = sizeof(DependentFunctionTemplateSpecializationInfo);
-  Size += TemplateArgs.size() * sizeof(TemplateArgumentLoc);
-  Size += Templates.size() * sizeof(FunctionTemplateDecl *);
-  void *Buffer = Context.Allocate(Size);
   DependentFunctionTemplateSpecializationInfo *Info =
-    new (Buffer) DependentFunctionTemplateSpecializationInfo(Templates,
-                                                             TemplateArgs);
+      DependentFunctionTemplateSpecializationInfo::Create(Context, Templates,
+                                                          TemplateArgs);
   TemplateOrSpecialization = Info;
+}
+
+DependentFunctionTemplateSpecializationInfo *
+DependentFunctionTemplateSpecializationInfo::Create(
+    ASTContext &Context, const UnresolvedSetImpl &Ts,
+    const TemplateArgumentListInfo &TArgs) {
+  void *Buffer = Context.Allocate(
+      totalSizeToAlloc<TemplateArgumentLoc, FunctionTemplateDecl *>(
+          TArgs.size(), Ts.size()));
+  return new (Buffer) DependentFunctionTemplateSpecializationInfo(Ts, TArgs);
 }
 
 DependentFunctionTemplateSpecializationInfo::
 DependentFunctionTemplateSpecializationInfo(const UnresolvedSetImpl &Ts,
                                       const TemplateArgumentListInfo &TArgs)
   : AngleLocs(TArgs.getLAngleLoc(), TArgs.getRAngleLoc()) {
-  static_assert(sizeof(*this) % llvm::AlignOf<void *>::Alignment == 0,
-                "Trailing data is unaligned!");
 
   NumTemplates = Ts.size();
   NumArgs = TArgs.size();
 
-  FunctionTemplateDecl **TsArray =
-    const_cast<FunctionTemplateDecl**>(getTemplates());
+  FunctionTemplateDecl **TsArray = getTrailingObjects<FunctionTemplateDecl *>();
   for (unsigned I = 0, E = Ts.size(); I != E; ++I)
     TsArray[I] = cast<FunctionTemplateDecl>(Ts[I]->getUnderlyingDecl());
 
-  TemplateArgumentLoc *ArgsArray =
-    const_cast<TemplateArgumentLoc*>(getTemplateArgs());
+  TemplateArgumentLoc *ArgsArray = getTrailingObjects<TemplateArgumentLoc>();
   for (unsigned I = 0, E = TArgs.size(); I != E; ++I)
     new (&ArgsArray[I]) TemplateArgumentLoc(TArgs[I]);
 }
@@ -3408,7 +3379,7 @@ SourceRange TagDecl::getSourceRange() const {
 TagDecl *TagDecl::getCanonicalDecl() { return getFirstDecl(); }
 
 void TagDecl::setTypedefNameForAnonDecl(TypedefNameDecl *TDD) {
-  NamedDeclOrQualifier = TDD;
+  TypedefNameDeclOrQualifier = TDD;
   if (const Type *T = getTypeForDecl()) {
     (void)T;
     assert(T->isLinkageValid());
@@ -3466,7 +3437,7 @@ void TagDecl::setQualifierInfo(NestedNameSpecifierLoc QualifierLoc) {
   if (QualifierLoc) {
     // Make sure the extended qualifier info is allocated.
     if (!hasExtInfo())
-      NamedDeclOrQualifier = new (getASTContext()) ExtInfo;
+      TypedefNameDeclOrQualifier = new (getASTContext()) ExtInfo;
     // Set qualifier info.
     getExtInfo()->QualifierLoc = QualifierLoc;
   } else {
@@ -3474,7 +3445,7 @@ void TagDecl::setQualifierInfo(NestedNameSpecifierLoc QualifierLoc) {
     if (hasExtInfo()) {
       if (getExtInfo()->NumTemplParamLists == 0) {
         getASTContext().Deallocate(getExtInfo());
-        NamedDeclOrQualifier = (TypedefNameDecl*)nullptr;
+        TypedefNameDeclOrQualifier = (TypedefNameDecl *)nullptr;
       }
       else
         getExtInfo()->QualifierLoc = QualifierLoc;
@@ -3482,16 +3453,15 @@ void TagDecl::setQualifierInfo(NestedNameSpecifierLoc QualifierLoc) {
   }
 }
 
-void TagDecl::setTemplateParameterListsInfo(ASTContext &Context,
-                                            unsigned NumTPLists,
-                                            TemplateParameterList **TPLists) {
-  assert(NumTPLists > 0);
+void TagDecl::setTemplateParameterListsInfo(
+    ASTContext &Context, ArrayRef<TemplateParameterList *> TPLists) {
+  assert(!TPLists.empty());
   // Make sure the extended decl info is allocated.
   if (!hasExtInfo())
     // Allocate external info struct.
-    NamedDeclOrQualifier = new (getASTContext()) ExtInfo;
+    TypedefNameDeclOrQualifier = new (getASTContext()) ExtInfo;
   // Set the template parameter lists info.
-  getExtInfo()->setTemplateParameterListsInfo(Context, NumTPLists, TPLists);
+  getExtInfo()->setTemplateParameterListsInfo(Context, TPLists);
 }
 
 //===----------------------------------------------------------------------===//
@@ -3647,10 +3617,6 @@ bool RecordDecl::isMsStruct(const ASTContext &C) const {
   return hasAttr<MSStructAttr>() || C.getLangOpts().MSBitfields == 1;
 }
 
-static bool isFieldOrIndirectField(Decl::Kind K) {
-  return FieldDecl::classofKind(K) || IndirectFieldDecl::classofKind(K);
-}
-
 void RecordDecl::LoadFieldsFromExternalStorage() const {
   ExternalASTSource *Source = getASTContext().getExternalSource();
   assert(hasExternalLexicalStorage() && Source && "No external storage?");
@@ -3659,16 +3625,10 @@ void RecordDecl::LoadFieldsFromExternalStorage() const {
   ExternalASTSource::Deserializing TheFields(Source);
 
   SmallVector<Decl*, 64> Decls;
-  LoadedFieldsFromExternalStorage = true;  
-  switch (Source->FindExternalLexicalDecls(this, isFieldOrIndirectField,
-                                           Decls)) {
-  case ELR_Success:
-    break;
-    
-  case ELR_AlreadyLoaded:
-  case ELR_Failure:
-    return;
-  }
+  LoadedFieldsFromExternalStorage = true;
+  Source->FindExternalLexicalDecls(this, [](Decl::Kind K) {
+    return FieldDecl::classofKind(K) || IndirectFieldDecl::classofKind(K);
+  }, Decls);
 
 #ifndef NDEBUG
   // Check that all decls we got were FieldDecls.
@@ -3757,26 +3717,17 @@ void BlockDecl::setParams(ArrayRef<ParmVarDecl *> NewParamInfo) {
   }
 }
 
-void BlockDecl::setCaptures(ASTContext &Context,
-                            const Capture *begin,
-                            const Capture *end,
-                            bool capturesCXXThis) {
-  CapturesCXXThis = capturesCXXThis;
+void BlockDecl::setCaptures(ASTContext &Context, ArrayRef<Capture> Captures,
+                            bool CapturesCXXThis) {
+  this->CapturesCXXThis = CapturesCXXThis;
+  this->NumCaptures = Captures.size();
 
-  if (begin == end) {
-    NumCaptures = 0;
-    Captures = nullptr;
+  if (Captures.empty()) {
+    this->Captures = nullptr;
     return;
   }
 
-  NumCaptures = end - begin;
-
-  // Avoid new Capture[] because we don't want to provide a default
-  // constructor.
-  size_t allocationSize = NumCaptures * sizeof(Capture);
-  void *buffer = Context.Allocate(allocationSize, /*alignment*/sizeof(void*));
-  memcpy(buffer, begin, allocationSize);
-  Captures = static_cast<Capture*>(buffer);
+  this->Captures = Captures.copy(Context).data();
 }
 
 bool BlockDecl::capturesVariable(const VarDecl *variable) const {
@@ -3891,13 +3842,13 @@ BlockDecl *BlockDecl::CreateDeserialized(ASTContext &C, unsigned ID) {
 
 CapturedDecl *CapturedDecl::Create(ASTContext &C, DeclContext *DC,
                                    unsigned NumParams) {
-  return new (C, DC, NumParams * sizeof(ImplicitParamDecl *))
+  return new (C, DC, additionalSizeToAlloc<ImplicitParamDecl *>(NumParams))
       CapturedDecl(DC, NumParams);
 }
 
 CapturedDecl *CapturedDecl::CreateDeserialized(ASTContext &C, unsigned ID,
                                                unsigned NumParams) {
-  return new (C, ID, NumParams * sizeof(ImplicitParamDecl *))
+  return new (C, ID, additionalSizeToAlloc<ImplicitParamDecl *>(NumParams))
       CapturedDecl(nullptr, NumParams);
 }
 
@@ -4042,9 +3993,9 @@ ImportDecl::ImportDecl(DeclContext *DC, SourceLocation StartLoc,
     NextLocalImport()
 {
   assert(getNumModuleIdentifiers(Imported) == IdentifierLocs.size());
-  SourceLocation *StoredLocs = reinterpret_cast<SourceLocation *>(this + 1);
-  memcpy(StoredLocs, IdentifierLocs.data(), 
-         IdentifierLocs.size() * sizeof(SourceLocation));
+  SourceLocation *StoredLocs = getTrailingObjects<SourceLocation>();
+  std::uninitialized_copy(IdentifierLocs.begin(), IdentifierLocs.end(),
+                          StoredLocs);
 }
 
 ImportDecl::ImportDecl(DeclContext *DC, SourceLocation StartLoc, 
@@ -4052,13 +4003,14 @@ ImportDecl::ImportDecl(DeclContext *DC, SourceLocation StartLoc,
   : Decl(Import, DC, StartLoc), ImportedAndComplete(Imported, false),
     NextLocalImport()
 {
-  *reinterpret_cast<SourceLocation *>(this + 1) = EndLoc;
+  *getTrailingObjects<SourceLocation>() = EndLoc;
 }
 
 ImportDecl *ImportDecl::Create(ASTContext &C, DeclContext *DC,
                                SourceLocation StartLoc, Module *Imported,
                                ArrayRef<SourceLocation> IdentifierLocs) {
-  return new (C, DC, IdentifierLocs.size() * sizeof(SourceLocation))
+  return new (C, DC,
+              additionalSizeToAlloc<SourceLocation>(IdentifierLocs.size()))
       ImportDecl(DC, StartLoc, Imported, IdentifierLocs);
 }
 
@@ -4066,16 +4018,15 @@ ImportDecl *ImportDecl::CreateImplicit(ASTContext &C, DeclContext *DC,
                                        SourceLocation StartLoc,
                                        Module *Imported,
                                        SourceLocation EndLoc) {
-  ImportDecl *Import =
-      new (C, DC, sizeof(SourceLocation)) ImportDecl(DC, StartLoc,
-                                                     Imported, EndLoc);
+  ImportDecl *Import = new (C, DC, additionalSizeToAlloc<SourceLocation>(1))
+      ImportDecl(DC, StartLoc, Imported, EndLoc);
   Import->setImplicit();
   return Import;
 }
 
 ImportDecl *ImportDecl::CreateDeserialized(ASTContext &C, unsigned ID,
                                            unsigned NumLocations) {
-  return new (C, ID, NumLocations * sizeof(SourceLocation))
+  return new (C, ID, additionalSizeToAlloc<SourceLocation>(NumLocations))
       ImportDecl(EmptyShell());
 }
 
@@ -4083,16 +4034,14 @@ ArrayRef<SourceLocation> ImportDecl::getIdentifierLocs() const {
   if (!ImportedAndComplete.getInt())
     return None;
 
-  const SourceLocation *StoredLocs
-    = reinterpret_cast<const SourceLocation *>(this + 1);
+  const SourceLocation *StoredLocs = getTrailingObjects<SourceLocation>();
   return llvm::makeArrayRef(StoredLocs,
                             getNumModuleIdentifiers(getImportedModule()));
 }
 
 SourceRange ImportDecl::getSourceRange() const {
   if (!ImportedAndComplete.getInt())
-    return SourceRange(getLocation(), 
-                       *reinterpret_cast<const SourceLocation *>(this + 1));
-  
+    return SourceRange(getLocation(), *getTrailingObjects<SourceLocation>());
+
   return SourceRange(getLocation(), getIdentifierLocs().back());
 }

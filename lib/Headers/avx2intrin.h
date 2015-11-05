@@ -208,7 +208,9 @@ _mm256_cmpeq_epi64(__m256i __a, __m256i __b)
 static __inline__ __m256i __DEFAULT_FN_ATTRS
 _mm256_cmpgt_epi8(__m256i __a, __m256i __b)
 {
-  return (__m256i)((__v32qi)__a > (__v32qi)__b);
+  /* This function always performs a signed comparison, but __v32qi is a char
+     which may be signed or unsigned, so use __v32qs. */
+  return (__m256i)((__v32qs)__a > (__v32qs)__b);
 }
 
 static __inline__ __m256i __DEFAULT_FN_ATTRS
@@ -752,15 +754,15 @@ _mm256_xor_si256(__m256i __a, __m256i __b)
 }
 
 static __inline__ __m256i __DEFAULT_FN_ATTRS
-_mm256_stream_load_si256(__m256i *__V)
+_mm256_stream_load_si256(__m256i const *__V)
 {
-  return (__m256i)__builtin_ia32_movntdqa256((__v4di *)__V);
+  return (__m256i)__builtin_ia32_movntdqa256((const __v4di *)__V);
 }
 
 static __inline__ __m128 __DEFAULT_FN_ATTRS
 _mm_broadcastss_ps(__m128 __X)
 {
-  return (__m128)__builtin_ia32_vbroadcastss_ps((__v4sf)__X);
+  return (__m128)__builtin_shufflevector((__v4sf)__X, (__v4sf)__X, 0, 0, 0, 0);
 }
 
 static __inline__ __m128d __DEFAULT_FN_ATTRS
@@ -772,13 +774,13 @@ _mm_broadcastsd_pd(__m128d __a)
 static __inline__ __m256 __DEFAULT_FN_ATTRS
 _mm256_broadcastss_ps(__m128 __X)
 {
-  return (__m256)__builtin_ia32_vbroadcastss_ps256((__v4sf)__X);
+  return (__m256)__builtin_shufflevector((__v4sf)__X, (__v4sf)__X, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 static __inline__ __m256d __DEFAULT_FN_ATTRS
 _mm256_broadcastsd_pd(__m128d __X)
 {
-  return (__m256d)__builtin_ia32_vbroadcastsd_pd256((__v2df)__X);
+  return (__m256d)__builtin_shufflevector((__v2df)__X, (__v2df)__X, 0, 0, 0, 0);
 }
 
 static __inline__ __m256i __DEFAULT_FN_ATTRS
@@ -812,50 +814,50 @@ _mm256_broadcastsi128_si256(__m128i __X)
 static __inline__ __m256i __DEFAULT_FN_ATTRS
 _mm256_broadcastb_epi8(__m128i __X)
 {
-  return (__m256i)__builtin_ia32_pbroadcastb256((__v16qi)__X);
+  return (__m256i)__builtin_shufflevector((__v16qi)__X, (__v16qi)__X, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 static __inline__ __m256i __DEFAULT_FN_ATTRS
 _mm256_broadcastw_epi16(__m128i __X)
 {
-  return (__m256i)__builtin_ia32_pbroadcastw256((__v8hi)__X);
+  return (__m256i)__builtin_shufflevector((__v8hi)__X, (__v8hi)__X, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 static __inline__ __m256i __DEFAULT_FN_ATTRS
 _mm256_broadcastd_epi32(__m128i __X)
 {
-  return (__m256i)__builtin_ia32_pbroadcastd256((__v4si)__X);
+  return (__m256i)__builtin_shufflevector((__v4si)__X, (__v4si)__X, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 static __inline__ __m256i __DEFAULT_FN_ATTRS
 _mm256_broadcastq_epi64(__m128i __X)
 {
-  return (__m256i)__builtin_ia32_pbroadcastq256(__X);
+  return (__m256i)__builtin_shufflevector(__X, __X, 0, 0, 0, 0);
 }
 
 static __inline__ __m128i __DEFAULT_FN_ATTRS
 _mm_broadcastb_epi8(__m128i __X)
 {
-  return (__m128i)__builtin_ia32_pbroadcastb128((__v16qi)__X);
+  return (__m128i)__builtin_shufflevector((__v16qi)__X, (__v16qi)__X, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 static __inline__ __m128i __DEFAULT_FN_ATTRS
 _mm_broadcastw_epi16(__m128i __X)
 {
-  return (__m128i)__builtin_ia32_pbroadcastw128((__v8hi)__X);
+  return (__m128i)__builtin_shufflevector((__v8hi)__X, (__v8hi)__X, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 
 static __inline__ __m128i __DEFAULT_FN_ATTRS
 _mm_broadcastd_epi32(__m128i __X)
 {
-  return (__m128i)__builtin_ia32_pbroadcastd128((__v4si)__X);
+  return (__m128i)__builtin_shufflevector((__v4si)__X, (__v4si)__X, 0, 0, 0, 0);
 }
 
 static __inline__ __m128i __DEFAULT_FN_ATTRS
 _mm_broadcastq_epi64(__m128i __X)
 {
-  return (__m128i)__builtin_ia32_pbroadcastq128(__X);
+  return (__m128i)__builtin_shufflevector(__X, __X, 0, 0);
 }
 
 static __inline__ __m256i __DEFAULT_FN_ATTRS

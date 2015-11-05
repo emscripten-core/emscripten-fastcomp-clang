@@ -42,7 +42,7 @@ bool MigrationPass::CFBridgingFunctionsDefined() {
 
 bool trans::canApplyWeak(ASTContext &Ctx, QualType type,
                          bool AllowOnUnknownClass) {
-  if (!Ctx.getLangOpts().ObjCARCWeak)
+  if (!Ctx.getLangOpts().ObjCWeakRuntime)
     return false;
 
   QualType T = type;
@@ -50,7 +50,8 @@ bool trans::canApplyWeak(ASTContext &Ctx, QualType type,
     return false;
 
   // iOS is always safe to use 'weak'.
-  if (Ctx.getTargetInfo().getTriple().isiOS())
+  if (Ctx.getTargetInfo().getTriple().isiOS() ||
+      Ctx.getTargetInfo().getTriple().isWatchOS())
     AllowOnUnknownClass = true;
 
   while (const PointerType *ptr = T->getAs<PointerType>())

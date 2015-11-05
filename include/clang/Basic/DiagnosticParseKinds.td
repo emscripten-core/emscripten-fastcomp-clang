@@ -271,7 +271,7 @@ def warn_cxx98_compat_ref_qualifier : Warning<
   "reference qualifiers on functions are incompatible with C++98">,
   InGroup<CXX98Compat>, DefaultIgnore;
 def ext_inline_namespace : ExtWarn<
-  "inline namespaces are a C++11 feature">, InGroup<CXX11>;
+  "inline namespaces are a C++11 feature">, InGroup<CXX11InlineNamespace>;
 def warn_cxx98_compat_inline_namespace : Warning<
   "inline namespaces are incompatible with C++98">,
   InGroup<CXX98Compat>, DefaultIgnore;
@@ -987,8 +987,6 @@ def err_omp_expected_punc : Error<
   "expected ',' or ')' in '%0' %select{clause|directive}1">;
 def err_omp_unexpected_clause : Error<
   "unexpected OpenMP clause '%0' in directive '#pragma omp %1'">;
-def err_omp_more_one_clause : Error<
-  "directive '#pragma omp %0' cannot contain more than one '%1' clause">;
 def err_omp_immediate_directive : Error<
   "'#pragma omp %0' cannot be an immediate substatement">;
 def err_omp_expected_identifier_for_critical : Error<
@@ -997,12 +995,12 @@ def err_omp_expected_identifier_for_critical : Error<
 // Pragma loop support.
 def err_pragma_loop_missing_argument : Error<
   "missing argument; expected %select{an integer value|"
-  "%select{'enable', 'assume_safety'|'full'}1 or 'disable'}0">;
+  "'enable', %select{'assume_safety'|'full'}1 or 'disable'}0">;
 def err_pragma_loop_invalid_option : Error<
   "%select{invalid|missing}0 option%select{ %1|}0; expected vectorize, "
   "vectorize_width, interleave, interleave_count, unroll, or unroll_count">;
 def err_pragma_invalid_keyword : Error<
-  "invalid argument; expected %select{'enable', 'assume_safety'|'full'}0 or 'disable'">;
+  "invalid argument; expected 'enable', %select{'assume_safety'|'full'}0 or 'disable'">;
 
 // Pragma unroll support.
 def warn_pragma_unroll_cuda_value_in_parens : Warning<
@@ -1015,6 +1013,7 @@ def err_module_expected_ident : Error<
   "expected a module name after module import">;
 def err_module_expected_semi : Error<
   "expected ';' after module name">;
+def err_missing_before_module_end : Error<"expected %0 at end of module">;
 }
 
 let CategoryName = "Generics Issue" in {
@@ -1027,6 +1026,11 @@ def err_objc_parameterized_implementation : Error<
 
 def err_objc_type_args_after_protocols : Error<
   "protocol qualifiers must precede type arguments">;
+}
+
+let CategoryName = "Coroutines Issue" in {
+def err_for_co_await_not_range_for : Error<
+  "'co_await' modifier can only be applied to range-based for loop">;
 }
 
 } // end of Parser diagnostics
