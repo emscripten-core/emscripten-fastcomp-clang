@@ -1,4 +1,4 @@
-//===--- LoopWidening.cpp - Instruction class definition --------*- C++ -*-===//
+//===--- LoopWidening.cpp - Widen loops -------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -23,7 +23,7 @@ using namespace ento;
 static const Expr *getLoopCondition(const Stmt *LoopStmt) {
   switch (LoopStmt->getStmtClass()) {
   default:
-    return NULL;
+    return nullptr;
   case Stmt::ForStmtClass:
     return cast<ForStmt>(LoopStmt)->getCond();
   case Stmt::WhileStmtClass:

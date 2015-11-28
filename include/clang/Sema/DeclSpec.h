@@ -31,7 +31,6 @@
 #include "clang/Lex/Token.h"
 #include "clang/Sema/AttributeList.h"
 #include "clang/Sema/Ownership.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -41,14 +40,10 @@ namespace clang {
   class CXXRecordDecl;
   class TypeLoc;
   class LangOptions;
-  class DiagnosticsEngine;
   class IdentifierInfo;
   class NamespaceAliasDecl;
   class NamespaceDecl;
-  class NestedNameSpecifier;
-  class NestedNameSpecifierLoc;
   class ObjCDeclSpec;
-  class Preprocessor;
   class Sema;
   class Declarator;
   struct TemplateIdAnnotation;
@@ -301,6 +296,7 @@ public:
   static const TST TST_decltype_auto = clang::TST_decltype_auto;
   static const TST TST_underlyingType = clang::TST_underlyingType;
   static const TST TST_auto = clang::TST_auto;
+  static const TST TST_auto_type = clang::TST_auto_type;
   static const TST TST_unknown_anytype = clang::TST_unknown_anytype;
   static const TST TST_atomic = clang::TST_atomic;
   static const TST TST_error = clang::TST_error;
@@ -512,7 +508,8 @@ public:
   void setTypeofParensRange(SourceRange range) { TypeofParensRange = range; }
 
   bool containsPlaceholderType() const {
-    return TypeSpecType == TST_auto || TypeSpecType == TST_decltype_auto;
+    return (TypeSpecType == TST_auto || TypeSpecType == TST_auto_type ||
+            TypeSpecType == TST_decltype_auto);
   }
 
   bool hasTagDefinition() const;
@@ -742,8 +739,7 @@ public:
   /// Finish - This does final analysis of the declspec, issuing diagnostics for
   /// things like "_Imaginary" (lacking an FP type).  After calling this method,
   /// DeclSpec is guaranteed self-consistent, even if an error occurred.
-  void Finish(DiagnosticsEngine &D, Preprocessor &PP,
-              const PrintingPolicy &Policy);
+  void Finish(Sema &S, const PrintingPolicy &Policy);
 
   const WrittenBuiltinSpecs& getWrittenBuiltinSpecs() const {
     return writtenBS;
@@ -2265,6 +2261,13 @@ private:
   SourceLocation LastLocation;
 };
 
+enum class LambdaCaptureInitKind {
+  NoInit,     //!< [a]
+  CopyInit,   //!< [a = b], [a = {b}]
+  DirectInit, //!< [a(b)]
+  ListInit    //!< [a{b}]
+};
+
 /// \brief Represents a complete lambda introducer.
 struct LambdaIntroducer {
   /// \brief An individual capture in a lambda introducer.
@@ -2273,13 +2276,15 @@ struct LambdaIntroducer {
     SourceLocation Loc;
     IdentifierInfo *Id;
     SourceLocation EllipsisLoc;
+    LambdaCaptureInitKind InitKind;
     ExprResult Init;
     ParsedType InitCaptureType;
     LambdaCapture(LambdaCaptureKind Kind, SourceLocation Loc,
                   IdentifierInfo *Id, SourceLocation EllipsisLoc,
-                  ExprResult Init, ParsedType InitCaptureType)
-        : Kind(Kind), Loc(Loc), Id(Id), EllipsisLoc(EllipsisLoc), Init(Init),
-          InitCaptureType(InitCaptureType) {}
+                  LambdaCaptureInitKind InitKind, ExprResult Init,
+                  ParsedType InitCaptureType)
+        : Kind(Kind), Loc(Loc), Id(Id), EllipsisLoc(EllipsisLoc),
+          InitKind(InitKind), Init(Init), InitCaptureType(InitCaptureType) {}
   };
 
   SourceRange Range;
@@ -2295,10 +2300,11 @@ struct LambdaIntroducer {
                   SourceLocation Loc,
                   IdentifierInfo* Id,
                   SourceLocation EllipsisLoc,
+                  LambdaCaptureInitKind InitKind,
                   ExprResult Init, 
                   ParsedType InitCaptureType) {
-    Captures.push_back(LambdaCapture(Kind, Loc, Id, EllipsisLoc, Init, 
-        InitCaptureType));
+    Captures.push_back(LambdaCapture(Kind, Loc, Id, EllipsisLoc, InitKind, Init,
+                                     InitCaptureType));
   }
 };
 

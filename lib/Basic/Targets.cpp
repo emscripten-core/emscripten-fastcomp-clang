@@ -1871,8 +1871,15 @@ public:
   }
 
   bool validateAsmConstraint(const char *&Name,
-                             TargetInfo::ConstraintInfo &info) const override {
-    return true;
+                             TargetInfo::ConstraintInfo &Info) const override {
+    switch (*Name) {
+    default: break;
+    case 'v': // vgpr
+    case 's': // sgpr
+      Info.setAllowsRegister();
+      return true;
+    }
+    return false;
   }
 
   ArrayRef<Builtin::Info> getTargetBuiltins() const override {
@@ -2380,8 +2387,7 @@ class X86TargetInfo : public TargetInfo {
 public:
   X86TargetInfo(const llvm::Triple &Triple) : TargetInfo(Triple) {
     BigEndian = false;
-    LongDoubleFormat = Triple.isOSIAMCU() ? &llvm::APFloat::IEEEdouble
-                                          : &llvm::APFloat::x87DoubleExtended;
+    LongDoubleFormat = &llvm::APFloat::x87DoubleExtended;
   }
   unsigned getFloatEvalMethod() const override {
     // X87 evaluates with 80 bits "long double" precision.
@@ -2403,6 +2409,20 @@ public:
   bool validateCpuSupports(StringRef Name) const override;
   bool validateAsmConstraint(const char *&Name,
                              TargetInfo::ConstraintInfo &info) const override;
+
+  bool validateGlobalRegisterVariable(StringRef RegName,
+                                      unsigned RegSize,
+                                      bool &HasSizeMismatch) const override {
+    // esp and ebp are the only 32-bit registers the x86 backend can currently
+    // handle.
+    if (RegName.equals("esp") || RegName.equals("ebp")) {
+      // Check that the register size is 32-bit.
+      HasSizeMismatch = RegSize != 32;
+      return true;
+    }
+
+    return false;
+  }
 
   bool validateOutputSize(StringRef Constraint, unsigned Size) const override;
 
@@ -3416,11 +3436,6 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   }
   if (CPU >= CK_i586)
     Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
-
-  if (getTriple().isOSIAMCU()) {
-    Builder.defineMacro("__iamcu");
-    Builder.defineMacro("__iamcu__");
-  }
 }
 
 bool X86TargetInfo::hasFeature(StringRef Feature) const {
@@ -3901,6 +3916,27 @@ public:
   }
 };
 
+// X86-32 MCU target
+class MCUX86_32TargetInfo : public X86_32TargetInfo {
+public:
+  MCUX86_32TargetInfo(const llvm::Triple &Triple) : X86_32TargetInfo(Triple) {
+    LongDoubleWidth = 64;
+    LongDoubleFormat = &llvm::APFloat::IEEEdouble;
+  }
+
+  CallingConvCheckResult checkCallingConvention(CallingConv CC) const override {
+    // On MCU we support only C calling convention.
+    return CC == CC_C ? CCCR_OK : CCCR_Warning;
+  }
+
+  void getTargetDefines(const LangOptions &Opts,
+                        MacroBuilder &Builder) const override {
+    X86_32TargetInfo::getTargetDefines(Opts, Builder);
+    Builder.defineMacro("__iamcu");
+    Builder.defineMacro("__iamcu__");
+  }
+};
+
 // RTEMS Target
 template<typename Target>
 class RTEMSTargetInfo : public OSTargetInfo<Target> {
@@ -4015,6 +4051,22 @@ public:
 
   // for x32 we need it here explicitly
   bool hasInt128Type() const override { return true; }
+
+  bool validateGlobalRegisterVariable(StringRef RegName,
+                                      unsigned RegSize,
+                                      bool &HasSizeMismatch) const override {
+    // rsp and rbp are the only 64-bit registers the x86 backend can currently
+    // handle.
+    if (RegName.equals("rsp") || RegName.equals("rbp")) {
+      // Check that the register size is 64-bit.
+      HasSizeMismatch = RegSize != 64;
+      return true;
+    }
+
+    // Check if the register is a 32-bit register the backend can handle.
+    return X86TargetInfo::validateGlobalRegisterVariable(RegName, RegSize,
+                                                         HasSizeMismatch);
+  }
 };
 
 // x86-64 Windows target
@@ -4407,15 +4459,10 @@ class ARMTargetInfo : public TargetInfo {
     default:
       return llvm::ARM::getCPUAttr(ArchKind);
     case llvm::ARM::AK_ARMV6M:
-    case llvm::ARM::AK_ARMV6SM:
-    case llvm::ARM::AK_ARMV6HL:
       return "6M";
     case llvm::ARM::AK_ARMV7S:
       return "7S";
-    case llvm::ARM::AK_ARMV7:
     case llvm::ARM::AK_ARMV7A:
-    case llvm::ARM::AK_ARMV7L:
-    case llvm::ARM::AK_ARMV7HL:
       return "7A";
     case llvm::ARM::AK_ARMV7R:
       return "7R";
@@ -4547,13 +4594,14 @@ public:
                  const std::vector<std::string> &FeaturesVec) const override {
 
     std::vector<const char*> TargetFeatures;
+    unsigned Arch = llvm::ARM::parseArch(getTriple().getArchName());
 
     // get default FPU features
-    unsigned FPUKind = llvm::ARM::getDefaultFPU(CPU);
+    unsigned FPUKind = llvm::ARM::getDefaultFPU(CPU, Arch);
     llvm::ARM::getFPUFeatures(FPUKind, TargetFeatures);
 
     // get default Extension features
-    unsigned Extensions = llvm::ARM::getDefaultExtensions(CPU);
+    unsigned Extensions = llvm::ARM::getDefaultExtensions(CPU, Arch);
     llvm::ARM::getExtensionFeatures(Extensions, TargetFeatures);
 
     for (const char *Feature : TargetFeatures)
@@ -5833,6 +5881,80 @@ public:
     // FIXME: Implement!
     return "";
   }
+
+  // No Sparc V7 for now, the backend doesn't support it anyway.
+  enum CPUKind {
+    CK_GENERIC,
+    CK_V8,
+    CK_SUPERSPARC,
+    CK_SPARCLITE,
+    CK_F934,
+    CK_HYPERSPARC,
+    CK_SPARCLITE86X,
+    CK_SPARCLET,
+    CK_TSC701,
+    CK_V9,
+    CK_ULTRASPARC,
+    CK_ULTRASPARC3,
+    CK_NIAGARA,
+    CK_NIAGARA2,
+    CK_NIAGARA3,
+    CK_NIAGARA4
+  } CPU = CK_GENERIC;
+
+  enum CPUGeneration {
+    CG_V8,
+    CG_V9,
+  };
+
+  CPUGeneration getCPUGeneration(CPUKind Kind) const {
+    switch (Kind) {
+    case CK_GENERIC:
+    case CK_V8:
+    case CK_SUPERSPARC:
+    case CK_SPARCLITE:
+    case CK_F934:
+    case CK_HYPERSPARC:
+    case CK_SPARCLITE86X:
+    case CK_SPARCLET:
+    case CK_TSC701:
+      return CG_V8;
+    case CK_V9:
+    case CK_ULTRASPARC:
+    case CK_ULTRASPARC3:
+    case CK_NIAGARA:
+    case CK_NIAGARA2:
+    case CK_NIAGARA3:
+    case CK_NIAGARA4:
+      return CG_V9;
+    }
+    llvm_unreachable("Unexpected CPU kind");
+  }
+
+  CPUKind getCPUKind(StringRef Name) const {
+    return llvm::StringSwitch<CPUKind>(Name)
+        .Case("v8", CK_V8)
+        .Case("supersparc", CK_SUPERSPARC)
+        .Case("sparclite", CK_SPARCLITE)
+        .Case("f934", CK_F934)
+        .Case("hypersparc", CK_HYPERSPARC)
+        .Case("sparclite86x", CK_SPARCLITE86X)
+        .Case("sparclet", CK_SPARCLET)
+        .Case("tsc701", CK_TSC701)
+        .Case("v9", CK_V9)
+        .Case("ultrasparc", CK_ULTRASPARC)
+        .Case("ultrasparc3", CK_ULTRASPARC3)
+        .Case("niagara", CK_NIAGARA)
+        .Case("niagara2", CK_NIAGARA2)
+        .Case("niagara3", CK_NIAGARA3)
+        .Case("niagara4", CK_NIAGARA4)
+        .Default(CK_GENERIC);
+  }
+
+  bool setCPU(const std::string &Name) override {
+    CPU = getCPUKind(Name);
+    return CPU != CK_GENERIC;
+  }
 };
 
 const char * const SparcTargetInfo::GCCRegNames[] = {
@@ -5909,7 +6031,20 @@ public:
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
     SparcTargetInfo::getTargetDefines(Opts, Builder);
-    Builder.defineMacro("__sparcv8");
+    switch (getCPUGeneration(CPU)) {
+    case CG_V8:
+      Builder.defineMacro("__sparcv8");
+      if (getTriple().getOS() != llvm::Triple::Solaris)
+        Builder.defineMacro("__sparcv8__");
+      break;
+    case CG_V9:
+      Builder.defineMacro("__sparcv9");
+      if (getTriple().getOS() != llvm::Triple::Solaris) {
+        Builder.defineMacro("__sparcv9__");
+        Builder.defineMacro("__sparc_v9__");
+      }
+      break;
+    }
   }
 };
 
@@ -5960,19 +6095,9 @@ public:
   }
 
   bool setCPU(const std::string &Name) override {
-    bool CPUKnown = llvm::StringSwitch<bool>(Name)
-      .Case("v9", true)
-      .Case("ultrasparc", true)
-      .Case("ultrasparc3", true)
-      .Case("niagara", true)
-      .Case("niagara2", true)
-      .Case("niagara3", true)
-      .Case("niagara4", true)
-      .Default(false);
-
-    // No need to store the CPU yet.  There aren't any CPU-specific
-    // macros to define.
-    return CPUKnown;
+    if (!SparcTargetInfo::setCPU(Name))
+      return false;
+    return getCPUGeneration(CPU) == CG_V9;
   }
 };
 
@@ -7104,6 +7229,8 @@ public:
     LargeArrayAlign = 128;
     SimdDefaultAlign = 128;
     SigAtomicType = SignedLong;
+    LongDoubleWidth = LongDoubleAlign = 128;
+    LongDoubleFormat = &llvm::APFloat::IEEEquad;
   }
 
 protected:
@@ -7766,6 +7893,8 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple) {
       return new RTEMSX86_32TargetInfo(Triple);
     case llvm::Triple::NaCl:
       return new NaClTargetInfo<X86_32TargetInfo>(Triple);
+    case llvm::Triple::ELFIAMCU:
+      return new MCUX86_32TargetInfo(Triple);
     default:
       return new X86_32TargetInfo(Triple);
     }

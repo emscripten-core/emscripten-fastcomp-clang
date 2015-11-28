@@ -77,6 +77,11 @@ public:
           ImplicitDSALoc() {}
   };
 
+public:
+  struct MapInfo {
+    Expr *RefExpr;
+  };
+
 private:
   struct DSAInfo {
     OpenMPClauseKind Attributes;
@@ -85,10 +90,12 @@ private:
   typedef llvm::SmallDenseMap<VarDecl *, DSAInfo, 64> DeclSAMapTy;
   typedef llvm::SmallDenseMap<VarDecl *, DeclRefExpr *, 64> AlignedMapTy;
   typedef llvm::DenseSet<VarDecl *> LoopControlVariablesSetTy;
+  typedef llvm::SmallDenseMap<VarDecl *, MapInfo, 64> MappedDeclsTy;
 
   struct SharingMapTy {
     DeclSAMapTy SharingMap;
     AlignedMapTy AlignedMap;
+    MappedDeclsTy MappedDecls;
     LoopControlVariablesSetTy LCVSet;
     DefaultDataSharingAttributes DefaultAttr;
     SourceLocation DefaultAttrLoc;
@@ -307,6 +314,32 @@ public:
   Scope *getCurScope() const { return Stack.back().CurScope; }
   Scope *getCurScope() { return Stack.back().CurScope; }
   SourceLocation getConstructLoc() { return Stack.back().ConstructLoc; }
+
+  MapInfo getMapInfoForVar(VarDecl *VD) {
+    MapInfo VarMI = {0};
+    for (auto Cnt = Stack.size() - 1; Cnt > 0; --Cnt) {
+      if (Stack[Cnt].MappedDecls.count(VD)) {
+        VarMI = Stack[Cnt].MappedDecls[VD];
+        break;
+      }
+    }
+    return VarMI;
+  }
+
+  void addMapInfoForVar(VarDecl *VD, MapInfo MI) {
+    if (Stack.size() > 1) {
+      Stack.back().MappedDecls[VD] = MI;
+    }
+  }
+
+  MapInfo IsMappedInCurrentRegion(VarDecl *VD) {
+    assert(Stack.size() > 1 && "Target level is 0");
+    MapInfo VarMI = {0};
+    if (Stack.size() > 1 && Stack.back().MappedDecls.count(VD)) {
+      VarMI = Stack.back().MappedDecls[VD];
+    }
+    return VarMI;
+  }
 };
 bool isParallelOrTaskRegion(OpenMPDirectiveKind DKind) {
   return isOpenMPParallelDirective(DKind) || DKind == OMPD_task ||
@@ -3326,13 +3359,22 @@ CheckOpenMPLoop(OpenMPDirectiveKind DKind, Expr *CollapseLoopCountExpr,
     // Found 'collapse' clause - calculate collapse number.
     llvm::APSInt Result;
     if (CollapseLoopCountExpr->EvaluateAsInt(Result, SemaRef.getASTContext()))
-      NestedLoopCount += Result.getLimitedValue() - 1;
+      NestedLoopCount = Result.getLimitedValue();
   }
   if (OrderedLoopCountExpr) {
     // Found 'ordered' clause - calculate collapse number.
     llvm::APSInt Result;
-    if (OrderedLoopCountExpr->EvaluateAsInt(Result, SemaRef.getASTContext()))
-      NestedLoopCount += Result.getLimitedValue() - 1;
+    if (OrderedLoopCountExpr->EvaluateAsInt(Result, SemaRef.getASTContext())) {
+      if (Result.getLimitedValue() < NestedLoopCount) {
+        SemaRef.Diag(OrderedLoopCountExpr->getExprLoc(),
+                     diag::err_omp_wrong_ordered_loop_count)
+            << OrderedLoopCountExpr->getSourceRange();
+        SemaRef.Diag(CollapseLoopCountExpr->getExprLoc(),
+                     diag::note_collapse_loop_count)
+            << CollapseLoopCountExpr->getSourceRange();
+      }
+      NestedLoopCount = Result.getLimitedValue();
+    }
   }
   // This is helper routine for loop directives (e.g., 'for', 'simd',
   // 'for simd', etc.).
@@ -5052,6 +5094,12 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
   case OMPC_device:
     Res = ActOnOpenMPDeviceClause(Expr, StartLoc, LParenLoc, EndLoc);
     break;
+  case OMPC_num_teams:
+    Res = ActOnOpenMPNumTeamsClause(Expr, StartLoc, LParenLoc, EndLoc);
+    break;
+  case OMPC_thread_limit:
+    Res = ActOnOpenMPThreadLimitClause(Expr, StartLoc, LParenLoc, EndLoc);
+    break;
   case OMPC_if:
   case OMPC_default:
   case OMPC_proc_bind:
@@ -5078,6 +5126,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
   case OMPC_depend:
   case OMPC_threads:
   case OMPC_simd:
+  case OMPC_map:
   case OMPC_unknown:
     llvm_unreachable("Clause is not allowed.");
   }
@@ -5168,31 +5217,39 @@ ExprResult Sema::PerformOpenMPImplicitIntegerConversion(SourceLocation Loc,
   return PerformContextualImplicitConversion(Loc, Op, ConvertDiagnoser);
 }
 
+static bool IsNonNegativeIntegerValue(Expr *&ValExpr, Sema &SemaRef,
+                                      OpenMPClauseKind CKind) {
+  if (!ValExpr->isTypeDependent() && !ValExpr->isValueDependent() &&
+      !ValExpr->isInstantiationDependent()) {
+    SourceLocation Loc = ValExpr->getExprLoc();
+    ExprResult Value =
+        SemaRef.PerformOpenMPImplicitIntegerConversion(Loc, ValExpr);
+    if (Value.isInvalid())
+      return false;
+
+    ValExpr = Value.get();
+    // The expression must evaluate to a non-negative integer value.
+    llvm::APSInt Result;
+    if (ValExpr->isIntegerConstantExpr(Result, SemaRef.Context) &&
+        Result.isSigned() && !Result.isStrictlyPositive()) {
+      SemaRef.Diag(Loc, diag::err_omp_negative_expression_in_clause)
+          << getOpenMPClauseName(CKind) << ValExpr->getSourceRange();
+      return false;
+    }
+  }
+  return true;
+}
+
 OMPClause *Sema::ActOnOpenMPNumThreadsClause(Expr *NumThreads,
                                              SourceLocation StartLoc,
                                              SourceLocation LParenLoc,
                                              SourceLocation EndLoc) {
   Expr *ValExpr = NumThreads;
-  if (!NumThreads->isValueDependent() && !NumThreads->isTypeDependent() &&
-      !NumThreads->containsUnexpandedParameterPack()) {
-    SourceLocation NumThreadsLoc = NumThreads->getLocStart();
-    ExprResult Val =
-        PerformOpenMPImplicitIntegerConversion(NumThreadsLoc, NumThreads);
-    if (Val.isInvalid())
-      return nullptr;
 
-    ValExpr = Val.get();
-
-    // OpenMP [2.5, Restrictions]
-    //  The num_threads expression must evaluate to a positive integer value.
-    llvm::APSInt Result;
-    if (ValExpr->isIntegerConstantExpr(Result, Context) && Result.isSigned() &&
-        !Result.isStrictlyPositive()) {
-      Diag(NumThreadsLoc, diag::err_omp_negative_expression_in_clause)
-          << "num_threads" << NumThreads->getSourceRange();
-      return nullptr;
-    }
-  }
+  // OpenMP [2.5, Restrictions]
+  //  The num_threads expression must evaluate to a positive integer value.
+  if (!IsNonNegativeIntegerValue(ValExpr, *this, OMPC_num_threads))
+    return nullptr;
 
   return new (Context)
       OMPNumThreadsClause(ValExpr, StartLoc, LParenLoc, EndLoc);
@@ -5219,13 +5276,10 @@ ExprResult Sema::VerifyPositiveIntegerConstantInClause(Expr *E,
         << E->getSourceRange();
     return ExprError();
   }
-  if (CKind == OMPC_collapse) {
-    DSAStack->setCollapseNumber(DSAStack->getCollapseNumber() - 1 +
-                                Result.getExtValue());
-  } else if (CKind == OMPC_ordered) {
-    DSAStack->setCollapseNumber(DSAStack->getCollapseNumber() - 1 +
-                                Result.getExtValue());
-  }
+  if (CKind == OMPC_collapse)
+    DSAStack->setCollapseNumber(Result.getExtValue());
+  else if (CKind == OMPC_ordered)
+    DSAStack->setCollapseNumber(Result.getExtValue());
   return ICE;
 }
 
@@ -5340,6 +5394,9 @@ OMPClause *Sema::ActOnOpenMPSimpleClause(
   case OMPC_device:
   case OMPC_threads:
   case OMPC_simd:
+  case OMPC_map:
+  case OMPC_num_teams:
+  case OMPC_thread_limit:
   case OMPC_unknown:
     llvm_unreachable("Clause is not allowed.");
   }
@@ -5469,6 +5526,9 @@ OMPClause *Sema::ActOnOpenMPSingleExprWithArgClause(
   case OMPC_device:
   case OMPC_threads:
   case OMPC_simd:
+  case OMPC_map:
+  case OMPC_num_teams:
+  case OMPC_thread_limit:
   case OMPC_unknown:
     llvm_unreachable("Clause is not allowed.");
   }
@@ -5600,6 +5660,9 @@ OMPClause *Sema::ActOnOpenMPClause(OpenMPClauseKind Kind,
   case OMPC_flush:
   case OMPC_depend:
   case OMPC_device:
+  case OMPC_map:
+  case OMPC_num_teams:
+  case OMPC_thread_limit:
   case OMPC_unknown:
     llvm_unreachable("Clause is not allowed.");
   }
@@ -5662,7 +5725,8 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
     SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation ColonLoc,
     SourceLocation EndLoc, CXXScopeSpec &ReductionIdScopeSpec,
     const DeclarationNameInfo &ReductionId, OpenMPDependClauseKind DepKind,
-    OpenMPLinearClauseKind LinKind, SourceLocation DepLinLoc) {
+    OpenMPLinearClauseKind LinKind, OpenMPMapClauseKind MapTypeModifier, 
+    OpenMPMapClauseKind MapType, SourceLocation DepLinMapLoc) {
   OMPClause *Res = nullptr;
   switch (Kind) {
   case OMPC_private:
@@ -5683,7 +5747,7 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
     break;
   case OMPC_linear:
     Res = ActOnOpenMPLinearClause(VarList, TailExpr, StartLoc, LParenLoc,
-                                  LinKind, DepLinLoc, ColonLoc, EndLoc);
+                                  LinKind, DepLinMapLoc, ColonLoc, EndLoc);
     break;
   case OMPC_aligned:
     Res = ActOnOpenMPAlignedClause(VarList, TailExpr, StartLoc, LParenLoc,
@@ -5699,8 +5763,12 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
     Res = ActOnOpenMPFlushClause(VarList, StartLoc, LParenLoc, EndLoc);
     break;
   case OMPC_depend:
-    Res = ActOnOpenMPDependClause(DepKind, DepLinLoc, ColonLoc, VarList, StartLoc,
-                                  LParenLoc, EndLoc);
+    Res = ActOnOpenMPDependClause(DepKind, DepLinMapLoc, ColonLoc, VarList, 
+                                  StartLoc, LParenLoc, EndLoc);
+    break;
+  case OMPC_map:
+    Res = ActOnOpenMPMapClause(MapTypeModifier, MapType, DepLinMapLoc, ColonLoc,
+                               VarList, StartLoc, LParenLoc, EndLoc);
     break;
   case OMPC_if:
   case OMPC_final:
@@ -5724,6 +5792,8 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
   case OMPC_device:
   case OMPC_threads:
   case OMPC_simd:
+  case OMPC_num_teams:
+  case OMPC_thread_limit:
   case OMPC_unknown:
     llvm_unreachable("Clause is not allowed.");
   }
@@ -7403,22 +7473,216 @@ OMPClause *Sema::ActOnOpenMPDeviceClause(Expr *Device, SourceLocation StartLoc,
                                          SourceLocation LParenLoc,
                                          SourceLocation EndLoc) {
   Expr *ValExpr = Device;
-  if (!ValExpr->isTypeDependent() && !ValExpr->isValueDependent() &&
-      !ValExpr->isInstantiationDependent()) {
-    SourceLocation Loc = ValExpr->getExprLoc();
-    ExprResult Value = PerformOpenMPImplicitIntegerConversion(Loc, ValExpr);
-    if (Value.isInvalid())
-      return nullptr;
 
-    // OpenMP [2.9.1, Restrictions]
-    // The device expression must evaluate to a non-negative integer value.
-    llvm::APSInt Result;
-    if (Value.get()->isIntegerConstantExpr(Result, Context) && 
-        Result.isSigned() && !Result.isStrictlyPositive()) {
-      Diag(Loc, diag::err_omp_negative_expression_in_clause)
-          << "device" << ValExpr->getSourceRange();
-      return nullptr;
+  // OpenMP [2.9.1, Restrictions]
+  // The device expression must evaluate to a non-negative integer value.
+  if (!IsNonNegativeIntegerValue(ValExpr, *this, OMPC_device))
+    return nullptr;
+
+  return new (Context) OMPDeviceClause(ValExpr, StartLoc, LParenLoc, EndLoc);
+}
+
+static bool IsCXXRecordForMappable(Sema &SemaRef, SourceLocation Loc,
+                                   DSAStackTy *Stack, CXXRecordDecl *RD) {
+  if (!RD || RD->isInvalidDecl())
+    return true;
+
+  auto QTy = SemaRef.Context.getRecordType(RD);
+  if (RD->isDynamicClass()) {
+    SemaRef.Diag(Loc, diag::err_omp_not_mappable_type) << QTy;
+    SemaRef.Diag(RD->getLocation(), diag::note_omp_polymorphic_in_target);
+    return false;
+  }
+  auto *DC = RD;
+  bool IsCorrect = true;
+  for (auto *I : DC->decls()) {
+    if (I) {
+      if (auto *MD = dyn_cast<CXXMethodDecl>(I)) {
+        if (MD->isStatic()) {
+          SemaRef.Diag(Loc, diag::err_omp_not_mappable_type) << QTy;
+          SemaRef.Diag(MD->getLocation(),
+                       diag::note_omp_static_member_in_target);
+          IsCorrect = false;
+        }
+      } else if (auto *VD = dyn_cast<VarDecl>(I)) {
+        if (VD->isStaticDataMember()) {
+          SemaRef.Diag(Loc, diag::err_omp_not_mappable_type) << QTy;
+          SemaRef.Diag(VD->getLocation(),
+                       diag::note_omp_static_member_in_target);
+          IsCorrect = false;
+        }
+      }
     }
   }
-  return new (Context) OMPDeviceClause(ValExpr, StartLoc, LParenLoc, EndLoc);
+
+  for (auto &I : RD->bases()) {
+    if (!IsCXXRecordForMappable(SemaRef, I.getLocStart(), Stack,
+                                I.getType()->getAsCXXRecordDecl()))
+      IsCorrect = false;
+  }
+  return IsCorrect;
+}
+
+static bool CheckTypeMappable(SourceLocation SL, SourceRange SR, Sema &SemaRef,
+                              DSAStackTy *Stack, QualType QTy) {
+  NamedDecl *ND;
+  if (QTy->isIncompleteType(&ND)) {
+    SemaRef.Diag(SL, diag::err_incomplete_type) << QTy << SR;
+    return false;
+  } else if (CXXRecordDecl *RD = dyn_cast_or_null<CXXRecordDecl>(ND)) {
+    if (!RD->isInvalidDecl() &&
+        !IsCXXRecordForMappable(SemaRef, SL, Stack, RD))
+      return false;
+  }
+  return true;
+}
+
+OMPClause *Sema::ActOnOpenMPMapClause(
+    OpenMPMapClauseKind MapTypeModifier, OpenMPMapClauseKind MapType,
+    SourceLocation MapLoc, SourceLocation ColonLoc, ArrayRef<Expr *> VarList,
+    SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation EndLoc) {
+  SmallVector<Expr *, 4> Vars;
+
+  for (auto &RE : VarList) {
+    assert(RE && "Null expr in omp map");
+    if (isa<DependentScopeDeclRefExpr>(RE)) {
+      // It will be analyzed later.
+      Vars.push_back(RE);
+      continue;
+    }
+    SourceLocation ELoc = RE->getExprLoc();
+
+    // OpenMP [2.14.5, Restrictions]
+    //  A variable that is part of another variable (such as field of a
+    //  structure) but is not an array element or an array section cannot appear
+    //  in a map clause.
+    auto *VE = RE->IgnoreParenLValueCasts();
+
+    if (VE->isValueDependent() || VE->isTypeDependent() ||
+        VE->isInstantiationDependent() ||
+        VE->containsUnexpandedParameterPack()) {
+      // It will be analyzed later.
+      Vars.push_back(RE);
+      continue;
+    }
+
+    auto *SimpleExpr = RE->IgnoreParenCasts();
+    auto *DE = dyn_cast<DeclRefExpr>(SimpleExpr);
+    auto *ASE = dyn_cast<ArraySubscriptExpr>(SimpleExpr);
+    auto *OASE = dyn_cast<OMPArraySectionExpr>(SimpleExpr);
+
+    if (!RE->IgnoreParenImpCasts()->isLValue() ||
+        (!OASE && !ASE && !DE) ||
+        (DE && !isa<VarDecl>(DE->getDecl())) ||
+        (ASE && !ASE->getBase()->getType()->isAnyPointerType() &&
+         !ASE->getBase()->getType()->isArrayType())) {
+      Diag(ELoc, diag::err_omp_expected_var_name_or_array_item)
+        << RE->getSourceRange();
+      continue;
+    }
+
+    Decl *D = nullptr;
+    if (DE) {
+      D = DE->getDecl();
+    } else if (ASE) {
+      auto *B = ASE->getBase()->IgnoreParenCasts();
+      D = dyn_cast<DeclRefExpr>(B)->getDecl();
+    } else if (OASE) {
+      auto *B = OASE->getBase();
+      D = dyn_cast<DeclRefExpr>(B)->getDecl();
+    }
+    assert(D && "Null decl on map clause.");
+    auto *VD = cast<VarDecl>(D);
+
+    // OpenMP [2.14.5, Restrictions, p.8]
+    // threadprivate variables cannot appear in a map clause.
+    if (DSAStack->isThreadPrivate(VD)) {
+      auto DVar = DSAStack->getTopDSA(VD, false);
+      Diag(ELoc, diag::err_omp_threadprivate_in_map);
+      ReportOriginalDSA(*this, DSAStack, VD, DVar);
+      continue;
+    }
+
+    // OpenMP [2.14.5, Restrictions, p.2]
+    //  At most one list item can be an array item derived from a given variable
+    //  in map clauses of the same construct.
+    // OpenMP [2.14.5, Restrictions, p.3]
+    //  List items of map clauses in the same construct must not share original
+    //  storage.
+    // OpenMP [2.14.5, Restrictions, C/C++, p.2]
+    //  A variable for which the type is pointer, reference to array, or
+    //  reference to pointer and an array section derived from that variable
+    //  must not appear as list items of map clauses of the same construct.
+    DSAStackTy::MapInfo MI = DSAStack->IsMappedInCurrentRegion(VD);
+    if (MI.RefExpr) {
+      Diag(ELoc, diag::err_omp_map_shared_storage) << ELoc;
+      Diag(MI.RefExpr->getExprLoc(), diag::note_used_here)
+          << MI.RefExpr->getSourceRange();
+      continue;
+    }
+
+    // OpenMP [2.14.5, Restrictions, C/C++, p.3,4]
+    //  A variable for which the type is pointer, reference to array, or
+    //  reference to pointer must not appear as a list item if the enclosing
+    //  device data environment already contains an array section derived from
+    //  that variable.
+    //  An array section derived from a variable for which the type is pointer,
+    //  reference to array, or reference to pointer must not appear as a list
+    //  item if the enclosing device data environment already contains that
+    //  variable.
+    QualType Type = VD->getType();
+    MI = DSAStack->getMapInfoForVar(VD);
+    if (MI.RefExpr && (isa<DeclRefExpr>(MI.RefExpr->IgnoreParenLValueCasts()) !=
+                       isa<DeclRefExpr>(VE)) &&
+        (Type->isPointerType() || Type->isReferenceType())) {
+      Diag(ELoc, diag::err_omp_map_shared_storage) << ELoc;
+      Diag(MI.RefExpr->getExprLoc(), diag::note_used_here)
+          << MI.RefExpr->getSourceRange();
+      continue;
+    }
+
+    // OpenMP [2.14.5, Restrictions, C/C++, p.7]
+    //  A list item must have a mappable type.
+    if (!CheckTypeMappable(VE->getExprLoc(), VE->getSourceRange(), *this,
+                           DSAStack, Type))
+      continue;
+
+    Vars.push_back(RE);
+    MI.RefExpr = RE;
+    DSAStack->addMapInfoForVar(VD, MI);
+  }
+  if (Vars.empty())
+    return nullptr;
+
+  return OMPMapClause::Create(Context, StartLoc, LParenLoc, EndLoc, Vars,
+                              MapTypeModifier, MapType, MapLoc);
+}
+
+OMPClause *Sema::ActOnOpenMPNumTeamsClause(Expr *NumTeams, 
+                                           SourceLocation StartLoc,
+                                           SourceLocation LParenLoc,
+                                           SourceLocation EndLoc) {
+  Expr *ValExpr = NumTeams;
+
+  // OpenMP [teams Constrcut, Restrictions]
+  // The num_teams expression must evaluate to a positive integer value.
+  if (!IsNonNegativeIntegerValue(ValExpr, *this, OMPC_num_teams))
+    return nullptr;
+
+  return new (Context) OMPNumTeamsClause(ValExpr, StartLoc, LParenLoc, EndLoc);
+}
+
+OMPClause *Sema::ActOnOpenMPThreadLimitClause(Expr *ThreadLimit,
+                                              SourceLocation StartLoc,
+                                              SourceLocation LParenLoc,
+                                              SourceLocation EndLoc) {
+  Expr *ValExpr = ThreadLimit;
+
+  // OpenMP [teams Constrcut, Restrictions]
+  // The thread_limit expression must evaluate to a positive integer value.
+  if (!IsNonNegativeIntegerValue(ValExpr, *this, OMPC_thread_limit))
+    return nullptr;
+
+  return new (Context) OMPThreadLimitClause(ValExpr, StartLoc, LParenLoc,
+                                            EndLoc);
 }

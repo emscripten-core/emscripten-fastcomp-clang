@@ -333,7 +333,6 @@ Tool *ToolChain::SelectTool(const JobAction &JA) const {
 
 std::string ToolChain::GetFilePath(const char *Name) const {
   return D.GetFilePath(Name, *this);
-
 }
 
 std::string ToolChain::GetProgramPath(const char *Name) const {
@@ -360,7 +359,7 @@ std::string ToolChain::GetLinkerPath() const {
     return "";
   }
 
-  return GetProgramPath("ld");
+  return GetProgramPath(DefaultLinker);
 }
 
 types::ID ToolChain::LookupTypeForExtension(const char *Ext) const {
@@ -481,9 +480,8 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
       ArchName = "arm";
 
     // Assembly files should start in ARM mode, unless arch is M-profile.
-    if (IsMProfile || (InputType != types::TY_PP_Asm &&
-         Args.hasFlag(options::OPT_mthumb, options::OPT_mno_thumb, ThumbDefault)))
-    {
+    if ((InputType != types::TY_PP_Asm && Args.hasFlag(options::OPT_mthumb,
+         options::OPT_mno_thumb, ThumbDefault)) || IsMProfile) {
       if (IsBigEndian)
         ArchName = "thumbeb";
       else
@@ -618,6 +616,13 @@ void ToolChain::AddCXXStdlibLibArgs(const ArgList &Args,
   }
 }
 
+void ToolChain::AddFilePathLibArgs(const ArgList &Args,
+                                   ArgStringList &CmdArgs) const {
+  for (const auto &LibPath : getFilePaths())
+    if(LibPath.length() > 0)
+      CmdArgs.push_back(Args.MakeArgString(StringRef("-L") + LibPath));
+}
+
 void ToolChain::AddCCKextLibArgs(const ArgList &Args,
                                  ArgStringList &CmdArgs) const {
   CmdArgs.push_back("-lcc_kext");
@@ -658,3 +663,6 @@ SanitizerMask ToolChain::getSupportedSanitizers() const {
     Res |= CFIICall;
   return Res;
 }
+
+void ToolChain::AddCudaIncludeArgs(const ArgList &DriverArgs,
+                                   ArgStringList &CC1Args) const {}

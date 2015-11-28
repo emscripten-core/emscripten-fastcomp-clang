@@ -284,6 +284,7 @@ template <> struct MappingTraits<FormatStyle> {
     IO.mapOptional("PenaltyExcessCharacter", Style.PenaltyExcessCharacter);
     IO.mapOptional("PenaltyReturnTypeOnItsOwnLine",
                    Style.PenaltyReturnTypeOnItsOwnLine);
+    IO.mapOptional("SortIncludes", Style.SortIncludes);
     IO.mapOptional("PointerAlignment", Style.PointerAlignment);
     IO.mapOptional("SpaceAfterCStyleCast", Style.SpaceAfterCStyleCast);
     IO.mapOptional("SpaceBeforeAssignmentOperators",
@@ -425,6 +426,7 @@ static FormatStyle expandPresets(const FormatStyle &Style) {
     break;
   case FormatStyle::BS_WebKit:
     Expanded.BraceWrapping.AfterFunction = true;
+    Expanded.BraceWrapping.BeforeElse = true;
     break;
   default:
     break;
@@ -506,6 +508,7 @@ FormatStyle getLLVMStyle() {
   LLVMStyle.PenaltyBreakBeforeFirstCallParameter = 19;
 
   LLVMStyle.DisableFormat = false;
+  LLVMStyle.SortIncludes = true;
 
   return LLVMStyle;
 }
@@ -634,6 +637,7 @@ FormatStyle getGNUStyle() {
 FormatStyle getNoStyle() {
   FormatStyle NoStyle = getLLVMStyle();
   NoStyle.DisableFormat = true;
+  NoStyle.SortIncludes = false;
   return NoStyle;
 }
 
@@ -1241,6 +1245,10 @@ private:
           FormatTok->isOneOf(tok::kw_struct, tok::kw_union, tok::kw_delete)) {
         FormatTok->Tok.setKind(tok::identifier);
         FormatTok->Tok.setIdentifierInfo(nullptr);
+      } else if (Style.Language == FormatStyle::LK_JavaScript &&
+                 FormatTok->isOneOf(tok::kw_struct, tok::kw_union)) {
+        FormatTok->Tok.setKind(tok::identifier);
+        FormatTok->Tok.setIdentifierInfo(nullptr);
       }
     } else if (FormatTok->Tok.is(tok::greatergreater)) {
       FormatTok->Tok.setKind(tok::greater);
@@ -1698,7 +1706,7 @@ static bool affectsRange(ArrayRef<tooling::Range> Ranges, unsigned Start,
 static void sortIncludes(const FormatStyle &Style,
                          const SmallVectorImpl<IncludeDirective> &Includes,
                          ArrayRef<tooling::Range> Ranges, StringRef FileName,
-                         tooling::Replacements &Replaces) {
+                         tooling::Replacements &Replaces, unsigned *Cursor) {
   if (!affectsRange(Ranges, Includes.front().Offset,
                     Includes.back().Offset + Includes.back().Text.size()))
     return;
@@ -1722,10 +1730,21 @@ static void sortIncludes(const FormatStyle &Style,
   if (!OutOfOrder)
     return;
 
-  std::string result = Includes[Indices[0]].Text;
-  for (unsigned i = 1, e = Indices.size(); i != e; ++i) {
-    result += "\n";
-    result += Includes[Indices[i]].Text;
+  std::string result;
+  bool CursorMoved = false;
+  for (unsigned Index : Indices) {
+    if (!result.empty())
+      result += "\n";
+    result += Includes[Index].Text;
+
+    if (Cursor && !CursorMoved) {
+      unsigned Start = Includes[Index].Offset;
+      unsigned End = Start + Includes[Index].Text.size();
+      if (*Cursor >= Start && *Cursor < End) {
+        *Cursor = Includes.front().Offset + result.size() + *Cursor - End;
+        CursorMoved = true;
+      }
+    }
   }
 
   // Sorting #includes shouldn't change their total number of characters.
@@ -1740,8 +1759,11 @@ static void sortIncludes(const FormatStyle &Style,
 
 tooling::Replacements sortIncludes(const FormatStyle &Style, StringRef Code,
                                    ArrayRef<tooling::Range> Ranges,
-                                   StringRef FileName) {
+                                   StringRef FileName, unsigned *Cursor) {
   tooling::Replacements Replaces;
+  if (!Style.SortIncludes)
+    return Replaces;
+
   unsigned Prev = 0;
   unsigned SearchFrom = 0;
   llvm::Regex IncludeRegex(
@@ -1769,11 +1791,20 @@ tooling::Replacements sortIncludes(const FormatStyle &Style, StringRef Code,
   for (const auto &Category : Style.IncludeCategories)
     CategoryRegexs.emplace_back(Category.Regex);
 
+  bool FormattingOff = false;
+
   for (;;) {
     auto Pos = Code.find('\n', SearchFrom);
     StringRef Line =
         Code.substr(Prev, (Pos != StringRef::npos ? Pos : Code.size()) - Prev);
-    if (!Line.endswith("\\")) {
+
+    StringRef Trimmed = Line.trim();
+    if (Trimmed == "// clang-format off")
+      FormattingOff = true;
+    else if (Trimmed == "// clang-format on")
+      FormattingOff = false;
+
+    if (!FormattingOff && !Line.endswith("\\")) {
       if (IncludeRegex.match(Line, &Matches)) {
         StringRef IncludeName = Matches[2];
         unsigned Category;
@@ -1791,7 +1822,8 @@ tooling::Replacements sortIncludes(const FormatStyle &Style, StringRef Code,
         LookForMainHeader = false;
         IncludesInBlock.push_back({IncludeName, Line, Prev, Category});
       } else if (!IncludesInBlock.empty()) {
-        sortIncludes(Style, IncludesInBlock, Ranges, FileName, Replaces);
+        sortIncludes(Style, IncludesInBlock, Ranges, FileName, Replaces,
+                     Cursor);
         IncludesInBlock.clear();
       }
       Prev = Pos + 1;
@@ -1801,7 +1833,7 @@ tooling::Replacements sortIncludes(const FormatStyle &Style, StringRef Code,
     SearchFrom = Pos + 1;
   }
   if (!IncludesInBlock.empty())
-    sortIncludes(Style, IncludesInBlock, Ranges, FileName, Replaces);
+    sortIncludes(Style, IncludesInBlock, Ranges, FileName, Replaces, Cursor);
   return Replaces;
 }
 

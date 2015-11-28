@@ -231,11 +231,9 @@ static bool violatesPrivateInclude(Module *RequestingModule,
     assert((!IsPrivateRole || IsPrivate) && "inconsistent headers and roles");
   }
 #endif
-  return IsPrivateRole &&
-         // FIXME: Should we map RequestingModule to its top-level module here
-         //        too? This check is redundant with the isSubModuleOf check in
-         //        diagnoseHeaderInclusion.
-         RequestedModule->getTopLevelModule() != RequestingModule;
+  return IsPrivateRole && (!RequestingModule ||
+                           RequestedModule->getTopLevelModule() !=
+                               RequestingModule->getTopLevelModule());
 }
 
 static Module *getTopLevelOrNull(Module *M) {
@@ -261,11 +259,6 @@ void ModuleMap::diagnoseHeaderInclusion(Module *RequestingModule,
   HeadersMap::iterator Known = findKnownHeader(File);
   if (Known != Headers.end()) {
     for (const KnownHeader &Header : Known->second) {
-      // If 'File' is part of 'RequestingModule' we can definitely include it.
-      if (Header.getModule() &&
-          Header.getModule()->isSubModuleOf(RequestingModule))
-        return;
-
       // Remember private headers for later printing of a diagnostic.
       if (violatesPrivateInclude(RequestingModule, File, Header.getRole(),
                                  Header.getModule())) {
@@ -588,9 +581,18 @@ static void inferFrameworkLink(Module *Mod, const DirectoryEntry *FrameworkDir,
   SmallString<128> LibName;
   LibName += FrameworkDir->getName();
   llvm::sys::path::append(LibName, Mod->Name);
-  if (FileMgr.getFile(LibName)) {
-    Mod->LinkLibraries.push_back(Module::LinkLibrary(Mod->Name,
-                                                     /*IsFramework=*/true));
+
+  // The library name of a framework has more than one possible extension since
+  // the introduction of the text-based dynamic library format. We need to check
+  // for both before we give up.
+  static const char *frameworkExtensions[] = {"", ".tbd"};
+  for (const auto *extension : frameworkExtensions) {
+    llvm::sys::path::replace_extension(LibName, extension);
+    if (FileMgr.getFile(LibName)) {
+      Mod->LinkLibraries.push_back(Module::LinkLibrary(Mod->Name,
+                                                       /*IsFramework=*/true));
+      return;
+    }
   }
 }
 

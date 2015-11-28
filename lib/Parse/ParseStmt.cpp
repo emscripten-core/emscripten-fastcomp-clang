@@ -358,6 +358,11 @@ Retry:
     HandlePragmaMSPragma();
     return StmtEmpty();
 
+  case tok::annot_pragma_ms_vtordisp:
+    ProhibitAttributes(Attrs);
+    HandlePragmaMSVtorDisp();
+    return StmtEmpty();
+
   case tok::annot_pragma_loop_hint:
     ProhibitAttributes(Attrs);
     return ParsePragmaLoopHint(Stmts, OnlyStatement, TrailingElseLoc, Attrs);
@@ -885,6 +890,9 @@ void Parser::ParseCompoundStatementLeadingPragmas() {
     case tok::annot_pragma_ms_pragma:
       HandlePragmaMSPragma();
       break;
+    case tok::annot_pragma_ms_vtordisp:
+      HandlePragmaMSVtorDisp();
+      break;
     default:
       checkForPragmas = false;
       break;
@@ -948,8 +956,8 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
       Stmts.push_back(R.get());
   }
 
-  while (Tok.isNot(tok::r_brace) && Tok.isNot(tok::eof) &&
-         !tryParseMisplacedModuleImport()) {
+  while (!tryParseMisplacedModuleImport() && Tok.isNot(tok::r_brace) &&
+         Tok.isNot(tok::eof)) {
     if (Tok.is(tok::annot_pragma_unused)) {
       HandlePragmaUnused();
       continue;
@@ -1895,6 +1903,11 @@ Decl *Parser::ParseFunctionStatementBody(Decl *Decl, ParseScope &BodyScope) {
   PrettyDeclStackTraceEntry CrashInfo(Actions, Decl, LBraceLoc,
                                       "parsing function body");
 
+  // Save and reset current vtordisp stack if we have entered a C++ method body.
+  bool IsCXXMethod =
+      getLangOpts().CPlusPlus && Decl && isa<CXXMethodDecl>(Decl);
+  Sema::VtorDispStackRAII SavedVtorDispStack(Actions, IsCXXMethod);
+
   // Do not enter a scope for the brace, as the arguments are in the same scope
   // (the function body) as the body itself.  Instead, just read the statement
   // list and put it into a CompoundStmt for safe keeping.
@@ -1933,6 +1946,11 @@ Decl *Parser::ParseFunctionTryBlock(Decl *Decl, ParseScope &BodyScope) {
     BodyScope.Exit();
     return Actions.ActOnSkippedFunctionBody(Decl);
   }
+
+  // Save and reset current vtordisp stack if we have entered a C++ method body.
+  bool IsCXXMethod =
+      getLangOpts().CPlusPlus && Decl && isa<CXXMethodDecl>(Decl);
+  Sema::VtorDispStackRAII SavedVtorDispStack(Actions, IsCXXMethod);
 
   SourceLocation LBraceLoc = Tok.getLocation();
   StmtResult FnBody(ParseCXXTryBlockCommon(TryLoc, /*FnTry*/true));

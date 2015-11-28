@@ -194,6 +194,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(hasArgument);
   REGISTER_MATCHER(hasArgumentOfType);
   REGISTER_MATCHER(hasAttr);
+  REGISTER_MATCHER(hasAutomaticStorageDuration);
   REGISTER_MATCHER(hasBase);
   REGISTER_MATCHER(hasBody);
   REGISTER_MATCHER(hasCanonicalType);
@@ -238,9 +239,11 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(hasSize);
   REGISTER_MATCHER(hasSizeExpr);
   REGISTER_MATCHER(hasSourceExpression);
+  REGISTER_MATCHER(hasStaticStorageDuration);
   REGISTER_MATCHER(hasTargetDecl);
   REGISTER_MATCHER(hasTemplateArgument);
   REGISTER_MATCHER(hasThen);
+  REGISTER_MATCHER(hasThreadStorageDuration);
   REGISTER_MATCHER(hasTrueExpression);
   REGISTER_MATCHER(hasTypeLoc);
   REGISTER_MATCHER(hasUnaryOperand);
@@ -295,6 +298,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(isUnion);
   REGISTER_MATCHER(isVariadic);
   REGISTER_MATCHER(isVirtual);
+  REGISTER_MATCHER(isVolatileQualified);
   REGISTER_MATCHER(isWritten);
   REGISTER_MATCHER(labelStmt);
   REGISTER_MATCHER(lambdaExpr);

@@ -411,6 +411,8 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
   // Not "standard" per se, but available even with the -undef flag.
   if (LangOpts.AsmPreprocessor)
     Builder.defineMacro("__ASSEMBLER__");
+  if (LangOpts.CUDA)
+    Builder.defineMacro("__CUDA__");
 }
 
 /// Initialize the predefined C++ language feature test macros defined in
@@ -867,6 +869,8 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
       LangOpts.getGC() != LangOptions::NonGC) {
     Builder.defineMacro("__weak", "__attribute__((objc_gc(weak)))");
     Builder.defineMacro("__strong", "__attribute__((objc_gc(strong)))");
+    Builder.defineMacro("__autoreleasing", "");
+    Builder.defineMacro("__unsafe_unretained", "");
   } else if (LangOpts.ObjC1) {
     Builder.defineMacro("__weak", "__attribute__((objc_ownership(weak)))");
     Builder.defineMacro("__strong", "__attribute__((objc_ownership(strong)))");

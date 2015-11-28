@@ -38,6 +38,7 @@
 #include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Target/TargetOptions.h"
 #include <atomic>
 #include <memory>
 #include <sys/stat.h>
@@ -452,10 +453,25 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.CXXCtorDtorAliases = Args.hasArg(OPT_mconstructor_aliases);
   Opts.CodeModel = getCodeModel(Args, Diags);
   Opts.DebugPass = Args.getLastArgValue(OPT_mdebug_pass);
-  Opts.DisableFPElim = Args.hasArg(OPT_mdisable_fp_elim);
+  Opts.DisableFPElim =
+      (Args.hasArg(OPT_mdisable_fp_elim) || Args.hasArg(OPT_pg));
   Opts.DisableFree = Args.hasArg(OPT_disable_free);
   Opts.DisableTailCalls = Args.hasArg(OPT_mdisable_tail_calls);
   Opts.FloatABI = Args.getLastArgValue(OPT_mfloat_abi);
+  if (Arg *A = Args.getLastArg(OPT_meabi)) {
+    StringRef Value = A->getValue();
+    llvm::EABI EABIVersion = llvm::StringSwitch<llvm::EABI>(Value)
+                                 .Case("default", llvm::EABI::Default)
+                                 .Case("4", llvm::EABI::EABI4)
+                                 .Case("5", llvm::EABI::EABI5)
+                                 .Case("gnu", llvm::EABI::GNU)
+                                 .Default(llvm::EABI::Unknown);
+    if (EABIVersion == llvm::EABI::Unknown)
+      Diags.Report(diag::err_drv_invalid_value) << A->getAsString(Args)
+                                                << Value;
+    else
+      Opts.EABIVersion = Value;
+  }
   Opts.LessPreciseFPMAD = Args.hasArg(OPT_cl_mad_enable);
   Opts.LimitFloatPrecision = Args.getLastArgValue(OPT_mlimit_float_precision);
   Opts.NoInfsFPMath = (Args.hasArg(OPT_menable_no_infinities) ||
@@ -1000,6 +1016,7 @@ static InputKind ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
   Opts.ModuleMapFiles = Args.getAllArgValues(OPT_fmodule_map_file);
   Opts.ModuleFiles = Args.getAllArgValues(OPT_fmodule_file);
   Opts.ModulesEmbedFiles = Args.getAllArgValues(OPT_fmodules_embed_file_EQ);
+  Opts.ModulesEmbedAllFiles = Args.hasArg(OPT_fmodules_embed_all_files);
 
   Opts.CodeCompleteOpts.IncludeMacros
     = Args.hasArg(OPT_code_completion_macros);
@@ -1483,16 +1500,19 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
       Opts.ObjCWeakRuntime = Opts.ObjCRuntime.allowsWeak();
 
     // ObjCWeak determines whether __weak is actually enabled.
-    if (Opts.ObjCAutoRefCount) {
-      Opts.ObjCWeak = Opts.ObjCWeakRuntime;
-    } else if (Args.hasArg(OPT_fobjc_weak)) {
-      if (Opts.getGC() != LangOptions::NonGC) {
+    // Note that we allow -fno-objc-weak to disable this even in ARC mode.
+    if (auto weakArg = Args.getLastArg(OPT_fobjc_weak, OPT_fno_objc_weak)) {
+      if (!weakArg->getOption().matches(OPT_fobjc_weak)) {
+        assert(!Opts.ObjCWeak);
+      } else if (Opts.getGC() != LangOptions::NonGC) {
         Diags.Report(diag::err_objc_weak_with_gc);
-      } else if (Opts.ObjCWeakRuntime) {
-        Opts.ObjCWeak = true;
-      } else {
+      } else if (!Opts.ObjCWeakRuntime) {
         Diags.Report(diag::err_objc_weak_unsupported);
+      } else {
+        Opts.ObjCWeak = 1;
       }
+    } else if (Opts.ObjCAutoRefCount) {
+      Opts.ObjCWeak = Opts.ObjCWeakRuntime;
     }
 
     if (Args.hasArg(OPT_fno_objc_infer_related_result_type))
@@ -1609,8 +1629,6 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
       Args.hasArg(OPT_fmodules_decluse) || Opts.ModulesStrictDeclUse;
   Opts.ModulesLocalVisibility =
       Args.hasArg(OPT_fmodules_local_submodule_visibility);
-  Opts.ModulesHideInternalLinkage =
-      !Args.hasArg(OPT_fno_modules_hide_internal_linkage);
   Opts.ModulesSearchAll = Opts.Modules &&
     !Args.hasArg(OPT_fno_modules_search_all) &&
     Args.hasArg(OPT_fmodules_search_all);

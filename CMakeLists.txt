@@ -354,7 +354,7 @@ endmacro()
 
 macro(add_clang_library name)
   cmake_parse_arguments(ARG
-    ""
+    "SHARED"
     ""
     "ADDITIONAL_HEADERS"
     ${ARGN})
@@ -390,17 +390,29 @@ macro(add_clang_library name)
       ${ARG_ADDITIONAL_HEADERS} # It may contain unparsed unknown args.
       )
   endif()
-  llvm_add_library(${name} ${ARG_UNPARSED_ARGUMENTS} ${srcs})
+  if(ARG_SHARED)
+    set(ARG_ENABLE_SHARED SHARED)
+  endif()
+  llvm_add_library(${name} ${ARG_ENABLE_SHARED} ${ARG_UNPARSED_ARGUMENTS} ${srcs})
 
   if(TARGET ${name})
     target_link_libraries(${name} ${cmake_2_8_12_INTERFACE} ${LLVM_COMMON_LIBS})
 
     if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY OR ${name} STREQUAL "libclang")
       install(TARGETS ${name}
+        COMPONENT ${name}
         EXPORT ClangTargets
         LIBRARY DESTINATION lib${LLVM_LIBDIR_SUFFIX}
         ARCHIVE DESTINATION lib${LLVM_LIBDIR_SUFFIX}
         RUNTIME DESTINATION bin)
+
+      if (${ARG_SHARED} AND NOT CMAKE_CONFIGURATION_TYPES)
+        add_custom_target(install-${name}
+                          DEPENDS ${name}
+                          COMMAND "${CMAKE_COMMAND}"
+                                  -DCMAKE_INSTALL_COMPONENT=${name}
+                                  -P "${CMAKE_BINARY_DIR}/cmake_install.cmake")
+      endif()
     endif()
     set_property(GLOBAL APPEND PROPERTY CLANG_EXPORTS ${name})
   else()
@@ -450,12 +462,27 @@ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
     )
 endif()
 
+if(INTERNAL_INSTALL_PREFIX)
+  set(LIBCLANG_HEADERS_INSTALL_DESTINATION "${INTERNAL_INSTALL_PREFIX}/include")
+else()
+  set(LIBCLANG_HEADERS_INSTALL_DESTINATION include)
+endif()
+
 install(DIRECTORY include/clang-c
-  DESTINATION include
+  COMPONENT libclang-headers
+  DESTINATION "${LIBCLANG_HEADERS_INSTALL_DESTINATION}"
   FILES_MATCHING
   PATTERN "*.h"
   PATTERN ".svn" EXCLUDE
   )
+
+if (NOT CMAKE_CONFIGURATION_TYPES) # don't add this for IDE's.
+  add_custom_target(install-libclang-headers
+    DEPENDS
+    COMMAND "${CMAKE_COMMAND}"
+            -DCMAKE_INSTALL_COMPONENT=libclang-headers
+            -P "${CMAKE_BINARY_DIR}/cmake_install.cmake")
+endif()
 
 add_definitions( -D_GNU_SOURCE )
 
@@ -621,6 +648,40 @@ if (CLANG_ENABLE_BOOTSTRAP)
     COMMENT "Clobberring bootstrap build and stamp directories"
     )
 
+  if(CMAKE_VERBOSE_MAKEFILE)
+    set(verbose -DCMAKE_VERBOSE_MAKEFILE=On)
+  endif()
+
+  set(BOOTSTRAP_DEFAULT_PASSTHROUGH
+    PACKAGE_VERSION
+    LLVM_VERSION_MAJOR
+    LLVM_VERSION_MINOR
+    LLVM_VERSION_PATCH
+    LLVM_VERSION_SUFFIX
+    CLANG_REPOSITORY_STRING
+    CMAKE_MAKE_PROGRAM)
+
+  # Find all variables that start with BOOTSTRAP_ and populate a variable with
+  # them.
+  get_cmake_property(variableNames VARIABLES)
+  foreach(variableName ${variableNames})
+    if(variableName MATCHES "^BOOTSTRAP_")
+      string(SUBSTRING ${variableName} 10 -1 varName)
+      string(REPLACE ";" "\;" value "${${variableName}}")
+      list(APPEND PASSTHROUGH_VARIABLES
+        -D${varName}=${value})
+    endif()
+  endforeach()
+
+  # Populate the passthrough variables
+  foreach(variableName ${CLANG_BOOTSTRAP_PASSTHROUGH} ${BOOTSTRAP_DEFAULT_PASSTHROUGH})
+    if(${variableName})
+      string(REPLACE ";" "\;" value ${${variableName}})
+      list(APPEND PASSTHROUGH_VARIABLES
+        -D${variableName}=${value})
+    endif()
+  endforeach()
+
   ExternalProject_Add(bootstrap
     DEPENDS clang ${LTO_DEP}
     PREFIX bootstrap
@@ -633,10 +694,11 @@ if (CLANG_ENABLE_BOOTSTRAP)
                 # seem to work, so instead I'm passing this through
                 -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
                 ${CLANG_BOOTSTRAP_CMAKE_ARGS}
+                ${PASSTHROUGH_VARIABLES}
                 -DCMAKE_CXX_COMPILER=${LLVM_RUNTIME_OUTPUT_INTDIR}/clang++
                 -DCMAKE_C_COMPILER=${LLVM_RUNTIME_OUTPUT_INTDIR}/clang
                 -DCMAKE_ASM_COMPILER=${LLVM_RUNTIME_OUTPUT_INTDIR}/clang
-                ${LTO_LIBRARY} ${LTO_AR} ${LTO_RANLIB}
+                ${LTO_LIBRARY} ${LTO_AR} ${LTO_RANLIB} ${verbose}
     INSTALL_COMMAND ""
     STEP_TARGETS configure build
     ${cmake_3_4_USES_TERMINAL_OPTIONS}

@@ -86,7 +86,7 @@ void CodeGenFunction::InitTempAlloca(Address Var, llvm::Value *Init) {
   auto *Store = new llvm::StoreInst(Init, Var.getPointer());
   Store->setAlignment(Var.getAlignment().getQuantity());
   llvm::BasicBlock *Block = AllocaInsertPt->getParent();
-  Block->getInstList().insertAfter(&*AllocaInsertPt, Store);
+  Block->getInstList().insertAfter(AllocaInsertPt->getIterator(), Store);
 }
 
 Address CodeGenFunction::CreateIRTemp(QualType Ty, const Twine &Name) {
@@ -3741,11 +3741,31 @@ LValue CodeGenFunction::EmitStmtExprLValue(const StmtExpr *E) {
 
 RValue CodeGenFunction::EmitCall(QualType CalleeType, llvm::Value *Callee,
                                  const CallExpr *E, ReturnValueSlot ReturnValue,
-                                 const Decl *TargetDecl, llvm::Value *Chain) {
+                                 CGCalleeInfo CalleeInfo, llvm::Value *Chain) {
   // Get the actual function type. The callee type will always be a pointer to
   // function type or a block pointer type.
   assert(CalleeType->isFunctionPointerType() &&
          "Call must have function pointer type!");
+
+  // Preserve the non-canonical function type because things like exception
+  // specifications disappear in the canonical type. That information is useful
+  // to drive the generation of more accurate code for this call later on.
+  const FunctionProtoType *NonCanonicalFTP = CalleeType->getAs<PointerType>()
+                                                 ->getPointeeType()
+                                                 ->getAs<FunctionProtoType>();
+
+  const Decl *TargetDecl = CalleeInfo.getCalleeDecl();
+
+  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl))
+    // We can only guarantee that a function is called from the correct
+    // context/function based on the appropriate target attributes,
+    // so only check in the case where we have both always_inline and target
+    // since otherwise we could be making a conditional call after a check for
+    // the proper cpu features (and it won't cause code generation issues due to
+    // function based code generation).
+    if (TargetDecl->hasAttr<AlwaysInlineAttr>() &&
+        TargetDecl->hasAttr<TargetAttr>())
+      checkTargetFeatures(E, FD);
 
   CalleeType = getContext().getCanonicalType(CalleeType);
 
@@ -3856,7 +3876,8 @@ RValue CodeGenFunction::EmitCall(QualType CalleeType, llvm::Value *Callee,
     Callee = Builder.CreateBitCast(Callee, CalleeTy, "callee.knr.cast");
   }
 
-  return EmitCall(FnInfo, Callee, ReturnValue, Args, TargetDecl);
+  return EmitCall(FnInfo, Callee, ReturnValue, Args,
+                  CGCalleeInfo(NonCanonicalFTP, TargetDecl));
 }
 
 LValue CodeGenFunction::

@@ -166,6 +166,7 @@ protected:
     std::string CudaLibPath;
     std::string CudaLibDevicePath;
     std::string CudaIncludePath;
+    llvm::StringMap<std::string> CudaLibDeviceMap;
 
   public:
     CudaInstallationDetector(const Driver &D) : IsValid(false), D(D) {}
@@ -185,6 +186,9 @@ protected:
     /// \brief Get the detected Cuda device library path.
     StringRef getLibDevicePath() const { return CudaLibDevicePath; }
     /// \brief Get libdevice file for given architecture
+    std::string getLibDeviceFile(StringRef Gpu) const {
+      return CudaLibDeviceMap.lookup(Gpu);
+    }
   };
 
   CudaInstallationDetector CudaInstallation;
@@ -784,20 +788,19 @@ public:
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
+  void AddCudaIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                          llvm::opt::ArgStringList &CC1Args) const override;
   bool isPIEDefault() const override;
   SanitizerMask getSupportedSanitizers() const override;
   void addProfileRTLibs(const llvm::opt::ArgList &Args,
                         llvm::opt::ArgStringList &CmdArgs) const override;
+  virtual std::string computeSysRoot() const;
 
-  std::string Linker;
   std::vector<std::string> ExtraOpts;
 
 protected:
   Tool *buildAssembler() const override;
   Tool *buildLinker() const override;
-
-private:
-  std::string computeSysRoot() const;
 };
 
 class LLVM_LIBRARY_VISIBILITY CudaToolChain : public Linux {
@@ -810,6 +813,42 @@ public:
                 const char *BoundArch) const override;
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                              llvm::opt::ArgStringList &CC1Args) const override;
+};
+
+class LLVM_LIBRARY_VISIBILITY MipsLLVMToolChain : public Linux {
+protected:
+  Tool *buildLinker() const override;
+
+public:
+  MipsLLVMToolChain(const Driver &D, const llvm::Triple &Triple,
+                    const llvm::opt::ArgList &Args);
+
+  void
+  AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                            llvm::opt::ArgStringList &CC1Args) const override;
+
+  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+
+  void AddClangCXXStdlibIncludeArgs(
+      const llvm::opt::ArgList &DriverArgs,
+      llvm::opt::ArgStringList &CC1Args) const override;
+
+  void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
+                           llvm::opt::ArgStringList &CmdArgs) const override;
+
+  std::string getCompilerRT(const llvm::opt::ArgList &Args, StringRef Component,
+                            bool Shared = false) const override;
+
+  std::string computeSysRoot() const override;
+
+  RuntimeLibType GetDefaultRuntimeLibType() const override {
+    return GCCInstallation.isValid() ? RuntimeLibType::RLT_Libgcc
+                                     : RuntimeLibType::RLT_CompilerRT;
+  }
+
+private:
+  Multilib SelectedMultilib;
+  std::string LibSuffix;
 };
 
 class LLVM_LIBRARY_VISIBILITY HexagonToolChain : public Linux {
@@ -898,7 +937,6 @@ public:
 
   std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
                                           types::ID InputType) const override;
-  std::string Linker;
 
 protected:
   Tool *buildLinker() const override;
@@ -1045,8 +1083,6 @@ public:
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
   Tool *SelectTool(const JobAction &JA) const override;
-  void getCompilerSupportDir(std::string &Dir) const;
-  void getBuiltinLibDir(std::string &Dir) const;
   unsigned GetDefaultDwarfVersion() const override { return 2; }
 
 protected:

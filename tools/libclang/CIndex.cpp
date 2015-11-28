@@ -664,6 +664,13 @@ bool CursorVisitor::VisitTranslationUnitDecl(TranslationUnitDecl *D) {
   llvm_unreachable("Translation units are visited directly by Visit()");
 }
 
+bool CursorVisitor::VisitTypeAliasTemplateDecl(TypeAliasTemplateDecl *D) {
+    if (VisitTemplateParameters(D->getTemplateParameters()))
+        return true;
+
+    return Visit(MakeCXCursor(D->getTemplatedDecl(), TU, RegionOfInterest));
+}
+
 bool CursorVisitor::VisitTypeAliasDecl(TypeAliasDecl *D) {
   if (TypeSourceInfo *TSInfo = D->getTypeSourceInfo())
     return Visit(TSInfo->getTypeLoc());
@@ -2068,6 +2075,14 @@ void OMPClauseEnqueue::VisitOMPDeviceClause(const OMPDeviceClause *C) {
   Visitor->AddStmt(C->getDevice());
 }
 
+void OMPClauseEnqueue::VisitOMPNumTeamsClause(const OMPNumTeamsClause *C) {
+  Visitor->AddStmt(C->getNumTeams());
+}
+
+void OMPClauseEnqueue::VisitOMPThreadLimitClause(const OMPThreadLimitClause *C) {
+  Visitor->AddStmt(C->getThreadLimit());
+}
+
 template<typename T>
 void OMPClauseEnqueue::VisitOMPClauseList(T *Node) {
   for (const auto *I : Node->varlists()) {
@@ -2169,6 +2184,9 @@ void OMPClauseEnqueue::VisitOMPFlushClause(const OMPFlushClause *C) {
   VisitOMPClauseList(C);
 }
 void OMPClauseEnqueue::VisitOMPDependClause(const OMPDependClause *C) {
+  VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPMapClause(const OMPMapClause *C) {
   VisitOMPClauseList(C);
 }
 }
@@ -3082,11 +3100,11 @@ clang_parseTranslationUnit_Impl(CXIndex CIdx, const char *source_filename,
       break;
     }
   }
-  if (!FoundSpellCheckingArgument)
-    Args->push_back("-fno-spell-checking");
-  
   Args->insert(Args->end(), command_line_args,
                command_line_args + num_command_line_args);
+
+  if (!FoundSpellCheckingArgument)
+    Args->insert(Args->begin() + 1, "-fno-spell-checking");
 
   // The 'source_filename' argument is optional.  If the caller does not
   // specify it then it is assumed that the source file is specified
@@ -3112,7 +3130,9 @@ clang_parseTranslationUnit_Impl(CXIndex CIdx, const char *source_filename,
       /*RemappedFilesKeepOriginalName=*/true, PrecompilePreamble, TUKind,
       CacheCodeCompletionResults, IncludeBriefCommentsInCodeCompletion,
       /*AllowPCHWithCompilerErrors=*/true, SkipFunctionBodies,
-      /*UserFilesAreVolatile=*/true, ForSerialization, &ErrUnit));
+      /*UserFilesAreVolatile=*/true, ForSerialization,
+      CXXIdx->getPCHContainerOperations()->getRawReader().getFormat(),
+      &ErrUnit));
 
   // Early failures in LoadFromCommandLine may return with ErrUnit unset.
   if (!Unit && !ErrUnit)
@@ -3150,14 +3170,23 @@ clang_parseTranslationUnit(CXIndex CIdx,
 }
 
 enum CXErrorCode clang_parseTranslationUnit2(
-    CXIndex CIdx,
-    const char *source_filename,
-    const char *const *command_line_args,
-    int num_command_line_args,
-    struct CXUnsavedFile *unsaved_files,
-    unsigned num_unsaved_files,
-    unsigned options,
-    CXTranslationUnit *out_TU) {
+    CXIndex CIdx, const char *source_filename,
+    const char *const *command_line_args, int num_command_line_args,
+    struct CXUnsavedFile *unsaved_files, unsigned num_unsaved_files,
+    unsigned options, CXTranslationUnit *out_TU) {
+  SmallVector<const char *, 4> Args;
+  Args.push_back("clang");
+  Args.append(command_line_args, command_line_args + num_command_line_args);
+  return clang_parseTranslationUnit2FullArgv(
+      CIdx, source_filename, Args.data(), Args.size(), unsaved_files,
+      num_unsaved_files, options, out_TU);
+}
+
+enum CXErrorCode clang_parseTranslationUnit2FullArgv(
+    CXIndex CIdx, const char *source_filename,
+    const char *const *command_line_args, int num_command_line_args,
+    struct CXUnsavedFile *unsaved_files, unsigned num_unsaved_files,
+    unsigned options, CXTranslationUnit *out_TU) {
   LOG_FUNC_SECTION {
     *Log << source_filename << ": ";
     for (int i = 0; i != num_command_line_args; ++i)
@@ -3538,6 +3567,26 @@ static SourceLocation getLocationFromExpr(const Expr *E) {
   return E->getLocStart();
 }
 
+static std::string getMangledStructor(std::unique_ptr<MangleContext> &M,
+                                      std::unique_ptr<llvm::DataLayout> &DL,
+                                      const NamedDecl *ND,
+                                      unsigned StructorType) {
+  std::string FrontendBuf;
+  llvm::raw_string_ostream FOS(FrontendBuf);
+
+  if (const auto *CD = dyn_cast_or_null<CXXConstructorDecl>(ND))
+    M->mangleCXXCtor(CD, static_cast<CXXCtorType>(StructorType), FOS);
+  else if (const auto *DD = dyn_cast_or_null<CXXDestructorDecl>(ND))
+    M->mangleCXXDtor(DD, static_cast<CXXDtorType>(StructorType), FOS);
+
+  std::string BackendBuf;
+  llvm::raw_string_ostream BOS(BackendBuf);
+
+  llvm::Mangler::getNameWithPrefix(BOS, llvm::Twine(FOS.str()), *DL);
+
+  return BOS.str();
+}
+
 extern "C" {
 
 unsigned clang_visitChildren(CXCursor parent,
@@ -3909,6 +3958,55 @@ CXString clang_Cursor_getMangling(CXCursor C) {
                                    *DL);
 
   return cxstring::createDup(FinalBufOS.str());
+}
+
+CXStringSet *clang_Cursor_getCXXManglings(CXCursor C) {
+  if (clang_isInvalid(C.kind) || !clang_isDeclaration(C.kind))
+    return nullptr;
+
+  const Decl *D = getCursorDecl(C);
+  if (!(isa<CXXRecordDecl>(D) || isa<CXXMethodDecl>(D)))
+    return nullptr;
+
+  const NamedDecl *ND = cast<NamedDecl>(D);
+
+  ASTContext &Ctx = ND->getASTContext();
+  std::unique_ptr<MangleContext> M(Ctx.createMangleContext());
+  std::unique_ptr<llvm::DataLayout> DL(
+      new llvm::DataLayout(Ctx.getTargetInfo().getDataLayoutString()));
+
+  std::vector<std::string> Manglings;
+
+  auto hasDefaultCXXMethodCC = [](ASTContext &C, const CXXMethodDecl *MD) {
+    auto DefaultCC = C.getDefaultCallingConvention(/*IsVariadic=*/false,
+                                                   /*IsCSSMethod=*/true);
+    auto CC = MD->getType()->getAs<FunctionProtoType>()->getCallConv();
+    return CC == DefaultCC;
+  };
+
+  if (const auto *CD = dyn_cast_or_null<CXXConstructorDecl>(ND)) {
+    Manglings.emplace_back(getMangledStructor(M, DL, CD, Ctor_Base));
+
+    if (Ctx.getTargetInfo().getCXXABI().isItaniumFamily())
+      if (!CD->getParent()->isAbstract())
+        Manglings.emplace_back(getMangledStructor(M, DL, CD, Ctor_Complete));
+
+    if (Ctx.getTargetInfo().getCXXABI().isMicrosoft())
+      if (CD->hasAttr<DLLExportAttr>() && CD->isDefaultConstructor())
+        if (!(hasDefaultCXXMethodCC(Ctx, CD) && CD->getNumParams() == 0))
+          Manglings.emplace_back(getMangledStructor(M, DL, CD,
+                                                    Ctor_DefaultClosure));
+  } else if (const auto *DD = dyn_cast_or_null<CXXDestructorDecl>(ND)) {
+    Manglings.emplace_back(getMangledStructor(M, DL, DD, Dtor_Base));
+    if (Ctx.getTargetInfo().getCXXABI().isItaniumFamily()) {
+      Manglings.emplace_back(getMangledStructor(M, DL, DD, Dtor_Complete));
+
+      if (!DD->isVirtual())
+        Manglings.emplace_back(getMangledStructor(M, DL, DD, Dtor_Deleting));
+    }
+  }
+
+  return cxstring::createSet(Manglings);
 }
 
 CXString clang_getCursorDisplayName(CXCursor C) {
@@ -4367,6 +4465,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPCancelDirective");
   case CXCursor_OverloadCandidate:
       return cxstring::createRef("OverloadCandidate");
+  case CXCursor_TypeAliasTemplateDecl:
+      return cxstring::createRef("TypeAliasTemplateDecl");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");
@@ -6355,6 +6455,27 @@ CXLinkageKind clang_getCursorLinkage(CXCursor cursor) {
     };
 
   return CXLinkage_Invalid;
+}
+} // end: extern "C"
+
+//===----------------------------------------------------------------------===//
+// Operations for querying visibility of a cursor.
+//===----------------------------------------------------------------------===//
+
+extern "C" {
+CXVisibilityKind clang_getCursorVisibility(CXCursor cursor) {
+  if (!clang_isDeclaration(cursor.kind))
+    return CXVisibility_Invalid;
+
+  const Decl *D = cxcursor::getCursorDecl(cursor);
+  if (const NamedDecl *ND = dyn_cast_or_null<NamedDecl>(D))
+    switch (ND->getVisibility()) {
+      case HiddenVisibility: return CXVisibility_Hidden;
+      case ProtectedVisibility: return CXVisibility_Protected;
+      case DefaultVisibility: return CXVisibility_Default;
+    };
+
+  return CXVisibility_Invalid;
 }
 } // end: extern "C"
 

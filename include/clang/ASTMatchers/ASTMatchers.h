@@ -2544,6 +2544,54 @@ AST_MATCHER(VarDecl, hasGlobalStorage) {
   return Node.hasGlobalStorage();
 }
 
+/// \brief Matches a variable declaration that has automatic storage duration.
+///
+/// Example matches x, but not y, z, or a.
+/// (matcher = varDecl(hasAutomaticStorageDuration())
+/// \code
+/// void f() {
+///   int x;
+///   static int y;
+///   thread_local int z;
+/// }
+/// int a;
+/// \endcode
+AST_MATCHER(VarDecl, hasAutomaticStorageDuration) {
+  return Node.getStorageDuration() == SD_Automatic;
+}
+
+/// \brief Matches a variable declaration that has static storage duration.
+///
+/// Example matches y and a, but not x or z.
+/// (matcher = varDecl(hasStaticStorageDuration())
+/// \code
+/// void f() {
+///   int x;
+///   static int y;
+///   thread_local int z;
+/// }
+/// int a;
+/// \endcode
+AST_MATCHER(VarDecl, hasStaticStorageDuration) {
+  return Node.getStorageDuration() == SD_Static;
+}
+
+/// \brief Matches a variable declaration that has thread storage duration.
+///
+/// Example matches z, but not x, z, or a.
+/// (matcher = varDecl(hasThreadStorageDuration())
+/// \code
+/// void f() {
+///   int x;
+///   static int y;
+///   thread_local int z;
+/// }
+/// int a;
+/// \endcode
+AST_MATCHER(VarDecl, hasThreadStorageDuration) {
+  return Node.getStorageDuration() == SD_Thread;
+}
+
 /// \brief Matches a variable declaration that is an exception variable from
 /// a C++ catch block, or an Objective-C \@catch statement.
 ///
@@ -3474,6 +3522,25 @@ AST_MATCHER(QualType, isInteger) {
 ///   is no top-level const on the parameter type "const int *".
 AST_MATCHER(QualType, isConstQualified) {
   return Node.isConstQualified();
+}
+
+/// \brief Matches QualType nodes that are volatile-qualified, i.e., that
+/// include "top-level" volatile.
+///
+/// Given
+/// \code
+///   void a(int);
+///   void b(int volatile);
+///   void c(volatile int);
+///   void d(volatile int*);
+///   void e(int volatile) {};
+/// \endcode
+/// functionDecl(hasAnyParameter(hasType(isVolatileQualified())))
+///   matches "void b(int volatile)", "void c(volatile int)" and
+///   "void e(int volatile) {}". It does not match d as there
+///   is no top-level volatile on the parameter type "volatile int *".
+AST_MATCHER(QualType, isVolatileQualified) {
+  return Node.isVolatileQualified();
 }
 
 /// \brief Matches QualType nodes that have local CV-qualifiers attached to

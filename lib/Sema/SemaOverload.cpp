@@ -8575,22 +8575,71 @@ bool clang::isBetterOverloadCandidate(Sema &S, const OverloadCandidate &Cand1,
   return false;
 }
 
-/// Determine whether two function declarations are "equivalent" for overload
-/// resolution purposes. This applies when the same internal linkage function
-/// is defined by two modules (textually including the same header). In such
-/// a case, we don't consider the declarations to declare the same entity, but
-/// we also don't want lookups with both declarations visible to be ambiguous
-/// in some cases (this happens when using a modularized libstdc++).
-static bool isEquivalentCompatibleOverload(Sema &S,
-                                           const OverloadCandidate &Best,
-                                           const OverloadCandidate &Cand) {
-  return Best.Function && Cand.Function &&
-         Best.Function->getDeclContext()->getRedeclContext()->Equals(
-             Cand.Function->getDeclContext()->getRedeclContext()) &&
-         S.getOwningModule(Best.Function) != S.getOwningModule(Cand.Function) &&
-         !Best.Function->isExternallyVisible() &&
-         !Cand.Function->isExternallyVisible() &&
-         !S.IsOverload(Best.Function, Cand.Function, /*UsingDecl*/false);
+/// Determine whether two declarations are "equivalent" for the purposes of
+/// name lookup and overload resolution. This applies when the same internal/no
+/// linkage entity is defined by two modules (probably by textually including
+/// the same header). In such a case, we don't consider the declarations to
+/// declare the same entity, but we also don't want lookups with both
+/// declarations visible to be ambiguous in some cases (this happens when using
+/// a modularized libstdc++).
+bool Sema::isEquivalentInternalLinkageDeclaration(const NamedDecl *A,
+                                                  const NamedDecl *B) {
+  auto *VA = dyn_cast_or_null<ValueDecl>(A);
+  auto *VB = dyn_cast_or_null<ValueDecl>(B);
+  if (!VA || !VB)
+    return false;
+
+  // The declarations must be declaring the same name as an internal linkage
+  // entity in different modules.
+  if (!VA->getDeclContext()->getRedeclContext()->Equals(
+          VB->getDeclContext()->getRedeclContext()) ||
+      getOwningModule(const_cast<ValueDecl *>(VA)) ==
+          getOwningModule(const_cast<ValueDecl *>(VB)) ||
+      VA->isExternallyVisible() || VB->isExternallyVisible())
+    return false;
+
+  // Check that the declarations appear to be equivalent.
+  //
+  // FIXME: Checking the type isn't really enough to resolve the ambiguity.
+  // For constants and functions, we should check the initializer or body is
+  // the same. For non-constant variables, we shouldn't allow it at all.
+  if (Context.hasSameType(VA->getType(), VB->getType()))
+    return true;
+
+  // Enum constants within unnamed enumerations will have different types, but
+  // may still be similar enough to be interchangeable for our purposes.
+  if (auto *EA = dyn_cast<EnumConstantDecl>(VA)) {
+    if (auto *EB = dyn_cast<EnumConstantDecl>(VB)) {
+      // Only handle anonymous enums. If the enumerations were named and
+      // equivalent, they would have been merged to the same type.
+      auto *EnumA = cast<EnumDecl>(EA->getDeclContext());
+      auto *EnumB = cast<EnumDecl>(EB->getDeclContext());
+      if (EnumA->hasNameForLinkage() || EnumB->hasNameForLinkage() ||
+          !Context.hasSameType(EnumA->getIntegerType(),
+                               EnumB->getIntegerType()))
+        return false;
+      // Allow this only if the value is the same for both enumerators.
+      return llvm::APSInt::isSameValue(EA->getInitVal(), EB->getInitVal());
+    }
+  }
+
+  // Nothing else is sufficiently similar.
+  return false;
+}
+
+void Sema::diagnoseEquivalentInternalLinkageDeclarations(
+    SourceLocation Loc, const NamedDecl *D, ArrayRef<const NamedDecl *> Equiv) {
+  Diag(Loc, diag::ext_equivalent_internal_linkage_decl_in_modules) << D;
+
+  Module *M = getOwningModule(const_cast<NamedDecl*>(D));
+  Diag(D->getLocation(), diag::note_equivalent_internal_linkage_decl)
+      << !M << (M ? M->getFullModuleName() : "");
+
+  for (auto *E : Equiv) {
+    Module *M = getOwningModule(const_cast<NamedDecl*>(E));
+    Diag(E->getLocation(), diag::note_equivalent_internal_linkage_decl)
+        << !M << (M ? M->getFullModuleName() : "");
+  }
 }
 
 static void NoteFunctionCandidate(Sema &S, OverloadCandidate *Cand,
@@ -8623,7 +8672,7 @@ OverloadCandidateSet::BestViableFunction(Sema &S, SourceLocation Loc,
   if (Best == end())
     return OR_No_Viable_Function;
 
-  llvm::SmallVector<const OverloadCandidate *, 4> EquivalentCands;
+  llvm::SmallVector<const NamedDecl *, 4> EquivalentCands;
 
   // Make sure that this function is better than every other viable
   // function. If not, we have an ambiguity.
@@ -8632,8 +8681,9 @@ OverloadCandidateSet::BestViableFunction(Sema &S, SourceLocation Loc,
         Cand != Best &&
         !isBetterOverloadCandidate(S, *Best, *Cand, Loc,
                                    UserDefinedConversion)) {
-      if (isEquivalentCompatibleOverload(S, *Best, *Cand)) {
-        EquivalentCands.push_back(Cand);
+      if (S.isEquivalentInternalLinkageDeclaration(Best->Function,
+                                                   Cand->Function)) {
+        EquivalentCands.push_back(Cand->Function);
         continue;
       }
 
@@ -8648,13 +8698,9 @@ OverloadCandidateSet::BestViableFunction(Sema &S, SourceLocation Loc,
        S.isFunctionConsideredUnavailable(Best->Function)))
     return OR_Deleted;
 
-  if (!EquivalentCands.empty()) {
-    S.Diag(Loc, diag::ext_ovl_equivalent_internal_linkage_functions_in_modules)
-      << Best->Function;
-    S.NoteOverloadCandidate(Best->Function);
-    for (auto *Cand : EquivalentCands)
-      S.NoteOverloadCandidate(Cand->Function);
-  }
+  if (!EquivalentCands.empty())
+    S.diagnoseEquivalentInternalLinkageDeclarations(Loc, Best->Function,
+                                                    EquivalentCands);
 
   return OR_Success;
 }

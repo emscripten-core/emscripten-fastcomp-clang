@@ -714,6 +714,46 @@ The semantics are as follows:
   }];
 }
 
+def MipsInterruptDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+Clang supports the GNU style ``__attribute__((interrupt("ARGUMENT")))`` attribute on
+MIPS targets. This attribute may be attached to a function definition and instructs
+the backend to generate appropriate function entry/exit code so that it can be used
+directly as an interrupt service routine.
+
+By default, the compiler will produce a function prologue and epilogue suitable for
+an interrupt service routine that handles an External Interrupt Controller (eic)
+generated interrupt. This behaviour can be explicitly requested with the "eic"
+argument.
+
+Otherwise, for use with vectored interrupt mode, the argument passed should be
+of the form "vector=LEVEL" where LEVEL is one of the following values:
+"sw0", "sw1", "hw0", "hw1", "hw2", "hw3", "hw4", "hw5". The compiler will
+then set the interrupt mask to the corresponding level which will mask all
+interrupts up to and including the argument.
+
+The semantics are as follows:
+
+- The prologue is modified so that the Exception Program Counter (EPC) and
+  Status coprocessor registers are saved to the stack. The interrupt mask is
+  set so that the function can only be interrupted by a higher priority
+  interrupt. The epilogue will restore the previous values of EPC and Status.
+
+- The prologue and epilogue are modified to save and restore all non-kernel
+  registers as necessary.
+
+- The FPU is disabled in the prologue, as the floating pointer registers are not
+  spilled to the stack.
+
+- The function return sequence is changed to use an exception return instruction.
+
+- The parameter sets the interrupt mask for the function corresponding to the
+  interrupt level specified. If no mask is specified the interrupt mask
+  defaults to "eic".
+  }];
+}
+
 def TargetDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
@@ -1618,5 +1658,107 @@ def NoAliasDocs : Documentation {
 The ``noalias`` attribute indicates that the only memory accesses inside
 function are loads and stores from objects pointed to by its pointer-typed
 arguments, with arbitrary offsets.
+  }];
+}
+
+def NotTailCalledDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``not_tail_called`` attribute prevents tail-call optimization on statically bound calls. It has no effect on indirect calls. Virtual functions, objective-c methods, and functions marked as ``always_inline`` cannot be marked as ``not_tail_called``.
+
+For example, it prevents tail-call optimization in the following case:
+
+  .. code-block: c
+
+    int __attribute__((not_tail_called)) foo1(int);
+
+    int foo2(int a) {
+      return foo1(a); // No tail-call optimization on direct calls.
+    }
+
+However, it doesn't prevent tail-call optimization in this case:
+
+  .. code-block: c
+
+    int __attribute__((not_tail_called)) foo1(int);
+
+    int foo2(int a) {
+      int (*fn)(int) = &foo1;
+
+      // not_tail_called has no effect on an indirect call even if the call can be
+      // resolved at compile time.
+      return (*fn)(a);
+    }
+
+Marking virtual functions as ``not_tail_called`` is an error:
+
+  .. code-block: c++
+
+    class Base {
+    public:
+      // not_tail_called on a virtual function is an error.
+      [[clang::not_tail_called]] virtual int foo1();
+
+      virtual int foo2();
+
+      // Non-virtual functions can be marked ``not_tail_called``.
+      [[clang::not_tail_called]] int foo3();
+    };
+
+    class Derived1 : public Base {
+    public:
+      int foo1() override;
+
+      // not_tail_called on a virtual function is an error.
+      [[clang::not_tail_called]] int foo2() override;
+    };
+  }];
+}
+
+def InternalLinkageDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``internal_linkage`` attribute changes the linkage type of the declaration to internal.
+This is similar to C-style ``static``, but can be used on classes and class methods. When applied to a class definition,
+this attribute affects all methods and static data members of that class.
+This can be used to contain the ABI of a C++ library by excluding unwanted class methods from the export tables.
+  }];
+}
+
+def DisableTailCallsDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``disable_tail_calls`` attribute instructs the backend to not perform tail call optimization inside the marked function.
+
+For example:
+
+  .. code-block:: c
+
+    int callee(int);
+
+    int foo(int a) __attribute__((disable_tail_calls)) {
+      return callee(a); // This call is not tail-call optimized.
+    }
+
+Marking virtual functions as ``disable_tail_calls`` is legal.
+
+  .. code-block: c++
+
+    int callee(int);
+
+    class Base {
+    public:
+      [[clang::disable_tail_calls]] virtual int foo1() {
+        return callee(); // This call is not tail-call optimized.
+      }
+    };
+
+    class Derived1 : public Base {
+    public:
+      int foo1() override {
+        return callee(); // This call is tail-call optimized.
+      }
+    };
+
   }];
 }

@@ -1299,7 +1299,7 @@ public:
                                  UnaryTransformType::UTTKind UKind) const;
 
   /// \brief C++11 deduced auto type.
-  QualType getAutoType(QualType DeducedType, bool IsDecltypeAuto,
+  QualType getAutoType(QualType DeducedType, AutoTypeKeyword Keyword,
                        bool IsDependent) const;
 
   /// \brief C++11 deduction pattern for 'auto' type.
@@ -2272,16 +2272,6 @@ public:
   // unsigned integer type.  This method takes a signed type, and returns the
   // corresponding unsigned integer type.
   QualType getCorrespondingUnsignedType(QualType T) const;
-
-  //===--------------------------------------------------------------------===//
-  //                    Type Iterators.
-  //===--------------------------------------------------------------------===//
-  typedef llvm::iterator_range<SmallVectorImpl<Type *>::const_iterator>
-    type_const_range;
-
-  type_const_range types() const {
-    return type_const_range(Types.begin(), Types.end());
-  }
 
   //===--------------------------------------------------------------------===//
   //                    Integer Values
