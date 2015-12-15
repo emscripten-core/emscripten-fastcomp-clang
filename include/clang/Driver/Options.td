@@ -295,6 +295,7 @@ def Wa_COMMA : CommaJoined<["-"], "Wa,">,
   HelpText<"Pass the comma separated arguments in <arg> to the assembler">,
   MetaVarName<"<arg>">;
 def Wall : Flag<["-"], "Wall">, Group<W_Group>, Flags<[CC1Option]>;
+def WCL4 : Flag<["-"], "WCL4">, Group<W_Group>, Flags<[CC1Option]>;
 def Wdeprecated : Flag<["-"], "Wdeprecated">, Group<W_Group>, Flags<[CC1Option]>;
 def Wno_deprecated : Flag<["-"], "Wno-deprecated">, Group<W_Group>, Flags<[CC1Option]>;
 def Wextra : Flag<["-"], "Wextra">, Group<W_Group>, Flags<[CC1Option]>;
@@ -693,6 +694,9 @@ def flto : Flag<["-"], "flto">, Flags<[CC1Option]>, Group<f_Group>,
   HelpText<"Enable LTO in 'full' mode">;
 def fno_lto : Flag<["-"], "fno-lto">, Group<f_Group>,
   HelpText<"Disable LTO mode (default)">;
+def fthinlto_index_EQ : Joined<["-"], "fthinlto-index=">,
+  Flags<[CC1Option]>, Group<f_Group>,
+  HelpText<"Perform ThinLTO importing using provided function summary index">;
 def fmacro_backtrace_limit_EQ : Joined<["-"], "fmacro-backtrace-limit=">,
                                 Group<f_Group>, Flags<[DriverOption, CoreOption]>;
 def fmerge_all_constants : Flag<["-"], "fmerge-all-constants">, Group<f_Group>;
@@ -1866,16 +1870,22 @@ def _write_user_dependencies : Flag<["--"], "write-user-dependencies">, Alias<MM
 def _ : Joined<["--"], "">, Flags<[Unsupported]>;
 
 def mieee_rnd_near : Flag<["-"], "mieee-rnd-near">, Group<m_hexagon_Features_Group>;
-def mv1 : Flag<["-"], "mv1">, Group<m_hexagon_Features_Group>, Alias<march_EQ>,
-          AliasArgs<["v1"]>;
-def mv2 : Flag<["-"], "mv2">, Group<m_hexagon_Features_Group>, Alias<march_EQ>,
-          AliasArgs<["v2"]>;
-def mv3 : Flag<["-"], "mv3">, Group<m_hexagon_Features_Group>, Alias<march_EQ>,
-          AliasArgs<["v3"]>;
-def mv4 : Flag<["-"], "mv4">, Group<m_hexagon_Features_Group>, Alias<march_EQ>,
-          AliasArgs<["v4"]>;
-def mv5 : Flag<["-"], "mv5">, Group<m_hexagon_Features_Group>, Alias<march_EQ>,
+def mv4 : Flag<["-"], "mv4">, Group<m_hexagon_Features_Group>,
+          Alias<mcpu_EQ>, AliasArgs<["v4"]>;
+def mv5 : Flag<["-"], "mv5">, Group<m_hexagon_Features_Group>, Alias<mcpu_EQ>,
           AliasArgs<["v5"]>;
+def mv55 : Flag<["-"], "mv55">, Group<m_hexagon_Features_Group>,
+           Alias<mcpu_EQ>, AliasArgs<["v55"]>;
+def mv60 : Flag<["-"], "mv60">, Group<m_hexagon_Features_Group>,
+           Alias<mcpu_EQ>, AliasArgs<["v60"]>;
+def mhexagon_hvx : Flag<["-"], "mhvx">, Group<m_hexagon_Features_Group>,
+    Flags<[CC1Option]>, HelpText<"Enable Hexagon Vector eXtensions">;
+def mno_hexagon_hvx : Flag<["-"], "mno-hvx">, Group<m_hexagon_Features_Group>,
+    Flags<[CC1Option]>, HelpText<"Disable Hexagon Vector eXtensions">;
+def mhexagon_hvx_double : Flag<["-"], "mhvx-double">, Group<m_hexagon_Features_Group>,
+    Flags<[CC1Option]>, HelpText<"Enable Hexagon Double Vector eXtensions">;
+def mno_hexagon_hvx_double : Flag<["-"], "mno-hvx-double">, Group<m_hexagon_Features_Group>,
+    Flags<[CC1Option]>, HelpText<"Disable Hexagon Double Vector eXtensions">;
 
 // These are legacy user-facing driver-level option spellings. They are always
 // aliases for options that are spelled using the more common Unix / GNU flag

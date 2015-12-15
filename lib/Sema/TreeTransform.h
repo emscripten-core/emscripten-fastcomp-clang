@@ -1689,6 +1689,49 @@ public:
                                                   LParenLoc, EndLoc);
   }
 
+  /// \brief Build a new OpenMP 'priority' clause.
+  ///
+  /// By default, performs semantic analysis to build the new statement.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPPriorityClause(Expr *Priority, SourceLocation StartLoc,
+                                      SourceLocation LParenLoc,
+                                      SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPPriorityClause(Priority, StartLoc, LParenLoc,
+                                               EndLoc);
+  }
+
+  /// \brief Build a new OpenMP 'grainsize' clause.
+  ///
+  /// By default, performs semantic analysis to build the new statement.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPGrainsizeClause(Expr *Grainsize, SourceLocation StartLoc,
+                                       SourceLocation LParenLoc,
+                                       SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPGrainsizeClause(Grainsize, StartLoc, LParenLoc,
+                                                EndLoc);
+  }
+
+  /// \brief Build a new OpenMP 'num_tasks' clause.
+  ///
+  /// By default, performs semantic analysis to build the new statement.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPNumTasksClause(Expr *NumTasks, SourceLocation StartLoc,
+                                      SourceLocation LParenLoc,
+                                      SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPNumTasksClause(NumTasks, StartLoc, LParenLoc,
+                                               EndLoc);
+  }
+
+  /// \brief Build a new OpenMP 'hint' clause.
+  ///
+  /// By default, performs semantic analysis to build the new statement.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPHintClause(Expr *Hint, SourceLocation StartLoc,
+                                  SourceLocation LParenLoc,
+                                  SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPHintClause(Hint, StartLoc, LParenLoc, EndLoc);
+  }
+
   /// \brief Rebuild the operand to an Objective-C \@synchronized statement.
   ///
   /// By default, performs semantic analysis to build the new statement.
@@ -7342,6 +7385,39 @@ TreeTransform<Derived>::TransformOMPCancelDirective(OMPCancelDirective *D) {
   return Res;
 }
 
+template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformOMPTaskLoopDirective(OMPTaskLoopDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_taskloop, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformOMPTaskLoopSimdDirective(
+    OMPTaskLoopSimdDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_taskloop_simd, DirName,
+                                             nullptr, D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformOMPDistributeDirective(
+    OMPDistributeDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_distribute, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
 //===----------------------------------------------------------------------===//
 // OpenMP clause transformation
 //===----------------------------------------------------------------------===//
@@ -7507,6 +7583,13 @@ TreeTransform<Derived>::TransformOMPThreadsClause(OMPThreadsClause *C) {
 
 template <typename Derived>
 OMPClause *TreeTransform<Derived>::TransformOMPSIMDClause(OMPSIMDClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPNogroupClause(OMPNogroupClause *C) {
   // No need to rebuild this clause, no template-dependent parameters.
   return C;
 }
@@ -7738,6 +7821,45 @@ TreeTransform<Derived>::TransformOMPThreadLimitClause(OMPThreadLimitClause *C) {
     return nullptr;
   return getDerived().RebuildOMPThreadLimitClause(
       E.get(), C->getLocStart(), C->getLParenLoc(), C->getLocEnd());
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPPriorityClause(OMPPriorityClause *C) {
+  ExprResult E = getDerived().TransformExpr(C->getPriority());
+  if (E.isInvalid())
+    return nullptr;
+  return getDerived().RebuildOMPPriorityClause(
+      E.get(), C->getLocStart(), C->getLParenLoc(), C->getLocEnd());
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPGrainsizeClause(OMPGrainsizeClause *C) {
+  ExprResult E = getDerived().TransformExpr(C->getGrainsize());
+  if (E.isInvalid())
+    return nullptr;
+  return getDerived().RebuildOMPGrainsizeClause(
+      E.get(), C->getLocStart(), C->getLParenLoc(), C->getLocEnd());
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPNumTasksClause(OMPNumTasksClause *C) {
+  ExprResult E = getDerived().TransformExpr(C->getNumTasks());
+  if (E.isInvalid())
+    return nullptr;
+  return getDerived().RebuildOMPNumTasksClause(
+      E.get(), C->getLocStart(), C->getLParenLoc(), C->getLocEnd());
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPHintClause(OMPHintClause *C) {
+  ExprResult E = getDerived().TransformExpr(C->getHint());
+  if (E.isInvalid())
+    return nullptr;
+  return getDerived().RebuildOMPHintClause(E.get(), C->getLocStart(),
+                                           C->getLParenLoc(), C->getLocEnd());
 }
 
 //===----------------------------------------------------------------------===//

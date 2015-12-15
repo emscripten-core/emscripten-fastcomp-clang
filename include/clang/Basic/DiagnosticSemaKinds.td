@@ -930,6 +930,9 @@ def warn_missing_explicit_synthesis : Warning <
 def warn_property_getter_owning_mismatch : Warning<
   "property declared as returning non-retained objects"
   "; getter returning retained objects">;
+def warn_property_redecl_getter_mismatch : Warning<
+  "getter name mismatch between property redeclaration (%1) and its original "
+  "declaration (%0)">, InGroup<PropertyAttr>;
 def error_property_setter_ambiguous_use : Error<
   "synthesized properties %0 and %1 both claim setter %2 -"
   " use of this setter will cause unexpected behavior">;
@@ -1169,6 +1172,8 @@ def err_type_defined_in_param_type : Error<
   "%0 cannot be defined in a parameter type">;
 def err_type_defined_in_alias_template : Error<
   "%0 cannot be defined in a type alias template">;
+def err_type_defined_in_condition : Error<
+  "%0 cannot be defined in a condition">;
 
 def note_pure_virtual_function : Note<
   "unimplemented pure virtual method %0 in %1">;
@@ -1567,8 +1572,7 @@ def err_init_conversion_failed : Error<
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
   "volatile and restrict|const, volatile, and restrict}5 vs "
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
-  "volatile and restrict|const, volatile, and restrict}6)"
-  "|: cannot take the address of a potentially disabled function}4">;
+  "volatile and restrict|const, volatile, and restrict}6)}4">;
 
 def err_lvalue_to_rvalue_ref : Error<"rvalue reference %diff{to type $ cannot "
   "bind to lvalue of type $|cannot bind to incompatible lvalue}0,1">;
@@ -2126,8 +2130,7 @@ def err_attribute_argument_type : Error<
   "%0 attribute requires %select{int or bool|an integer "
   "constant|a string|an identifier}1">;
 def err_attribute_argument_outof_range : Error<
-  "init_priority attribute requires integer constant between "
-  "101 and 65535 inclusive">;
+  "%0 attribute requires integer constant between %1 and %2 inclusive">;
 def err_init_priority_object_attr : Error<
   "can only use 'init_priority' attribute on file-scope definitions "
   "of objects of class type">;
@@ -2135,10 +2138,12 @@ def err_attribute_argument_vec_type_hint : Error<
   "invalid attribute argument %0 - expecting a vector or vectorizable scalar type">;
 def err_attribute_argument_out_of_bounds : Error<
   "%0 attribute parameter %1 is out of bounds">;
+def err_attribute_only_once_per_parameter : Error<
+  "%0 attribute can only be applied once per parameter">;
 def err_attribute_uuid_malformed_guid : Error<
   "uuid attribute contains a malformed GUID">;
 def warn_attribute_pointers_only : Warning<
-  "%0 attribute only applies to pointer arguments">,
+  "%0 attribute only applies to%select{| constant}1 pointer arguments">,
   InGroup<IgnoredAttributes>;
 def err_attribute_pointers_only : Error<warn_attribute_pointers_only.Text>;
 def warn_attribute_return_pointers_only : Warning<
@@ -2727,7 +2732,7 @@ def warn_impcast_pointer_to_bool : Warning<
     "'true'">,
     InGroup<PointerBoolConversion>;
 def warn_cast_nonnull_to_bool : Warning<
-    "nonnull parameter '%0' will evaluate to "
+    "nonnull %select{function call|parameter}0 '%1' will evaluate to "
     "'true' on first encounter">,
     InGroup<PointerBoolConversion>;
 def warn_this_bool_conversion : Warning<
@@ -2742,9 +2747,10 @@ def warn_null_pointer_compare : Warning<
     "comparison of %select{address of|function|array}0 '%1' %select{not |}2"
     "equal to a null pointer is always %select{true|false}2">,
     InGroup<TautologicalPointerCompare>;
-def warn_nonnull_parameter_compare : Warning<
-    "comparison of nonnull parameter '%0' %select{not |}1"
-    "equal to a null pointer is %select{true|false}1 on first encounter">,
+def warn_nonnull_expr_compare : Warning<
+    "comparison of nonnull %select{function call|parameter}0 '%1' "
+    "%select{not |}2equal to a null pointer is '%select{true|false}2' on first "
+    "encounter">,
     InGroup<TautologicalPointerCompare>;
 def warn_this_null_compare : Warning<
   "'this' pointer cannot be null in well-defined C++ code; comparison may be "
@@ -2784,9 +2790,10 @@ def warn_int_to_void_pointer_cast : Warning<
   "cast to %1 from smaller integer type %0">,
   InGroup<IntToVoidPointerCast>;
 
-def warn_attribute_ignored_for_field_of_type : Warning<
-  "%0 attribute ignored for field of type %1">,
-  InGroup<IgnoredAttributes>;
+def warn_attribute_packed_for_bitfield : Warning<
+  "'packed' attribute was ignored on bit-fields with single-byte alignment "
+  "in older versions of GCC and Clang">,
+  InGroup<DiagGroup<"attribute-packed-for-bitfield">>;
 def warn_transparent_union_attribute_field_size_align : Warning<
   "%select{alignment|size}0 of field %1 (%2 bits) does not match the "
   "%select{alignment|size}0 of the first field in transparent union; "
@@ -3063,8 +3070,7 @@ def note_ovl_candidate : Note<"candidate "
     "%select{none|const|restrict|const and restrict|volatile|const and volatile"
     "|volatile and restrict|const, volatile, and restrict}3 but found "
     "%select{none|const|restrict|const and restrict|volatile|const and volatile"
-    "|volatile and restrict|const, volatile, and restrict}4)"
-    "| made ineligible by enable_if}2">;
+    "|volatile and restrict|const, volatile, and restrict}4)}2">;
 
 def note_ovl_candidate_inherited_constructor : Note<"inherited from here">;
 def note_ovl_candidate_illegal_constructor : Note<
@@ -3093,8 +3099,16 @@ def note_ovl_candidate_substitution_failure : Note<
     "candidate template ignored: substitution failure%0%1">;
 def note_ovl_candidate_disabled_by_enable_if : Note<
     "candidate template ignored: disabled by %0%1">;
+def note_ovl_candidate_has_pass_object_size_params: Note<
+    "candidate address cannot be taken because parameter %0 has "
+    "pass_object_size attribute">;
 def note_ovl_candidate_disabled_by_enable_if_attr : Note<
     "candidate disabled: %0">;
+def err_addrof_function_disabled_by_enable_if_attr : Error<
+    "cannot take address of function %0 becuase it has one or more "
+    "non-tautological enable_if conditions">;
+def note_addrof_ovl_candidate_disabled_by_enable_if_attr : Note<
+    "candidate function made ineligible by enable_if">;
 def note_ovl_candidate_failed_overload_resolution : Note<
     "candidate template ignored: couldn't resolve reference to overloaded "
     "function %0">;
@@ -3105,7 +3119,7 @@ def note_ovl_candidate_non_deduced_mismatch : Note<
 // can handle that case properly.
 def note_ovl_candidate_non_deduced_mismatch_qualified : Note<
     "candidate template ignored: could not match %q0 against %q1">;
-    
+
 // Note that we don't treat templates differently for this diagnostic.
 def note_ovl_candidate_arity : Note<"candidate "
     "%select{function|function|constructor|function|function|constructor|"
@@ -4245,6 +4259,11 @@ def err_dependent_tag_decl : Error<
 def err_tag_definition_of_typedef : Error<
   "definition of type %0 conflicts with %select{typedef|type alias}1 of the same name">;
 def err_conflicting_types : Error<"conflicting types for %0">;
+def err_different_pass_object_size_params : Error<
+  "conflicting pass_object_size attributes on parameters">;
+def err_late_asm_label_name : Error<
+  "cannot apply asm label to %select{variable|function}0 after its first use">;
+def err_different_asm_label : Error<"conflicting asm label">;
 def err_nested_redefinition : Error<"nested redefinition of %0">;
 def err_use_with_wrong_tag : Error<
   "use of %0 with tag type that does not match previous declaration">;
@@ -4958,8 +4977,8 @@ def note_logical_instead_of_bitwise_change_operator : Note<
 def note_logical_instead_of_bitwise_remove_constant : Note<
   "remove constant to silence this warning">;
 
-def warn_bitwise_and_in_bitwise_or : Warning<
-  "'&' within '|'">, InGroup<BitwiseOpParentheses>;
+def warn_bitwise_op_in_bitwise_op : Warning<
+  "'%0' within '%1'">, InGroup<BitwiseOpParentheses>;
 
 def warn_logical_and_in_logical_or : Warning<
   "'&&' within '||'">, InGroup<LogicalOpParentheses>;
@@ -5209,6 +5228,9 @@ def err_unqualified_pointer_member_function : Error<
   "must explicitly qualify name of member function when taking its address">;
 def err_invalid_form_pointer_member_function : Error<
   "cannot create a non-constant pointer to member function">;
+def err_address_of_function_with_pass_object_size_params: Error<
+  "cannot take address of function %0 because parameter %1 has "
+  "pass_object_size attribute">;
 def err_parens_pointer_member_function : Error<
   "cannot parenthesize the name of a method when forming a member pointer">;
 def err_typecheck_invalid_lvalue_addrof_addrof_function : Error<
@@ -5793,8 +5815,7 @@ def note_hidden_overloaded_virtual_declared_here : Note<
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
   "volatile and restrict|const, volatile, and restrict}2 vs "
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
-  "volatile and restrict|const, volatile, and restrict}3)"
-  "|: mismatch in enable_if attributes}1">;
+  "volatile and restrict|const, volatile, and restrict}3)}1">;
 def warn_using_directive_in_header : Warning<
   "using namespace directive in global context in header">,
   InGroup<HeaderHygiene>, DefaultIgnore;
@@ -5942,8 +5963,6 @@ def err_pseudo_dtor_destructor_non_type : Error<
 def err_invalid_use_of_function_type : Error<
   "a function type is not allowed here">;
 def err_invalid_use_of_array_type : Error<"an array type is not allowed here">;
-def err_type_defined_in_condition : Error<
-  "types may not be defined in conditions">;
 def err_typecheck_bool_condition : Error<
   "value of type %0 is not contextually convertible to 'bool'">;
 def err_typecheck_ambiguous_condition : Error<
@@ -6031,8 +6050,7 @@ def err_typecheck_convert_incompatible : Error<
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
   "volatile and restrict|const, volatile, and restrict}5 vs "
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
-  "volatile and restrict|const, volatile, and restrict}6)"
-  "|: cannot take the address of a potentially disabled function}4">;
+  "volatile and restrict|const, volatile, and restrict}6)}4">;
 def err_typecheck_missing_return_type_incompatible : Error<
   "%diff{return type $ must match previous return type $|"
   "return type must match previous return type}0,1 when %select{block "
@@ -7701,7 +7719,7 @@ def err_omp_not_for : Error<
 def note_omp_collapse_ordered_expr : Note<
   "as specified in %select{'collapse'|'ordered'|'collapse' and 'ordered'}0 clause%select{||s}0">;
 def err_omp_negative_expression_in_clause : Error<
-  "argument to '%0' clause must be a positive integer value">;
+  "argument to '%0' clause must be a %select{non-negative|strictly positive}1 integer value">;
 def err_omp_not_integral : Error<
   "expression must have integral or unscoped enumeration "
   "type, not %0">;
@@ -7790,7 +7808,8 @@ def err_omp_prohibited_region : Error<
   "region cannot be%select{| closely}0 nested inside '%1' region"
   "%select{|; perhaps you forget to enclose 'omp %3' directive into a parallel region?|"
   "; perhaps you forget to enclose 'omp %3' directive into a for or a parallel for region with 'ordered' clause?|"
-  "; perhaps you forget to enclose 'omp %3' directive into a target region?}2">;
+  "; perhaps you forget to enclose 'omp %3' directive into a target region?|"
+  "; perhaps you forget to enclose 'omp %3' directive into a teams region?}2">;
 def err_omp_prohibited_region_simd : Error<
   "OpenMP constructs may not be nested inside a simd region">;
 def err_omp_prohibited_region_atomic : Error<
@@ -7909,6 +7928,24 @@ def err_omp_wrong_ordered_loop_count : Error<
   "the parameter of the 'ordered' clause must be greater than or equal to the parameter of the 'collapse' clause">;
 def note_collapse_loop_count : Note<
   "parameter of the 'collapse' clause">;
+def err_omp_grainsize_num_tasks_mutually_exclusive : Error<
+  "'%0' and '%1' clause are mutually exclusive and may not appear on the same directive">;
+def note_omp_previous_grainsize_num_tasks : Note<
+  "'%0' clause is specified here">;
+def err_omp_hint_clause_no_name : Error<
+  "the name of the construct must be specified in presence of 'hint' clause">;
+def err_omp_critical_with_hint : Error<
+  "constructs with the same name must have a 'hint' clause with the same value">;
+def note_omp_critical_hint_here : Note<
+  "%select{|previous }0'hint' clause with value '%1'">;
+def note_omp_critical_no_hint : Note<
+  "%select{|previous }0directive with no 'hint' clause specified">;
+def err_omp_firstprivate_distribute_private_teams : Error<
+  "private variable in '#pragma omp teams' cannot be firstprivate in '#pragma omp distribute'">;
+def err_omp_firstprivate_and_lastprivate_in_distribute : Error<
+  "lastprivate variable cannot be firstprivate in '#pragma omp distribute'">;
+def err_omp_firstprivate_distribute_in_teams_reduction : Error<
+  "reduction variable in '#pragma omp teams' cannot be firstprivate in '#pragma omp distribute'">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {

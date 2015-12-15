@@ -51,7 +51,7 @@ if(LLVM_BUILD_EXTERNAL_COMPILER_RT AND EXISTS ${COMPILER_RT_SRC_ROOT}/)
     if(variableName MATCHES "^COMPILER_RT")
       string(REPLACE ";" "\;" value "${${variableName}}")
       list(APPEND COMPILER_RT_PASSTHROUGH_VARIABLES
-        -D${variableName}=${${value}})
+        -D${variableName}=${value})
     endif()
   endforeach()
 
@@ -64,6 +64,7 @@ if(LLVM_BUILD_EXTERNAL_COMPILER_RT AND EXISTS ${COMPILER_RT_SRC_ROOT}/)
                -DCMAKE_C_COMPILER=${LLVM_RUNTIME_OUTPUT_INTDIR}/clang
                -DCMAKE_CXX_COMPILER=${LLVM_RUNTIME_OUTPUT_INTDIR}/clang++
                -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+               -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
                -DLLVM_CONFIG_PATH=${LLVM_RUNTIME_OUTPUT_INTDIR}/llvm-config
                -DCOMPILER_RT_OUTPUT_DIR=${LLVM_LIBRARY_OUTPUT_INTDIR}/clang/${CLANG_VERSION}
                -DCOMPILER_RT_EXEC_OUTPUT_DIR=${LLVM_RUNTIME_OUTPUT_INTDIR}
@@ -111,7 +112,7 @@ if(LLVM_BUILD_EXTERNAL_COMPILER_RT AND EXISTS ${COMPILER_RT_SRC_ROOT}/)
   if(LLVM_INCLUDE_TESTS)
     # Add binaries that compiler-rt tests depend on.
     set(COMPILER_RT_TEST_DEPENDENCIES
-      FileCheck count not llvm-nm llvm-symbolizer)
+      FileCheck count not llvm-nm llvm-objdump llvm-symbolizer)
 
     # Add top-level targets for various compiler-rt test suites.
     set(COMPILER_RT_TEST_SUITES check-asan check-asan-dynamic check-dfsan

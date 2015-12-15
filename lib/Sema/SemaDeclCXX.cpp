@@ -2980,10 +2980,15 @@ Sema::BuildMemInitializer(Decl *ConstructorD,
     if (BaseType.isNull()) {
       BaseType = Context.getTypeDeclType(TyD);
       MarkAnyDeclReferenced(TyD->getLocation(), TyD, /*OdrUse=*/false);
-      if (SS.isSet())
-        // FIXME: preserve source range information
+      if (SS.isSet()) {
         BaseType = Context.getElaboratedType(ETK_None, SS.getScopeRep(),
                                              BaseType);
+        TInfo = Context.CreateTypeSourceInfo(BaseType);
+        ElaboratedTypeLoc TL = TInfo->getTypeLoc().castAs<ElaboratedTypeLoc>();
+        TL.getNamedTypeLoc().castAs<TypeSpecTypeLoc>().setNameLoc(IdLoc);
+        TL.setElaboratedKeywordLoc(SourceLocation());
+        TL.setQualifierLoc(SS.getWithLocInContext(Context));
+      }
     }
   }
 
@@ -7185,7 +7190,8 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
                                    SourceLocation IdentLoc,
                                    IdentifierInfo *II,
                                    SourceLocation LBrace,
-                                   AttributeList *AttrList) {
+                                   AttributeList *AttrList,
+                                   UsingDirectiveDecl *&UD) {
   SourceLocation StartLoc = InlineLoc.isValid() ? InlineLoc : NamespaceLoc;
   // For anonymous namespace, take the location of the left brace.
   SourceLocation Loc = II ? IdentLoc : LBrace;
@@ -7299,14 +7305,13 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
     // namespace internal linkage.
 
     if (!PrevNS) {
-      UsingDirectiveDecl* UD
-        = UsingDirectiveDecl::Create(Context, Parent,
-                                     /* 'using' */ LBrace,
-                                     /* 'namespace' */ SourceLocation(),
-                                     /* qualifier */ NestedNameSpecifierLoc(),
-                                     /* identifier */ SourceLocation(),
-                                     Namespc,
-                                     /* Ancestor */ Parent);
+      UD = UsingDirectiveDecl::Create(Context, Parent,
+                                      /* 'using' */ LBrace,
+                                      /* 'namespace' */ SourceLocation(),
+                                      /* qualifier */ NestedNameSpecifierLoc(),
+                                      /* identifier */ SourceLocation(),
+                                      Namespc,
+                                      /* Ancestor */ Parent);
       UD->setImplicit();
       Parent->addDecl(UD);
     }
@@ -8682,29 +8687,39 @@ Decl *Sema::ActOnNamespaceAliasDef(Scope *S, SourceLocation NamespaceLoc,
     }
   }
   assert(!R.isAmbiguous() && !R.empty());
+  NamedDecl *ND = R.getFoundDecl();
 
   // Check if we have a previous declaration with the same name.
   LookupResult PrevR(*this, Alias, AliasLoc, LookupOrdinaryName,
                      ForRedeclaration);
-  LookupQualifiedName(PrevR, CurContext->getRedeclContext());
-  NamedDecl *PrevDecl = PrevR.getAsSingle<NamedDecl>();
-  if (PrevDecl && !isVisible(PrevDecl))
-    PrevDecl = nullptr;
+  LookupName(PrevR, S);
 
-  NamedDecl *ND = R.getFoundDecl();
+  // Check we're not shadowing a template parameter.
+  if (PrevR.isSingleResult() && PrevR.getFoundDecl()->isTemplateParameter()) {
+    DiagnoseTemplateParameterShadow(AliasLoc, PrevR.getFoundDecl());
+    PrevR.clear();
+  }
 
-  if (PrevDecl) {
+  // Filter out any other lookup result from an enclosing scope.
+  FilterLookupForScope(PrevR, CurContext, S, /*ConsiderLinkage*/false,
+                       /*AllowInlineNamespace*/false);
+
+  // Find the previous declaration and check that we can redeclare it.
+  NamespaceAliasDecl *Prev = nullptr; 
+  if (NamedDecl *PrevDecl = PrevR.getAsSingle<NamedDecl>()) {
     if (NamespaceAliasDecl *AD = dyn_cast<NamespaceAliasDecl>(PrevDecl)) {
       // We already have an alias with the same name that points to the same
       // namespace; check that it matches.
-      if (!AD->getNamespace()->Equals(getNamespaceDecl(ND))) {
+      if (AD->getNamespace()->Equals(getNamespaceDecl(ND))) {
+        Prev = AD;
+      } else if (isVisible(PrevDecl)) {
         Diag(AliasLoc, diag::err_redefinition_different_namespace_alias)
           << Alias;
         Diag(PrevDecl->getLocation(), diag::note_previous_namespace_alias)
           << AD->getNamespace();
         return nullptr;
       }
-    } else {
+    } else if (isVisible(PrevDecl)) {
       unsigned DiagID = isa<NamespaceDecl>(PrevDecl)
                             ? diag::err_redefinition
                             : diag::err_redefinition_different_kind;
@@ -8721,8 +8736,8 @@ Decl *Sema::ActOnNamespaceAliasDef(Scope *S, SourceLocation NamespaceLoc,
     NamespaceAliasDecl::Create(Context, CurContext, NamespaceLoc, AliasLoc,
                                Alias, SS.getWithLocInContext(Context),
                                IdentLoc, ND);
-  if (PrevDecl)
-    AliasDecl->setPreviousDecl(cast<NamespaceAliasDecl>(PrevDecl));
+  if (Prev)
+    AliasDecl->setPreviousDecl(Prev);
 
   PushOnScopeChains(AliasDecl, S);
   return AliasDecl;

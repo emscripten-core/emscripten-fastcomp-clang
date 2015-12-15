@@ -2942,6 +2942,34 @@ AST_MATCHER(FunctionDecl, isDeleted) {
   return Node.isDeleted();
 }
 
+/// \brief Matches functions that have a non-throwing exception specification.
+///
+/// Given:
+/// \code
+///   void f();
+///   void g() noexcept;
+///   void h() throw();
+///   void i() throw(int);
+///   void j() noexcept(false);
+/// \endcode
+/// functionDecl(isNoThrow())
+///   matches the declarations of g, and h, but not f, i or j.
+AST_MATCHER(FunctionDecl, isNoThrow) {
+  const auto *FnTy = Node.getType()->getAs<FunctionProtoType>();
+
+  // If the function does not have a prototype, then it is assumed to be a
+  // throwing function (as it would if the function did not have any exception
+  // specification).
+  if (!FnTy)
+    return false;
+
+  // Assume the best for any unresolved exception specification.
+  if (isUnresolvedExceptionSpec(FnTy->getExceptionSpecType()))
+    return true;
+
+  return FnTy->isNothrow(Node.getASTContext());
+}
+
 /// \brief Matches constexpr variable and function declarations.
 ///
 /// Given:
@@ -3503,6 +3531,20 @@ AST_MATCHER(MemberExpr, isArrow) {
 /// matches "a(int)", "b(long)", but not "c(double)".
 AST_MATCHER(QualType, isInteger) {
     return Node->isIntegerType();
+}
+
+/// \brief Matches QualType nodes that are of character type.
+///
+/// Given
+/// \code
+///   void a(char);
+///   void b(wchar_t);
+///   void c(double);
+/// \endcode
+/// functionDecl(hasAnyParameter(hasType(isAnyCharacter())))
+/// matches "a(char)", "b(wchar_t)", but not "c(double)".
+AST_MATCHER(QualType, isAnyCharacter) {
+    return Node->isAnyCharacterType();
 }
 
 /// \brief Matches QualType nodes that are const-qualified, i.e., that

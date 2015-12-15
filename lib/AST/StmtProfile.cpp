@@ -262,6 +262,7 @@ class OMPClauseProfiler : public ConstOMPClauseVisitor<OMPClauseProfiler> {
   /// \brief Process clauses with list of variables.
   template <typename T>
   void VisitOMPClauseList(T *Node);
+
 public:
   OMPClauseProfiler(StmtProfiler *P) : Profiler(P) { }
 #define OPENMP_CLAUSE(Name, Class)                                             \
@@ -336,6 +337,8 @@ void OMPClauseProfiler::VisitOMPSeqCstClause(const OMPSeqCstClause *) {}
 void OMPClauseProfiler::VisitOMPThreadsClause(const OMPThreadsClause *) {}
 
 void OMPClauseProfiler::VisitOMPSIMDClause(const OMPSIMDClause *) {}
+
+void OMPClauseProfiler::VisitOMPNogroupClause(const OMPNogroupClause *) {}
 
 template<typename T>
 void OMPClauseProfiler::VisitOMPClauseList(T *Node) {
@@ -460,6 +463,18 @@ void OMPClauseProfiler::VisitOMPThreadLimitClause(
     const OMPThreadLimitClause *C) {
   Profiler->VisitStmt(C->getThreadLimit());
 }
+void OMPClauseProfiler::VisitOMPPriorityClause(const OMPPriorityClause *C) {
+  Profiler->VisitStmt(C->getPriority());
+}
+void OMPClauseProfiler::VisitOMPGrainsizeClause(const OMPGrainsizeClause *C) {
+  Profiler->VisitStmt(C->getGrainsize());
+}
+void OMPClauseProfiler::VisitOMPNumTasksClause(const OMPNumTasksClause *C) {
+  Profiler->VisitStmt(C->getNumTasks());
+}
+void OMPClauseProfiler::VisitOMPHintClause(const OMPHintClause *C) {
+  Profiler->VisitStmt(C->getHint());
+}
 }
 
 void
@@ -580,6 +595,20 @@ void StmtProfiler::VisitOMPCancellationPointDirective(
 
 void StmtProfiler::VisitOMPCancelDirective(const OMPCancelDirective *S) {
   VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPTaskLoopDirective(const OMPTaskLoopDirective *S) {
+  VisitOMPLoopDirective(S);
+}
+
+void StmtProfiler::VisitOMPTaskLoopSimdDirective(
+    const OMPTaskLoopSimdDirective *S) {
+  VisitOMPLoopDirective(S);
+}
+
+void StmtProfiler::VisitOMPDistributeDirective(
+    const OMPDistributeDirective *S) {
+  VisitOMPLoopDirective(S);
 }
 
 void StmtProfiler::VisitExpr(const Expr *S) {
@@ -1026,7 +1055,6 @@ static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,
     BinaryOp = BO_Comma;
     return Stmt::BinaryOperatorClass;
 
-
   case OO_ArrowStar:
     BinaryOp = BO_PtrMemI;
     return Stmt::BinaryOperatorClass;
@@ -1037,7 +1065,6 @@ static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,
   
   llvm_unreachable("Invalid overloaded operator expression");
 }
-
 
 void StmtProfiler::VisitCXXOperatorCallExpr(const CXXOperatorCallExpr *S) {
   if (S->isTypeDependent()) {
@@ -1214,7 +1241,6 @@ void StmtProfiler::VisitCXXDeleteExpr(const CXXDeleteExpr *S) {
   ID.AddBoolean(S->isArrayForm());
   VisitDecl(S->getOperatorDelete());
 }
-
 
 void StmtProfiler::VisitCXXNewExpr(const CXXNewExpr *S) {
   VisitExpr(S);

@@ -920,7 +920,18 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
     CGM.getCXXABI().buildThisParam(*this, Args);
   }
 
-  Args.append(FD->param_begin(), FD->param_end());
+  for (auto *Param : FD->params()) {
+    Args.push_back(Param);
+    if (!Param->hasAttr<PassObjectSizeAttr>())
+      continue;
+
+    IdentifierInfo *NoID = nullptr;
+    auto *Implicit = ImplicitParamDecl::Create(
+        getContext(), Param->getDeclContext(), Param->getLocation(), NoID,
+        getContext().getSizeType());
+    SizeArguments[Param] = Implicit;
+    Args.push_back(Implicit);
+  }
 
   if (MD && (isa<CXXConstructorDecl>(MD) || isa<CXXDestructorDecl>(MD)))
     CGM.getCXXABI().addImplicitStructorParams(*this, ResTy, Args);
@@ -946,8 +957,7 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
   StartFunction(GD, ResTy, Fn, FnInfo, Args, Loc, BodyRange.getBegin());
 
   // Generate the body of the function.
-  PGO.checkGlobalDecl(GD);
-  PGO.assignRegionCounters(GD.getDecl(), CurFn);
+  PGO.assignRegionCounters(GD, CurFn);
   if (isa<CXXDestructorDecl>(FD))
     EmitDestructorBody(Args);
   else if (isa<CXXConstructorDecl>(FD))

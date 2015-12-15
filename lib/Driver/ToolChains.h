@@ -871,15 +871,21 @@ public:
   CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
 
   StringRef GetGCCLibAndIncVersion() const { return GCCLibAndIncVersion.Text; }
+  bool IsIntegratedAssemblerDefault() const override {
+    return true;
+  }
 
-  std::string GetGnuDir(const std::string &InstalledDir,
-                        const llvm::opt::ArgList &Args) const;
+  std::string getHexagonTargetDir(
+      const std::string &InstalledDir,
+      const SmallVectorImpl<std::string> &PrefixDirs) const;
+  void getHexagonLibraryPaths(const llvm::opt::ArgList &Args,
+      ToolChain::path_list &LibPaths) const;
 
-  static StringRef GetTargetCPU(const llvm::opt::ArgList &Args);
+  static const StringRef GetDefaultCPU();
+  static const StringRef GetTargetCPUVersion(const llvm::opt::ArgList &Args);
 
-  static const char *GetSmallDataThreshold(const llvm::opt::ArgList &Args);
-
-  static bool UsesG0(const char *smallDataThreshold);
+  static Optional<unsigned> getSmallDataThreshold(
+      const llvm::opt::ArgList &Args);
 };
 
 // @LOCALMOD-START Emscripten

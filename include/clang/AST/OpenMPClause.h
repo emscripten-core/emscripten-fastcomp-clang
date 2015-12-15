@@ -2838,6 +2838,249 @@ public:
   child_range children() { return child_range(&ThreadLimit, &ThreadLimit + 1); }
 };
 
+/// \brief This represents 'priority' clause in the '#pragma omp ...'
+/// directive.
+///
+/// \code
+/// #pragma omp task priority(n)
+/// \endcode
+/// In this example directive '#pragma omp teams' has clause 'priority' with
+/// single expression 'n'.
+///
+class OMPPriorityClause : public OMPClause {
+  friend class OMPClauseReader;
+  /// \brief Location of '('.
+  SourceLocation LParenLoc;
+  /// \brief Priority number.
+  Stmt *Priority;
+  /// \brief Set the Priority number.
+  ///
+  /// \param E Priority number.
+  ///
+  void setPriority(Expr *E) { Priority = E; }
+
+public:
+  /// \brief Build 'priority' clause.
+  ///
+  /// \param E Expression associated with this clause.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPPriorityClause(Expr *E, SourceLocation StartLoc, SourceLocation LParenLoc,
+                    SourceLocation EndLoc)
+      : OMPClause(OMPC_priority, StartLoc, EndLoc), LParenLoc(LParenLoc),
+        Priority(E) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPPriorityClause()
+      : OMPClause(OMPC_priority, SourceLocation(), SourceLocation()),
+        LParenLoc(SourceLocation()), Priority(nullptr) {}
+  /// \brief Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+  /// \brief Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  /// \brief Return Priority number.
+  Expr *getPriority() { return cast<Expr>(Priority); }
+  /// \brief Return Priority number.
+  Expr *getPriority() const { return cast<Expr>(Priority); }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_priority;
+  }
+
+  child_range children() { return child_range(&Priority, &Priority + 1); }
+};
+
+/// \brief This represents 'grainsize' clause in the '#pragma omp ...'
+/// directive.
+///
+/// \code
+/// #pragma omp taskloop grainsize(4)
+/// \endcode
+/// In this example directive '#pragma omp taskloop' has clause 'grainsize'
+/// with single expression '4'.
+///
+class OMPGrainsizeClause : public OMPClause {
+  friend class OMPClauseReader;
+  /// \brief Location of '('.
+  SourceLocation LParenLoc;
+  /// \brief Safe iteration space distance.
+  Stmt *Grainsize;
+
+  /// \brief Set safelen.
+  void setGrainsize(Expr *Size) { Grainsize = Size; }
+
+public:
+  /// \brief Build 'grainsize' clause.
+  ///
+  /// \param Size Expression associated with this clause.
+  /// \param StartLoc Starting location of the clause.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPGrainsizeClause(Expr *Size, SourceLocation StartLoc,
+                     SourceLocation LParenLoc, SourceLocation EndLoc)
+      : OMPClause(OMPC_grainsize, StartLoc, EndLoc), LParenLoc(LParenLoc),
+        Grainsize(Size) {}
+
+  /// \brief Build an empty clause.
+  ///
+  explicit OMPGrainsizeClause()
+      : OMPClause(OMPC_grainsize, SourceLocation(), SourceLocation()),
+        LParenLoc(SourceLocation()), Grainsize(nullptr) {}
+
+  /// \brief Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+  /// \brief Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  /// \brief Return safe iteration space distance.
+  Expr *getGrainsize() const { return cast_or_null<Expr>(Grainsize); }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_grainsize;
+  }
+
+  child_range children() { return child_range(&Grainsize, &Grainsize + 1); }
+};
+
+/// \brief This represents 'nogroup' clause in the '#pragma omp ...' directive.
+///
+/// \code
+/// #pragma omp taskloop nogroup
+/// \endcode
+/// In this example directive '#pragma omp taskloop' has 'nogroup' clause.
+///
+class OMPNogroupClause : public OMPClause {
+public:
+  /// \brief Build 'nogroup' clause.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPNogroupClause(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPClause(OMPC_nogroup, StartLoc, EndLoc) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPNogroupClause()
+      : OMPClause(OMPC_nogroup, SourceLocation(), SourceLocation()) {}
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_nogroup;
+  }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+};
+
+/// \brief This represents 'num_tasks' clause in the '#pragma omp ...'
+/// directive.
+///
+/// \code
+/// #pragma omp taskloop num_tasks(4)
+/// \endcode
+/// In this example directive '#pragma omp taskloop' has clause 'num_tasks'
+/// with single expression '4'.
+///
+class OMPNumTasksClause : public OMPClause {
+  friend class OMPClauseReader;
+  /// \brief Location of '('.
+  SourceLocation LParenLoc;
+  /// \brief Safe iteration space distance.
+  Stmt *NumTasks;
+
+  /// \brief Set safelen.
+  void setNumTasks(Expr *Size) { NumTasks = Size; }
+
+public:
+  /// \brief Build 'num_tasks' clause.
+  ///
+  /// \param Size Expression associated with this clause.
+  /// \param StartLoc Starting location of the clause.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPNumTasksClause(Expr *Size, SourceLocation StartLoc,
+                    SourceLocation LParenLoc, SourceLocation EndLoc)
+      : OMPClause(OMPC_num_tasks, StartLoc, EndLoc), LParenLoc(LParenLoc),
+        NumTasks(Size) {}
+
+  /// \brief Build an empty clause.
+  ///
+  explicit OMPNumTasksClause()
+      : OMPClause(OMPC_num_tasks, SourceLocation(), SourceLocation()),
+        LParenLoc(SourceLocation()), NumTasks(nullptr) {}
+
+  /// \brief Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+  /// \brief Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  /// \brief Return safe iteration space distance.
+  Expr *getNumTasks() const { return cast_or_null<Expr>(NumTasks); }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_num_tasks;
+  }
+
+  child_range children() { return child_range(&NumTasks, &NumTasks + 1); }
+};
+
+/// \brief This represents 'hint' clause in the '#pragma omp ...' directive.
+///
+/// \code
+/// #pragma omp critical (name) hint(6)
+/// \endcode
+/// In this example directive '#pragma omp critical' has name 'name' and clause
+/// 'hint' with argument '6'.
+///
+class OMPHintClause : public OMPClause {
+  friend class OMPClauseReader;
+  /// \brief Location of '('.
+  SourceLocation LParenLoc;
+  /// \brief Hint expression of the 'hint' clause.
+  Stmt *Hint;
+
+  /// \brief Set hint expression.
+  ///
+  void setHint(Expr *H) { Hint = H; }
+
+public:
+  /// \brief Build 'hint' clause with expression \a Hint.
+  ///
+  /// \param Hint Hint expression.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPHintClause(Expr *Hint, SourceLocation StartLoc, SourceLocation LParenLoc,
+                SourceLocation EndLoc)
+      : OMPClause(OMPC_hint, StartLoc, EndLoc), LParenLoc(LParenLoc),
+        Hint(Hint) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPHintClause()
+      : OMPClause(OMPC_hint, SourceLocation(), SourceLocation()),
+        LParenLoc(SourceLocation()), Hint(nullptr) {}
+
+  /// \brief Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+  /// \brief Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  /// \brief Returns number of threads.
+  Expr *getHint() const { return cast_or_null<Expr>(Hint); }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_hint;
+  }
+
+  child_range children() { return child_range(&Hint, &Hint + 1); }
+};
+
 } // end namespace clang
 
 #endif // LLVM_CLANG_AST_OPENMPCLAUSE_H
