@@ -2365,17 +2365,17 @@ private:
 
   /// Helpers for the OpenMP loop directives.
   void EmitOMPLoopBody(const OMPLoopDirective &D, JumpDest LoopExit);
-  void EmitOMPSimdInit(const OMPLoopDirective &D);
+  void EmitOMPSimdInit(const OMPLoopDirective &D, bool IsMonotonic = false);
   void EmitOMPSimdFinal(const OMPLoopDirective &D);
   /// \brief Emit code for the worksharing loop-based directive.
   /// \return true, if this construct has any lastprivate clause, false -
   /// otherwise.
   bool EmitOMPWorksharingLoop(const OMPLoopDirective &S);
   void EmitOMPForOuterLoop(OpenMPScheduleClauseKind ScheduleKind,
-                           const OMPLoopDirective &S,
-                           OMPPrivateScope &LoopScope, bool Ordered,
-                           Address LB, Address UB, Address ST,
-                           Address IL, llvm::Value *Chunk);
+                           bool IsMonotonic, const OMPLoopDirective &S,
+                           OMPPrivateScope &LoopScope, bool Ordered, Address LB,
+                           Address UB, Address ST, Address IL,
+                           llvm::Value *Chunk);
   /// \brief Emit code for sections directive.
   OpenMPDirectiveKind EmitSections(const OMPExecutableDirective &S);
 
@@ -3008,6 +3008,11 @@ public:
   void EmitCheck(ArrayRef<std::pair<llvm::Value *, SanitizerMask>> Checked,
                  StringRef CheckName, ArrayRef<llvm::Constant *> StaticArgs,
                  ArrayRef<llvm::Value *> DynamicArgs);
+
+  /// \brief Emit a slow path cross-DSO CFI check which calls __cfi_slowpath
+  /// if Cond if false.
+  void EmitCfiSlowPathCheck(llvm::Value *Cond, llvm::ConstantInt *TypeId,
+                            llvm::Value *Ptr);
 
   /// \brief Create a basic block that will call the trap intrinsic, and emit a
   /// conditional branch to it, for the -ftrapv checks.
