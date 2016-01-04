@@ -566,6 +566,9 @@ public:
   // Until dtrace (via CTF) and LLDB can deal with distributed debug info,
   // Darwin defaults to standalone/full debug info.
   bool GetDefaultStandaloneDebug() const override { return true; }
+  llvm::DebuggerKind getDefaultDebuggerTuning() const override {
+    return llvm::DebuggerKind::LLDB;
+  }
 
   /// }
 
@@ -727,6 +730,9 @@ public:
   // Until dtrace (via CTF) and LLDB can deal with distributed debug info,
   // FreeBSD defaults to standalone/full debug info.
   bool GetDefaultStandaloneDebug() const override { return true; }
+  llvm::DebuggerKind getDefaultDebuggerTuning() const override {
+    return llvm::DebuggerKind::LLDB;
+  }
 
 protected:
   Tool *buildAssembler() const override;
@@ -1105,8 +1111,7 @@ private:
 class LLVM_LIBRARY_VISIBILITY WebAssembly final : public ToolChain {
 public:
   WebAssembly(const Driver &D, const llvm::Triple &Triple,
-              const llvm::opt::ArgList &Args)
-      : ToolChain(D, Triple, Args) {}
+              const llvm::opt::ArgList &Args);
 
 private:
   bool IsMathErrnoDefault() const override;
@@ -1119,8 +1124,11 @@ private:
   bool hasBlocksRuntime() const override;
   bool SupportsObjCGC() const override;
   bool SupportsProfiling() const override;
+  bool HasNativeLLVMSupport() const override;
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                              llvm::opt::ArgStringList &CC1Args) const override;
+
+  Tool *buildLinker() const override;
 };
 
 class LLVM_LIBRARY_VISIBILITY PS4CPU : public Generic_ELF {
@@ -1135,6 +1143,10 @@ public:
 
   unsigned GetDefaultStackProtectorLevel(bool KernelOrKext) const override {
     return 2; // SSPStrong
+  }
+
+  llvm::DebuggerKind getDefaultDebuggerTuning() const override {
+    return llvm::DebuggerKind::SCE;
   }
 
   SanitizerMask getSupportedSanitizers() const override;
