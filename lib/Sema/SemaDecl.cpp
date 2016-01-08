@@ -3962,9 +3962,6 @@ static bool CheckAnonMemberRedeclaration(Sema &SemaRef,
                  Sema::ForRedeclaration);
   if (!SemaRef.LookupName(R, S)) return false;
 
-  if (R.getAsSingle<TagDecl>())
-    return false;
-
   // Pick a representative declaration.
   NamedDecl *PrevDecl = R.getRepresentativeDecl()->getUnderlyingDecl();
   assert(PrevDecl && "Expected a non-null Decl");
@@ -4675,11 +4672,13 @@ bool Sema::DiagnoseClassNameShadow(DeclContext *DC,
                                    DeclarationNameInfo NameInfo) {
   DeclarationName Name = NameInfo.getName();
 
-  if (CXXRecordDecl *Record = dyn_cast<CXXRecordDecl>(DC)) 
-    if (Record->getIdentifier() && Record->getDeclName() == Name) {
-      Diag(NameInfo.getLoc(), diag::err_member_name_of_class) << Name;
-      return true;
-    }
+  CXXRecordDecl *Record = dyn_cast<CXXRecordDecl>(DC);
+  while (Record && Record->isAnonymousStructOrUnion())
+    Record = dyn_cast<CXXRecordDecl>(Record->getParent());
+  if (Record && Record->getIdentifier() && Record->getDeclName() == Name) {
+    Diag(NameInfo.getLoc(), diag::err_member_name_of_class) << Name;
+    return true;
+  }
 
   return false;
 }
@@ -10911,12 +10910,8 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D,
       // from the translation unit and reattach to the current context.
       if (D->getLexicalDeclContext() == Context.getTranslationUnitDecl()) {
         // Is the decl actually in the context?
-        for (const auto *DI : Context.getTranslationUnitDecl()->decls()) {
-          if (DI == D) {  
-            Context.getTranslationUnitDecl()->removeDecl(D);
-            break;
-          }
-        }
+        if (Context.getTranslationUnitDecl()->containsDecl(D))
+          Context.getTranslationUnitDecl()->removeDecl(D);
         // Either way, reassign the lexical decl context to our FunctionDecl.
         D->setLexicalDeclContext(CurContext);
       }
@@ -12281,16 +12276,35 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
         if (!Invalid) {
           // If this is a use, just return the declaration we found, unless
           // we have attributes.
-
-          // FIXME: In the future, return a variant or some other clue
-          // for the consumer of this Decl to know it doesn't own it.
-          // For our current ASTs this shouldn't be a problem, but will
-          // need to be changed with DeclGroups.
-          if (!Attr &&
-              ((TUK == TUK_Reference &&
-                (!PrevTagDecl->getFriendObjectKind() || getLangOpts().MicrosoftExt))
-               || TUK == TUK_Friend))
-            return PrevTagDecl;
+          if (TUK == TUK_Reference || TUK == TUK_Friend) {
+            if (Attr) {
+              // FIXME: Diagnose these attributes. For now, we create a new
+              // declaration to hold them.
+            } else if (TUK == TUK_Reference &&
+                       (PrevTagDecl->getFriendObjectKind() ==
+                            Decl::FOK_Undeclared ||
+                        getOwningModule(PrevDecl) !=
+                            PP.getModuleContainingLocation(KWLoc)) &&
+                       SS.isEmpty()) {
+              // This declaration is a reference to an existing entity, but
+              // has different visibility from that entity: it either makes
+              // a friend visible or it makes a type visible in a new module.
+              // In either case, create a new declaration. We only do this if
+              // the declaration would have meant the same thing if no prior
+              // declaration were found, that is, if it was found in the same
+              // scope where we would have injected a declaration.
+              DeclContext *InjectedDC = CurContext;
+              while (!InjectedDC->isFileContext() &&
+                     !InjectedDC->isFunctionOrMethod())
+                InjectedDC = InjectedDC->getParent();
+              if (!InjectedDC->getRedeclContext()->Equals(
+                  PrevDecl->getDeclContext()->getRedeclContext()))
+                return PrevTagDecl;
+              // This is in the injected scope, create a new declaration.
+            } else {
+              return PrevTagDecl;
+            }
+          }
 
           // Diagnose attempts to redefine a tag.
           if (TUK == TUK_Definition) {

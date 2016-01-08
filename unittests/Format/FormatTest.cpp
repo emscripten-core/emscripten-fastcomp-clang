@@ -3607,6 +3607,7 @@ TEST_F(FormatTest, ConstructorInitializers) {
 
   FormatStyle OnePerLine = getLLVMStyle();
   OnePerLine.ConstructorInitializerAllOnOneLineOrOnePerLine = true;
+  OnePerLine.AllowAllParametersOfDeclarationOnNextLine = false;
   verifyFormat("SomeClass::Constructor()\n"
                "    : aaaaaaaaaaaaa(aaaaaaaaaaaaaa),\n"
                "      aaaaaaaaaaaaa(aaaaaaaaaaaaaa),\n"
@@ -3633,6 +3634,13 @@ TEST_F(FormatTest, ConstructorInitializers) {
                "    : aaaaa(aaaaaaaaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaaaaaaaa,\n"
                "            aaaaaaaaaaaaaaaaaaaaaa) {}",
                OnePerLine);
+  OnePerLine.BinPackParameters = false;
+  verifyFormat(
+      "Constructor()\n"
+      "    : aaaaaaaaaaaaaaaaaaaaaaaa(\n"
+      "          aaaaaaaaaaa().aaa(),\n"
+      "          aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) {}",
+      OnePerLine);
   OnePerLine.ColumnLimit = 60;
   verifyFormat("Constructor()\n"
                "    : aaaaaaaaaaaaaaaaaaaa(a),\n"
@@ -4157,17 +4165,14 @@ TEST_F(FormatTest, FormatsBuilderPattern) {
   verifyFormat("return aaaaaaaaaaaaaaaaa->aaaaa().aaaaaaaaaaaaa().aaaaaa() <\n"
                "       aaaaaaaaaaaaaaa->aaaaa().aaaaaaaaaaaaa().aaaaaa();");
   verifyFormat(
-      "aaaaaaa->aaaaaaa->aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
-      "                    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
+      "aaaaaaa->aaaaaaa\n"
+      "    ->aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
+      "        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
       "    ->aaaaaaaa(aaaaaaaaaaaaaaa);");
   verifyFormat(
       "aaaaaaa->aaaaaaa\n"
       "    ->aaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
       "    ->aaaaaaaa(aaaaaaaaaaaaaaa);");
-  verifyFormat(
-      "return aaaaaaaaaaaaaaaa\n"
-      "    .aaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaaa)\n"
-      "    .aaaa(aaaaaaaaaaaaaa);");
   verifyFormat(
       "aaaaaaaaaaaaaaaaaaa()->aaaaaa(bbbbb)->aaaaaaaaaaaaaaaaaaa( // break\n"
       "    aaaaaaaaaaaaaa);");
@@ -4238,6 +4243,25 @@ TEST_F(FormatTest, FormatsBuilderPattern) {
       "return !soooooooooooooome_map\n"
       "            .insert(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
       "            .second;");
+  verifyFormat(
+      "return aaaaaaaaaaaaaaaa\n"
+      "    .aaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaaa)\n"
+      "    .aaaa(aaaaaaaaaaaaaa);");
+  // No hanging indent here.
+  verifyFormat("aaaaaaaaaaaaaaaa.aaaaaaaaaaaaaa.aaaaaaaaaaaaaaa(\n"
+               "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa);");
+  verifyFormat("aaaaaaaaaaaaaaaa.aaaaaaaaaaaaaa().aaaaaaaaaaaaaaa(\n"
+               "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa);");
+  verifyFormat("aaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaa)\n"
+               "    .aaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaa);",
+               getLLVMStyleWithColumns(60));
+  verifyFormat("aaaaaaaaaaaaaaaaaa\n"
+               "    .aaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaa)\n"
+               "    .aaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaa);",
+               getLLVMStyleWithColumns(59));
+  verifyFormat("aaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
+               "        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
+               "    .aaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa);");
 }
 
 TEST_F(FormatTest, BreaksAccordingToOperatorPrecedence) {
@@ -5052,6 +5076,15 @@ TEST_F(FormatTest, AlignsPipes) {
   verifyFormat("llvm::errs() << aaaaaaaaaaaaaaaaaaaaaa << endl\n"
                "             << bbbbbbbbbbbbbbbbbbbbbb << endl;");
   verifyFormat("llvm::errs() << endl << bbbbbbbbbbbbbbbbbbbbbb << endl;");
+
+  // Handle '\n'.
+  verifyFormat("llvm::errs() << aaaaaaaaaaaaaaaaaaaaaa << \"\\n\"\n"
+               "             << bbbbbbbbbbbbbbbbbbbbbb << \"\\n\";");
+  verifyFormat("llvm::errs() << aaaaaaaaaaaaaaaaaaaaaa << \'\\n\'\n"
+               "             << bbbbbbbbbbbbbbbbbbbbbb << \'\\n\';");
+  verifyFormat("llvm::errs() << aaaa << \"aaaaaaaaaaaaaaaaaa\\n\"\n"
+               "             << bbbb << \"bbbbbbbbbbbbbbbbbb\\n\";");
+  verifyFormat("llvm::errs() << \"\\n\" << bbbbbbbbbbbbbbbbbbbbbb << \"\\n\";");
 }
 
 TEST_F(FormatTest, UnderstandsEquals) {
@@ -7487,8 +7520,8 @@ TEST_F(FormatTest, FormatObjCMethodExpr) {
                "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa];");
   verifyFormat("[aaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaa[aaaaaaaaaaaaaaaaaaaaa]\n"
                "    aaaaaaaaaaaaaaaaaaaaaa];");
-  verifyFormat("[call aaaaaaaa.aaaaaa.aaaaaaaa.aaaaaaaa.aaaaaaaa\n"
-               "        .aaaaaaaa.aaaaaaaa];", // FIXME: Indentation seems off.
+  verifyFormat("[call aaaaaaaa.aaaaaa.aaaaaaaa.aaaaaaaa.aaaaaaaa.aaaaaaaa\n"
+               "        .aaaaaaaa];", // FIXME: Indentation seems off.
                getLLVMStyleWithColumns(60));
 
   verifyFormat(
@@ -8283,7 +8316,7 @@ TEST_F(FormatTest, ConfigurableUseOfTab) {
                "\taaaaaaaaaaaaaaaaaaaaaaaaaaaa();\n"
                "};",
                Tab);
-  verifyFormat("enum A {\n"
+  verifyFormat("enum AA {\n"
                "\ta1, // Force multiple lines\n"
                "\ta2,\n"
                "\ta3\n"
@@ -10605,6 +10638,7 @@ TEST_F(FormatTest, FormatsLambdas) {
   // Lambdas created through weird macros.
   verifyFormat("void f() {\n"
                "  MACRO((const AA &a) { return 1; });\n"
+               "  MACRO((AA &a) { return 1; });\n"
                "}");
 
   verifyFormat("if (blah_blah(whatever, whatever, [] {\n"

@@ -2548,7 +2548,8 @@ public:
                                      MultiExprArg Args,
                                      SourceLocation RParenLoc,
                                      Expr *ExecConfig,
-                                     bool AllowTypoCorrection=true);
+                                     bool AllowTypoCorrection=true,
+                                     bool CalleesAddressIsTaken=false);
 
   bool buildOverloadedCallSet(Scope *S, Expr *Fn, UnresolvedLookupExpr *ULE,
                               MultiExprArg Args, SourceLocation RParenLoc,
@@ -3416,7 +3417,6 @@ public:
   bool LookupInlineAsmField(StringRef Base, StringRef Member,
                             unsigned &Offset, SourceLocation AsmLoc);
   ExprResult LookupInlineAsmVarDeclField(Expr *RefExpr, StringRef Member,
-                                         unsigned &Offset,
                                          llvm::InlineAsmIdentifierInfo &Info,
                                          SourceLocation AsmLoc);
   StmtResult ActOnMSAsmStmt(SourceLocation AsmLoc, SourceLocation LBraceLoc,

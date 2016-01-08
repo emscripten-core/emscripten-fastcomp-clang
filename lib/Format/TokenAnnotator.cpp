@@ -199,6 +199,18 @@ private:
         Left->MatchingParen = CurrentToken;
         CurrentToken->MatchingParen = Left;
 
+        if (CurrentToken->Next && CurrentToken->Next->is(tok::l_brace) &&
+            Left->Previous && Left->Previous->is(tok::l_paren)) {
+          // Detect the case where macros are used to generate lambdas or
+          // function bodies, e.g.:
+          //   auto my_lambda = MARCO((Type *type, int i) { .. body .. });
+          for (FormatToken *Tok = Left; Tok != CurrentToken; Tok = Tok->Next) {
+            if (Tok->is(TT_BinaryOperator) &&
+                Tok->isOneOf(tok::star, tok::amp, tok::ampamp))
+              Tok->Type = TT_PointerOrReference;
+          }
+        }
+
         if (StartsObjCMethodExpr) {
           CurrentToken->Type = TT_ObjCMethodExpr;
           if (Contexts.back().FirstObjCSelectorName) {
@@ -1330,6 +1342,8 @@ public:
       } else {
         // Operator found.
         if (CurrentPrecedence == Precedence) {
+          if (LatestOperator)
+            LatestOperator->NextOperator = Current;
           LatestOperator = Current;
           Current->OperatorIndex = OperatorIndex;
           ++OperatorIndex;
@@ -1339,7 +1353,7 @@ public:
     }
 
     if (LatestOperator && (Current || Precedence > 0)) {
-      LatestOperator->LastOperator = true;
+      // LatestOperator->LastOperator = true;
       if (Precedence == PrecedenceArrowAndPeriod) {
         // Call expressions don't have a binary operator precedence.
         addFakeParenthesis(Start, prec::Unknown);
@@ -1771,7 +1785,15 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
     // which might otherwise be blown up onto many lines. Here, clang-format
     // won't produce "hanging" indents anyway as there is no other trailing
     // call.
-    return Right.LastOperator ? 150 : 35;
+    //
+    // Also apply higher penalty is not a call as that might lead to a wrapping
+    // like:
+    //
+    //   aaaaaaa
+    //       .aaaaaaaaa.bbbbbbbb(cccccccc);
+    return !Right.NextOperator || !Right.NextOperator->Previous->closesScope()
+               ? 150
+               : 35;
   }
 
   if (Right.is(TT_TrailingAnnotation) &&
@@ -1823,7 +1845,7 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
 
   if (Right.is(tok::lessless)) {
     if (Left.is(tok::string_literal) &&
-        (!Right.LastOperator || Right.OperatorIndex != 1)) {
+        (Right.NextOperator || Right.OperatorIndex != 1)) {
       StringRef Content = Left.TokenText;
       if (Content.startswith("\""))
         Content = Content.drop_front(1);

@@ -288,6 +288,11 @@ TEST_F(FormatTestJS, ArrayLiterals) {
                "  bbbbbbbbbbbbbbbbbbbbbbbbbbb,\n"
                "  ccccccccccccccccccccccccccc\n"
                "];");
+  verifyFormat("return [\n"
+               "  aaaa().bbbbbbbb('A'),\n"
+               "  aaaa().bbbbbbbb('B'),\n"
+               "  aaaa().bbbbbbbb('C'),\n"
+               "];");
   verifyFormat("var someVariable = SomeFunction([\n"
                "  aaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
                "  bbbbbbbbbbbbbbbbbbbbbbbbbbb,\n"
@@ -812,6 +817,7 @@ TEST_F(FormatTestJS, MetadataAnnotations) {
 TEST_F(FormatTestJS, Modules) {
   verifyFormat("import SomeThing from 'some/module.js';");
   verifyFormat("import {X, Y} from 'some/module.js';");
+  verifyFormat("import a, {X, Y} from 'some/module.js';");
   verifyFormat("import {\n"
                "  VeryLongImportsAreAnnoying,\n"
                "  VeryLongImportsAreAnnoying,\n"
