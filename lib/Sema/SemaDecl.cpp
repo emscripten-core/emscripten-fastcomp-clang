@@ -8256,6 +8256,23 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     for (auto Param : NewFD->params())
       checkIsValidOpenCLKernelParameter(*this, D, Param, ValidTypes);
   }
+  for (FunctionDecl::param_iterator PI = NewFD->param_begin(),
+       PE = NewFD->param_end(); PI != PE; ++PI) {
+    ParmVarDecl *Param = *PI;
+    QualType PT = Param->getType();
+
+    // OpenCL 2.0 pipe restrictions forbids pipe packet types to be non-value
+    // types.
+    if (getLangOpts().OpenCLVersion >= 200) {
+      if(const PipeType *PipeTy = PT->getAs<PipeType>()) {
+        QualType ElemTy = PipeTy->getElementType();
+          if (ElemTy->isReferenceType() || ElemTy->isPointerType()) {
+            Diag(Param->getTypeSpecStartLoc(), diag::err_reference_pipe_type );
+            D.setInvalidType();
+          }
+      }
+    }
+  }
 
   MarkUnusedFileScopedDecl(NewFD);
 
@@ -11798,6 +11815,28 @@ static bool isAcceptableTagRedeclContext(Sema &S, DeclContext *OldDC,
   return false;
 }
 
+/// Find the DeclContext in which a tag is implicitly declared if we see an
+/// elaborated type specifier in the specified context, and lookup finds
+/// nothing.
+static DeclContext *getTagInjectionContext(DeclContext *DC) {
+  while (!DC->isFileContext() && !DC->isFunctionOrMethod())
+    DC = DC->getParent();
+  return DC;
+}
+
+/// Find the Scope in which a tag is implicitly declared if we see an
+/// elaborated type specifier in the specified context, and lookup finds
+/// nothing.
+static Scope *getTagInjectionScope(Scope *S, const LangOptions &LangOpts) {
+  while (S->isClassScope() ||
+         (LangOpts.CPlusPlus &&
+          S->isFunctionPrototypeScope()) ||
+         ((S->getFlags() & Scope::DeclScope) == 0) ||
+         (S->getEntity() && S->getEntity()->isTransparentContext()))
+    S = S->getParent();
+  return S;
+}
+
 /// \brief This is invoked when we see 'struct foo' or 'struct {'.  In the
 /// former case, Name will be non-null.  In the later case, Name will be null.
 /// TagSpec indicates what kind of tag this is. TUK indicates whether this is a
@@ -12114,16 +12153,10 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
       // Find the context where we'll be declaring the tag.
       // FIXME: We would like to maintain the current DeclContext as the
       // lexical context,
-      while (!SearchDC->isFileContext() && !SearchDC->isFunctionOrMethod())
-        SearchDC = SearchDC->getParent();
+      SearchDC = getTagInjectionContext(SearchDC);
 
       // Find the scope where we'll be declaring the tag.
-      while (S->isClassScope() ||
-             (getLangOpts().CPlusPlus &&
-              S->isFunctionPrototypeScope()) ||
-             ((S->getFlags() & Scope::DeclScope) == 0) ||
-             (S->getEntity() && S->getEntity()->isTransparentContext()))
-        S = S->getParent();
+      S = getTagInjectionScope(S, getLangOpts());
     } else {
       assert(TUK == TUK_Friend);
       // C++ [namespace.memdef]p3:
@@ -12283,7 +12316,8 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
             } else if (TUK == TUK_Reference &&
                        (PrevTagDecl->getFriendObjectKind() ==
                             Decl::FOK_Undeclared ||
-                        getOwningModule(PrevDecl) !=
+                        PP.getModuleContainingLocation(
+                            PrevDecl->getLocation()) !=
                             PP.getModuleContainingLocation(KWLoc)) &&
                        SS.isEmpty()) {
               // This declaration is a reference to an existing entity, but
@@ -12293,14 +12327,12 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
               // the declaration would have meant the same thing if no prior
               // declaration were found, that is, if it was found in the same
               // scope where we would have injected a declaration.
-              DeclContext *InjectedDC = CurContext;
-              while (!InjectedDC->isFileContext() &&
-                     !InjectedDC->isFunctionOrMethod())
-                InjectedDC = InjectedDC->getParent();
-              if (!InjectedDC->getRedeclContext()->Equals(
-                  PrevDecl->getDeclContext()->getRedeclContext()))
+              if (!getTagInjectionContext(CurContext)->getRedeclContext()
+                       ->Equals(PrevDecl->getDeclContext()->getRedeclContext()))
                 return PrevTagDecl;
-              // This is in the injected scope, create a new declaration.
+              // This is in the injected scope, create a new declaration in
+              // that scope.
+              S = getTagInjectionScope(S, getLangOpts());
             } else {
               return PrevTagDecl;
             }
@@ -12602,7 +12634,7 @@ CreateNewDecl:
             << Name;
         Invalid = true;
       }
-    } else {
+    } else if (!PrevDecl) {
       Diag(Loc, diag::warn_decl_in_param_list) << Context.getTagDeclType(New);
     }
     DeclsInPrototypeScope.push_back(New);

@@ -1046,6 +1046,9 @@ public:
   /// Subclasses may override this routine to provide different behavior.
   QualType RebuildAtomicType(QualType ValueType, SourceLocation KWLoc);
 
+  /// \brief Build a new pipe type given its value type.
+  QualType RebuildPipeType(QualType ValueType, SourceLocation KWLoc);
+
   /// \brief Build a new template name given a nested name specifier, a flag
   /// indicating whether the "template" keyword was provided, and the template
   /// that the template name refers to.
@@ -3580,7 +3583,7 @@ void TreeTransform<Derived>::InventTemplateArgumentLoc(
   case TemplateArgument::Template:
   case TemplateArgument::TemplateExpansion: {
     NestedNameSpecifierLocBuilder Builder;
-    TemplateName Template = Arg.getAsTemplate();
+    TemplateName Template = Arg.getAsTemplateOrTemplatePattern();
     if (DependentTemplateName *DTN = Template.getAsDependentTemplateName())
       Builder.MakeTrivial(SemaRef.Context, DTN->getQualifier(), Loc);
     else if (QualifiedTemplateName *QTN = Template.getAsQualifiedTemplateName())
@@ -5320,6 +5323,26 @@ QualType TreeTransform<Derived>::TransformAtomicType(TypeLocBuilder &TLB,
   NewTL.setKWLoc(TL.getKWLoc());
   NewTL.setLParenLoc(TL.getLParenLoc());
   NewTL.setRParenLoc(TL.getRParenLoc());
+
+  return Result;
+}
+
+template <typename Derived>
+QualType TreeTransform<Derived>::TransformPipeType(TypeLocBuilder &TLB,
+                                                   PipeTypeLoc TL) {
+  QualType ValueType = getDerived().TransformType(TLB, TL.getValueLoc());
+  if (ValueType.isNull())
+    return QualType();
+
+  QualType Result = TL.getType();
+  if (getDerived().AlwaysRebuild() || ValueType != TL.getValueLoc().getType()) {
+    Result = getDerived().RebuildPipeType(ValueType, TL.getKWLoc());
+    if (Result.isNull())
+      return QualType();
+  }
+
+  PipeTypeLoc NewTL = TLB.push<PipeTypeLoc>(Result);
+  NewTL.setKWLoc(TL.getKWLoc());
 
   return Result;
 }
@@ -11347,6 +11370,12 @@ template<typename Derived>
 QualType TreeTransform<Derived>::RebuildAtomicType(QualType ValueType,
                                                    SourceLocation KWLoc) {
   return SemaRef.BuildAtomicType(ValueType, KWLoc);
+}
+
+template<typename Derived>
+QualType TreeTransform<Derived>::RebuildPipeType(QualType ValueType,
+                                                   SourceLocation KWLoc) {
+  return SemaRef.BuildPipeType(ValueType, KWLoc);
 }
 
 template<typename Derived>
