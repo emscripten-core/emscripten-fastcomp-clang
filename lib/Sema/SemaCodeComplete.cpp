@@ -19,7 +19,6 @@
 #include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/CodeCompleteConsumer.h"
-#include "clang/Sema/ExternalSemaSource.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Overload.h"
 #include "clang/Sema/Scope.h"
@@ -1518,7 +1517,6 @@ static void AddOrdinaryNameResults(Sema::ParserCompletionContext CCC,
                                    ResultBuilder &Results) {
   CodeCompletionAllocator &Allocator = Results.getAllocator();
   CodeCompletionBuilder Builder(Allocator, Results.getCodeCompletionTUInfo());
-  PrintingPolicy Policy = getCompletionPrintingPolicy(SemaRef);
   
   typedef CodeCompletionResult Result;
   switch (CCC) {
@@ -3046,6 +3044,7 @@ CXCursorKind clang::getCursorKindForDecl(const Decl *D) {
     case Decl::ClassTemplatePartialSpecialization:
       return CXCursor_ClassTemplatePartialSpecialization;
     case Decl::UsingDirective:     return CXCursor_UsingDirective;
+    case Decl::StaticAssert:       return CXCursor_StaticAssert;
     case Decl::TranslationUnit:    return CXCursor_TranslationUnit;
       
     case Decl::Using:
@@ -3209,7 +3208,7 @@ static void MaybeAddOverrideCalls(Sema &S, DeclContext *InContext,
   
   // We need to have names for all of the parameters, if we're going to 
   // generate a forwarding call.
-  for (auto P : Method->params())
+  for (auto P : Method->parameters())
     if (!P->getDeclName())
       return;
 
@@ -3241,7 +3240,7 @@ static void MaybeAddOverrideCalls(Sema &S, DeclContext *InContext,
                                          Overridden->getNameAsString()));
     Builder.AddChunk(CodeCompletionString::CK_LeftParen);
     bool FirstParam = true;
-    for (auto P : Method->params()) {
+    for (auto P : Method->parameters()) {
       if (FirstParam)
         FirstParam = false;
       else
@@ -3570,7 +3569,7 @@ static void AddObjCProperties(const CodeCompletionContext &CCContext,
   Container = getContainerDef(Container);
   
   // Add properties in this container.
-  for (const auto *P : Container->properties())
+  for (const auto *P : Container->instance_properties())
     if (AddedProperties.insert(P->getIdentifier()).second)
       Results.MaybeAddResult(Result(P, Results.getBasePriority(P), nullptr),
                              CurContext);
@@ -3812,10 +3811,17 @@ void Sema::CodeCompleteTypeQualifiers(DeclSpec &DS) {
   if (getLangOpts().C11 &&
       !(DS.getTypeQualifiers() & DeclSpec::TQ_atomic))
     Results.AddResult("_Atomic");
+  if (getLangOpts().MSVCCompat &&
+      !(DS.getTypeQualifiers() & DeclSpec::TQ_unaligned))
+    Results.AddResult("__unaligned");
   Results.ExitScope();
   HandleCodeCompleteResults(this, CodeCompleter, 
                             Results.getCompletionContext(),
                             Results.data(), Results.size());
+}
+
+void Sema::CodeCompleteBracketDeclarator(Scope *S) {
+  CodeCompleteExpression(S, QualType(getASTContext().getSizeType()));
 }
 
 void Sema::CodeCompleteCase(Scope *S) {
@@ -6189,7 +6195,7 @@ void Sema::CodeCompleteObjCPropertySynthesizeIvar(Scope *S,
   // Figure out which interface we're looking into.
   ObjCInterfaceDecl *Class = nullptr;
   if (ObjCImplementationDecl *ClassImpl
-                                 = dyn_cast<ObjCImplementationDecl>(Container))  
+                                 = dyn_cast<ObjCImplementationDecl>(Container))
     Class = ClassImpl->getClassInterface();
   else
     Class = cast<ObjCCategoryImplDecl>(Container)->getCategoryDecl()
@@ -6198,8 +6204,8 @@ void Sema::CodeCompleteObjCPropertySynthesizeIvar(Scope *S,
   // Determine the type of the property we're synthesizing.
   QualType PropertyType = Context.getObjCIdType();
   if (Class) {
-    if (ObjCPropertyDecl *Property
-                              = Class->FindPropertyDeclaration(PropertyName)) {
+    if (ObjCPropertyDecl *Property = Class->FindPropertyDeclaration(
+            PropertyName, ObjCPropertyQueryKind::OBJC_PR_query_instance)) {
       PropertyType 
         = Property->getType().getNonReferenceType().getUnqualifiedType();
       
@@ -7178,7 +7184,7 @@ void Sema::CodeCompleteObjCMethodDecl(Scope *S,
         Containers.push_back(Cat);
     
     for (unsigned I = 0, N = Containers.size(); I != N; ++I)
-      for (auto *P : Containers[I]->properties())
+      for (auto *P : Containers[I]->instance_properties())
         AddObjCKeyValueCompletions(P, IsInstanceMethod, ReturnType, Context, 
                                    KnownSelectors, Results);
   }

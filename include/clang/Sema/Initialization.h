@@ -284,9 +284,10 @@ public:
 
 
   /// \brief Create the initialization entity for a base class subobject.
-  static InitializedEntity InitializeBase(ASTContext &Context,
-                                          const CXXBaseSpecifier *Base,
-                                          bool IsInheritedVirtualBase);
+  static InitializedEntity
+  InitializeBase(ASTContext &Context, const CXXBaseSpecifier *Base,
+                 bool IsInheritedVirtualBase,
+                 const InitializedEntity *Parent = nullptr);
 
   /// \brief Create the initialization entity for a delegated constructor.
   static InitializedEntity InitializeDelegation(QualType Type) {
@@ -885,14 +886,17 @@ public:
   /// \param TopLevelOfInitList true if we are initializing from an expression
   ///        at the top level inside an initializer list. This disallows
   ///        narrowing conversions in C++11 onwards.
+  /// \param TreatUnavailableAsInvalid true if we want to treat unavailable
+  ///        as invalid.
   InitializationSequence(Sema &S, 
                          const InitializedEntity &Entity,
                          const InitializationKind &Kind,
                          MultiExprArg Args,
-                         bool TopLevelOfInitList = false);
+                         bool TopLevelOfInitList = false,
+                         bool TreatUnavailableAsInvalid = true);
   void InitializeFrom(Sema &S, const InitializedEntity &Entity,
                       const InitializationKind &Kind, MultiExprArg Args,
-                      bool TopLevelOfInitList);
+                      bool TopLevelOfInitList, bool TreatUnavailableAsInvalid);
 
   ~InitializationSequence();
   
@@ -1042,8 +1046,8 @@ public:
   /// \param FromInitList The constructor call is syntactically an initializer
   /// list.
   /// \param AsInitList The constructor is called as an init list constructor.
-  void AddConstructorInitializationStep(CXXConstructorDecl *Constructor,
-                                        AccessSpecifier Access,
+  void AddConstructorInitializationStep(DeclAccessPair FoundDecl,
+                                        CXXConstructorDecl *Constructor,
                                         QualType T,
                                         bool HadMultipleCandidates,
                                         bool FromInitList, bool AsInitList);

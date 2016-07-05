@@ -163,6 +163,7 @@ protected:
     bool IsValid;
     const Driver &D;
     std::string CudaInstallPath;
+    std::string CudaBinPath;
     std::string CudaLibPath;
     std::string CudaLibDevicePath;
     std::string CudaIncludePath;
@@ -179,6 +180,8 @@ protected:
 
     /// \brief Get the detected Cuda installation path.
     StringRef getInstallPath() const { return CudaInstallPath; }
+    /// \brief Get the detected path to Cuda's bin directory.
+    StringRef getBinPath() const { return CudaBinPath; }
     /// \brief Get the detected Cuda Include path.
     StringRef getIncludePath() const { return CudaIncludePath; }
     /// \brief Get the detected Cuda library path.
@@ -493,6 +496,10 @@ protected:
     return TargetVersion < VersionTuple(V0, V1, V2);
   }
 
+  StringRef getPlatformFamily() const;
+  static StringRef getSDKName(StringRef isysroot);
+  StringRef getOSLibraryNameSuffix() const;
+
 public:
   /// }
   /// @name ToolChain Implementation
@@ -507,6 +514,7 @@ public:
   TranslateArgs(const llvm::opt::DerivedArgList &Args,
                 const char *BoundArch) const override;
 
+  CXXStdlibType GetDefaultCXXStdlibType() const override;
   ObjCRuntime getDefaultObjCRuntime(bool isNonFragile) const override;
   bool hasBlocksRuntime() const override;
 
@@ -535,6 +543,8 @@ public:
   void CheckObjCARC() const override;
 
   bool UseSjLjExceptions(const llvm::opt::ArgList &Args) const override;
+
+  bool SupportsEmbeddedBitcode() const override;
 
   SanitizerMask getSupportedSanitizers() const override;
 };
@@ -609,7 +619,10 @@ public:
   void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
                            llvm::opt::ArgStringList &CmdArgs) const override;
 
-  bool isPIEDefault() const override { return false; }
+  bool isPIEDefault() const override { return true; }
+
+  SanitizerMask getSupportedSanitizers() const override;
+  SanitizerMask getDefaultSanitizers() const override;
 
 protected:
   Tool *buildLinker() const override;
@@ -667,6 +680,18 @@ private:
   void findGccLibDir();
 };
 
+class LLVM_LIBRARY_VISIBILITY Haiku : public Generic_ELF {
+public:
+  Haiku(const Driver &D, const llvm::Triple &Triple,
+          const llvm::opt::ArgList &Args);
+
+  bool isPIEDefault() const override { return getTriple().getArch() == llvm::Triple::x86_64; }
+
+  void
+  AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                              llvm::opt::ArgStringList &CC1Args) const override;
+};
+
 class LLVM_LIBRARY_VISIBILITY OpenBSD : public Generic_ELF {
 public:
   OpenBSD(const Driver &D, const llvm::Triple &Triple,
@@ -694,7 +719,7 @@ public:
   bool IsMathErrnoDefault() const override { return false; }
   bool IsObjCNonFragileABIDefault() const override { return true; }
 
-  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+  CXXStdlibType GetDefaultCXXStdlibType() const override;
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
@@ -718,10 +743,12 @@ public:
   bool IsMathErrnoDefault() const override { return false; }
   bool IsObjCNonFragileABIDefault() const override { return true; }
 
-  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+  CXXStdlibType GetDefaultCXXStdlibType() const override;
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
+  void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
+                           llvm::opt::ArgStringList &CmdArgs) const override;
 
   bool UseSjLjExceptions(const llvm::opt::ArgList &Args) const override;
   bool isPIEDefault() const override;
@@ -744,7 +771,7 @@ public:
   bool IsMathErrnoDefault() const override { return false; }
   bool IsObjCNonFragileABIDefault() const override { return true; }
 
-  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+  CXXStdlibType GetDefaultCXXStdlibType() const override;
 
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,
@@ -793,11 +820,15 @@ public:
       llvm::opt::ArgStringList &CC1Args) const override;
   void AddCudaIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                           llvm::opt::ArgStringList &CC1Args) const override;
+  void AddIAMCUIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                           llvm::opt::ArgStringList &CC1Args) const override;
   bool isPIEDefault() const override;
   SanitizerMask getSupportedSanitizers() const override;
   void addProfileRTLibs(const llvm::opt::ArgList &Args,
                         llvm::opt::ArgStringList &CmdArgs) const override;
   virtual std::string computeSysRoot() const;
+
+  virtual std::string getDynamicLinker(const llvm::opt::ArgList &Args) const;
 
   std::vector<std::string> ExtraOpts;
 
@@ -816,6 +847,14 @@ public:
                 const char *BoundArch) const override;
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                              llvm::opt::ArgStringList &CC1Args) const override;
+
+  // Never try to use the integrated assembler with CUDA; always fork out to
+  // ptxas.
+  bool useIntegratedAs() const override { return false; }
+
+protected:
+  Tool *buildAssembler() const override;  // ptxas
+  Tool *buildLinker() const override;     // fatbinary (ok, not really a linker)
 };
 
 class LLVM_LIBRARY_VISIBILITY MipsLLVMToolChain : public Linux {
@@ -852,6 +891,14 @@ public:
 private:
   Multilib SelectedMultilib;
   std::string LibSuffix;
+};
+
+class LLVM_LIBRARY_VISIBILITY LanaiToolChain : public Generic_ELF {
+public:
+  LanaiToolChain(const Driver &D, const llvm::Triple &Triple,
+                 const llvm::opt::ArgList &Args)
+      : Generic_ELF(D, Triple, Args) {}
+  bool IsIntegratedAssemblerDefault() const override { return true; }
 };
 
 class LLVM_LIBRARY_VISIBILITY HexagonToolChain : public Linux {
@@ -915,6 +962,7 @@ protected:
 public:
   AMDGPUToolChain(const Driver &D, const llvm::Triple &Triple,
             const llvm::opt::ArgList &Args);
+  unsigned GetDefaultDwarfVersion() const override { return 2; }
   bool IsIntegratedAssemblerDefault() const override { return true; }
 };
 
@@ -1002,6 +1050,7 @@ public:
   bool getVisualStudioInstallDir(std::string &path) const;
   bool getVisualStudioBinariesFolder(const char *clangProgramPath,
                                      std::string &path) const;
+  VersionTuple getMSVCVersionFromExe() const override;
 
   std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
                                           types::ID InputType) const override;
@@ -1079,7 +1128,7 @@ public:
 
 /// MyriadToolChain - A tool chain using either clang or the external compiler
 /// installed by the Movidius SDK to perform all subcommands.
-class LLVM_LIBRARY_VISIBILITY MyriadToolChain : public Generic_GCC {
+class LLVM_LIBRARY_VISIBILITY MyriadToolChain : public Generic_ELF {
 public:
   MyriadToolChain(const Driver &D, const llvm::Triple &Triple,
                   const llvm::opt::ArgList &Args);
@@ -1124,6 +1173,14 @@ private:
   bool HasNativeLLVMSupport() const override;
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                              llvm::opt::ArgStringList &CC1Args) const override;
+  RuntimeLibType GetDefaultRuntimeLibType() const override;
+  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+  void AddClangSystemIncludeArgs(
+      const llvm::opt::ArgList &DriverArgs,
+      llvm::opt::ArgStringList &CC1Args) const override;
+  void AddClangCXXStdlibIncludeArgs(
+      const llvm::opt::ArgList &DriverArgs,
+      llvm::opt::ArgStringList &CC1Args) const override;
 
   Tool *buildLinker() const override;
 };

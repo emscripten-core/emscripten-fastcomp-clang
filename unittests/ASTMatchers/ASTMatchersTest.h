@@ -37,8 +37,8 @@ public:
 // If 'FindResultVerifier' is NULL, sets *Verified to true when Run is called.
 class VerifyMatch : public MatchFinder::MatchCallback {
 public:
-  VerifyMatch(BoundNodesCallback *FindResultVerifier, bool *Verified)
-      : Verified(Verified), FindResultReviewer(FindResultVerifier) {}
+  VerifyMatch(std::unique_ptr<BoundNodesCallback> FindResultVerifier, bool *Verified)
+      : Verified(Verified), FindResultReviewer(std::move(FindResultVerifier)) {}
 
   void run(const MatchFinder::MatchResult &Result) override {
     if (FindResultReviewer != nullptr) {
@@ -55,7 +55,7 @@ public:
 
 private:
   bool *const Verified;
-  BoundNodesCallback *const FindResultReviewer;
+  const std::unique_ptr<BoundNodesCallback> FindResultReviewer;
 };
 
 template <typename T>
@@ -79,9 +79,9 @@ testing::AssertionResult matchesConditionally(
   // Some tests need rtti/exceptions on
   Args.push_back("-frtti");
   Args.push_back("-fexceptions");
-  if (!runToolOnCodeWithArgs(Factory->create(), Code, Args, Filename,
-                             std::make_shared<PCHContainerOperations>(),
-                             VirtualMappedFiles)) {
+  if (!runToolOnCodeWithArgs(
+          Factory->create(), Code, Args, Filename, "clang-tool",
+          std::make_shared<PCHContainerOperations>(), VirtualMappedFiles)) {
     return testing::AssertionFailure() << "Parsing error in \"" << Code << "\"";
   }
   if (Found != DynamicFound) {
@@ -123,6 +123,13 @@ template <typename T>
 testing::AssertionResult matchesC(const std::string &Code, const T &AMatcher) {
   return matchesConditionally(Code, AMatcher, true, "", FileContentMappings(),
                               "input.c");
+}
+
+template <typename T>
+testing::AssertionResult matchesC99(const std::string &Code,
+                                    const T &AMatcher) {
+  return matchesConditionally(Code, AMatcher, true, "-std=c99",
+                              FileContentMappings(), "input.c");
 }
 
 template <typename T>
@@ -215,12 +222,11 @@ testing::AssertionResult notMatchesWithCuda(const std::string &Code,
 template <typename T>
 testing::AssertionResult
 matchAndVerifyResultConditionally(const std::string &Code, const T &AMatcher,
-                                  BoundNodesCallback *FindResultVerifier,
+                                  std::unique_ptr<BoundNodesCallback> FindResultVerifier,
                                   bool ExpectResult) {
-  std::unique_ptr<BoundNodesCallback> ScopedVerifier(FindResultVerifier);
   bool VerifiedResult = false;
   MatchFinder Finder;
-  VerifyMatch VerifyVerifiedResult(FindResultVerifier, &VerifiedResult);
+  VerifyMatch VerifyVerifiedResult(std::move(FindResultVerifier), &VerifiedResult);
   Finder.addMatcher(AMatcher, &VerifyVerifiedResult);
   std::unique_ptr<FrontendActionFactory> Factory(
       newFrontendActionFactory(&Finder));
@@ -259,20 +265,92 @@ matchAndVerifyResultConditionally(const std::string &Code, const T &AMatcher,
 template <typename T>
 testing::AssertionResult
 matchAndVerifyResultTrue(const std::string &Code, const T &AMatcher,
-                         BoundNodesCallback *FindResultVerifier) {
+                         std::unique_ptr<BoundNodesCallback> FindResultVerifier) {
   return matchAndVerifyResultConditionally(
-      Code, AMatcher, FindResultVerifier, true);
+      Code, AMatcher, std::move(FindResultVerifier), true);
 }
 
 template <typename T>
 testing::AssertionResult
 matchAndVerifyResultFalse(const std::string &Code, const T &AMatcher,
-                          BoundNodesCallback *FindResultVerifier) {
+                          std::unique_ptr<BoundNodesCallback> FindResultVerifier) {
   return matchAndVerifyResultConditionally(
-      Code, AMatcher, FindResultVerifier, false);
+      Code, AMatcher, std::move(FindResultVerifier), false);
 }
 
-} // end namespace ast_matchers
-} // end namespace clang
+// Implements a run method that returns whether BoundNodes contains a
+// Decl bound to Id that can be dynamically cast to T.
+// Optionally checks that the check succeeded a specific number of times.
+template <typename T>
+class VerifyIdIsBoundTo : public BoundNodesCallback {
+public:
+  // Create an object that checks that a node of type \c T was bound to \c Id.
+  // Does not check for a certain number of matches.
+  explicit VerifyIdIsBoundTo(llvm::StringRef Id)
+    : Id(Id), ExpectedCount(-1), Count(0) {}
+
+  // Create an object that checks that a node of type \c T was bound to \c Id.
+  // Checks that there were exactly \c ExpectedCount matches.
+  VerifyIdIsBoundTo(llvm::StringRef Id, int ExpectedCount)
+    : Id(Id), ExpectedCount(ExpectedCount), Count(0) {}
+
+  // Create an object that checks that a node of type \c T was bound to \c Id.
+  // Checks that there was exactly one match with the name \c ExpectedName.
+  // Note that \c T must be a NamedDecl for this to work.
+  VerifyIdIsBoundTo(llvm::StringRef Id, llvm::StringRef ExpectedName,
+                    int ExpectedCount = 1)
+    : Id(Id), ExpectedCount(ExpectedCount), Count(0),
+      ExpectedName(ExpectedName) {}
+
+  void onEndOfTranslationUnit() override {
+    if (ExpectedCount != -1)
+      EXPECT_EQ(ExpectedCount, Count);
+    if (!ExpectedName.empty())
+      EXPECT_EQ(ExpectedName, Name);
+    Count = 0;
+    Name.clear();
+  }
+
+  ~VerifyIdIsBoundTo() override {
+    EXPECT_EQ(0, Count);
+    EXPECT_EQ("", Name);
+  }
+
+  bool run(const BoundNodes *Nodes) override {
+    const BoundNodes::IDToNodeMap &M = Nodes->getMap();
+    if (Nodes->getNodeAs<T>(Id)) {
+      ++Count;
+      if (const NamedDecl *Named = Nodes->getNodeAs<NamedDecl>(Id)) {
+        Name = Named->getNameAsString();
+      } else if (const NestedNameSpecifier *NNS =
+        Nodes->getNodeAs<NestedNameSpecifier>(Id)) {
+        llvm::raw_string_ostream OS(Name);
+        NNS->print(OS, PrintingPolicy(LangOptions()));
+      }
+      BoundNodes::IDToNodeMap::const_iterator I = M.find(Id);
+      EXPECT_NE(M.end(), I);
+      if (I != M.end())
+        EXPECT_EQ(Nodes->getNodeAs<T>(Id), I->second.get<T>());
+      return true;
+    }
+    EXPECT_TRUE(M.count(Id) == 0 ||
+      M.find(Id)->second.template get<T>() == nullptr);
+    return false;
+  }
+
+  bool run(const BoundNodes *Nodes, ASTContext *Context) override {
+    return run(Nodes);
+  }
+
+private:
+  const std::string Id;
+  const int ExpectedCount;
+  int Count;
+  const std::string ExpectedName;
+  std::string Name;
+};
+
+} // namespace ast_matchers
+} // namespace clang
 
 #endif  // LLVM_CLANG_UNITTESTS_AST_MATCHERS_AST_MATCHERS_TEST_H

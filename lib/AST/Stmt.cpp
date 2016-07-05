@@ -503,6 +503,9 @@ unsigned GCCAsmStmt::AnalyzeAsmString(SmallVectorImpl<AsmStringPiece>&Pieces,
 
   bool HasVariants = !C.getTargetInfo().hasNoAsmVariants();
 
+  unsigned LastAsmStringToken = 0;
+  unsigned LastAsmStringOffset = 0;
+
   while (1) {
     // Done with the string?
     if (CurPtr == StrEnd) {
@@ -589,10 +592,12 @@ unsigned GCCAsmStmt::AnalyzeAsmString(SmallVectorImpl<AsmStringPiece>&Pieces,
 
       // (BeginLoc, EndLoc) represents the range of the operand we are currently
       // processing. Unlike Str, the range includes the leading '%'.
-      SourceLocation BeginLoc =
-          getAsmString()->getLocationOfByte(Percent - StrStart, SM, LO, TI);
-      SourceLocation EndLoc =
-          getAsmString()->getLocationOfByte(CurPtr - StrStart, SM, LO, TI);
+      SourceLocation BeginLoc = getAsmString()->getLocationOfByte(
+          Percent - StrStart, SM, LO, TI, &LastAsmStringToken,
+          &LastAsmStringOffset);
+      SourceLocation EndLoc = getAsmString()->getLocationOfByte(
+          CurPtr - StrStart, SM, LO, TI, &LastAsmStringToken,
+          &LastAsmStringOffset);
 
       Pieces.emplace_back(N, std::move(Str), BeginLoc, EndLoc);
       continue;
@@ -623,10 +628,12 @@ unsigned GCCAsmStmt::AnalyzeAsmString(SmallVectorImpl<AsmStringPiece>&Pieces,
 
       // (BeginLoc, EndLoc) represents the range of the operand we are currently
       // processing. Unlike Str, the range includes the leading '%'.
-      SourceLocation BeginLoc =
-          getAsmString()->getLocationOfByte(Percent - StrStart, SM, LO, TI);
-      SourceLocation EndLoc =
-          getAsmString()->getLocationOfByte(NameEnd + 1 - StrStart, SM, LO, TI);
+      SourceLocation BeginLoc = getAsmString()->getLocationOfByte(
+          Percent - StrStart, SM, LO, TI, &LastAsmStringToken,
+          &LastAsmStringOffset);
+      SourceLocation EndLoc = getAsmString()->getLocationOfByte(
+          NameEnd + 1 - StrStart, SM, LO, TI, &LastAsmStringToken,
+          &LastAsmStringOffset);
 
       Pieces.emplace_back(N, std::move(Str), BeginLoc, EndLoc);
 
@@ -756,10 +763,11 @@ void MSAsmStmt::initialize(const ASTContext &C, StringRef asmstr,
                  });
 }
 
-IfStmt::IfStmt(const ASTContext &C, SourceLocation IL, VarDecl *var, Expr *cond,
-               Stmt *then, SourceLocation EL, Stmt *elsev)
-  : Stmt(IfStmtClass), IfLoc(IL), ElseLoc(EL)
-{
+IfStmt::IfStmt(const ASTContext &C, SourceLocation IL, bool IsConstexpr,
+               VarDecl *var, Expr *cond, Stmt *then, SourceLocation EL,
+               Stmt *elsev)
+    : Stmt(IfStmtClass), IfLoc(IL), ElseLoc(EL) {
+  setConstexpr(IsConstexpr);
   setConditionVariable(C, var);
   SubExprs[COND] = cond;
   SubExprs[THEN] = then;
@@ -987,8 +995,7 @@ CapturedStmt::Capture *CapturedStmt::getStoredCaptures() const {
   unsigned Size = sizeof(CapturedStmt) + sizeof(Stmt *) * (NumCaptures + 1);
 
   // Offset of the first Capture object.
-  unsigned FirstCaptureOffset =
-    llvm::RoundUpToAlignment(Size, llvm::alignOf<Capture>());
+  unsigned FirstCaptureOffset = llvm::alignTo(Size, llvm::alignOf<Capture>());
 
   return reinterpret_cast<Capture *>(
       reinterpret_cast<char *>(const_cast<CapturedStmt *>(this))
@@ -1045,7 +1052,7 @@ CapturedStmt *CapturedStmt::Create(const ASTContext &Context, Stmt *S,
   unsigned Size = sizeof(CapturedStmt) + sizeof(Stmt *) * (Captures.size() + 1);
   if (!Captures.empty()) {
     // Realign for the following Capture array.
-    Size = llvm::RoundUpToAlignment(Size, llvm::alignOf<Capture>());
+    Size = llvm::alignTo(Size, llvm::alignOf<Capture>());
     Size += sizeof(Capture) * Captures.size();
   }
 
@@ -1058,7 +1065,7 @@ CapturedStmt *CapturedStmt::CreateDeserialized(const ASTContext &Context,
   unsigned Size = sizeof(CapturedStmt) + sizeof(Stmt *) * (NumCaptures + 1);
   if (NumCaptures > 0) {
     // Realign for the following Capture array.
-    Size = llvm::RoundUpToAlignment(Size, llvm::alignOf<Capture>());
+    Size = llvm::alignTo(Size, llvm::alignOf<Capture>());
     Size += sizeof(Capture) * NumCaptures;
   }
 

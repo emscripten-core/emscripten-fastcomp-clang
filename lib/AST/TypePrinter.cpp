@@ -81,12 +81,14 @@ namespace {
   
   class TypePrinter {
     PrintingPolicy Policy;
+    unsigned Indentation;
     bool HasEmptyPlaceHolder;
     bool InsideCCAttribute;
 
   public:
-    explicit TypePrinter(const PrintingPolicy &Policy)
-      : Policy(Policy), HasEmptyPlaceHolder(false), InsideCCAttribute(false) { }
+    explicit TypePrinter(const PrintingPolicy &Policy, unsigned Indentation = 0)
+      : Policy(Policy), Indentation(Indentation),
+        HasEmptyPlaceHolder(false), InsideCCAttribute(false) { }
 
     void print(const Type *ty, Qualifiers qs, raw_ostream &OS,
                StringRef PlaceHolder);
@@ -110,7 +112,8 @@ namespace {
   };
 }
 
-static void AppendTypeQualList(raw_ostream &OS, unsigned TypeQuals, bool C99) {
+static void AppendTypeQualList(raw_ostream &OS, unsigned TypeQuals,
+                               bool HasRestrictKeyword) {
   bool appendSpace = false;
   if (TypeQuals & Qualifiers::Const) {
     OS << "const";
@@ -123,7 +126,7 @@ static void AppendTypeQualList(raw_ostream &OS, unsigned TypeQuals, bool C99) {
   }
   if (TypeQuals & Qualifiers::Restrict) {
     if (appendSpace) OS << ' ';
-    if (C99) {
+    if (HasRestrictKeyword) {
       OS << "restrict";
     } else {
       OS << "__restrict";
@@ -411,7 +414,7 @@ void TypePrinter::printMemberPointerBefore(const MemberPointerType *T,
     OS << '(';
 
   PrintingPolicy InnerPolicy(Policy);
-  InnerPolicy.SuppressTag = false;
+  InnerPolicy.IncludeTagDefinition = false;
   TypePrinter(InnerPolicy).print(QualType(T->getClass(), 0), OS, StringRef());
 
   OS << "::*";
@@ -437,7 +440,8 @@ void TypePrinter::printConstantArrayAfter(const ConstantArrayType *T,
                                           raw_ostream &OS) {
   OS << '[';
   if (T->getIndexTypeQualifiers().hasQualifiers()) {
-    AppendTypeQualList(OS, T->getIndexTypeCVRQualifiers(), Policy.LangOpts.C99);
+    AppendTypeQualList(OS, T->getIndexTypeCVRQualifiers(),
+                       Policy.Restrict);
     OS << ' ';
   }
 
@@ -470,7 +474,7 @@ void TypePrinter::printVariableArrayAfter(const VariableArrayType *T,
                                           raw_ostream &OS) {
   OS << '[';
   if (T->getIndexTypeQualifiers().hasQualifiers()) {
-    AppendTypeQualList(OS, T->getIndexTypeCVRQualifiers(), Policy.LangOpts.C99);
+    AppendTypeQualList(OS, T->getIndexTypeCVRQualifiers(), Policy.Restrict);
     OS << ' ';
   }
 
@@ -629,6 +633,20 @@ void TypePrinter::printFunctionProtoBefore(const FunctionProtoType *T,
   }
 }
 
+llvm::StringRef clang::getParameterABISpelling(ParameterABI ABI) {
+  switch (ABI) {
+  case ParameterABI::Ordinary:
+    llvm_unreachable("asking for spelling of ordinary parameter ABI");
+  case ParameterABI::SwiftContext:
+    return "swift_context";
+  case ParameterABI::SwiftErrorResult:
+    return "swift_error_result";
+  case ParameterABI::SwiftIndirectResult:
+    return "swift_indirect_result";
+  }
+  llvm_unreachable("bad parameter ABI kind");
+}
+
 void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T, 
                                           raw_ostream &OS) { 
   // If needed for precedence reasons, wrap the inner part in grouping parens.
@@ -641,6 +659,13 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
     ParamPolicyRAII ParamPolicy(Policy);
     for (unsigned i = 0, e = T->getNumParams(); i != e; ++i) {
       if (i) OS << ", ";
+
+      auto EPI = T->getExtParameterInfo(i);
+      if (EPI.isConsumed()) OS << "__attribute__((ns_consumed)) ";
+      auto ABI = EPI.getABI();
+      if (ABI != ParameterABI::Ordinary)
+        OS << "__attribute__((" << getParameterABISpelling(ABI) << ")) ";
+
       print(T->getParamType(i), OS, StringRef());
     }
   }
@@ -649,7 +674,7 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
     if (T->getNumParams())
       OS << ", ";
     OS << "...";
-  } else if (T->getNumParams() == 0 && !Policy.LangOpts.CPlusPlus) {
+  } else if (T->getNumParams() == 0 && Policy.UseVoidForZeroParams) {
     // Do not emit int() if we have a proto, emit 'int(void)'.
     OS << "void";
   }
@@ -703,6 +728,15 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
     case CC_SpirKernel:
       // Do nothing. These CCs are not available as attributes.
       break;
+    case CC_Swift:
+      OS << " __attribute__((swiftcall))";
+      break;
+    case CC_PreserveMost:
+      OS << " __attribute__((preserve_most))";
+      break;
+    case CC_PreserveAll:
+      OS << " __attribute__((preserve_all))";
+      break;
     }
   }
 
@@ -714,7 +748,7 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
 
   if (unsigned quals = T->getTypeQuals()) {
     OS << ' ';
-    AppendTypeQualList(OS, quals, Policy.LangOpts.C99);
+    AppendTypeQualList(OS, quals, Policy.Restrict);
   }
 
   switch (T->getRefQualifier()) {
@@ -863,7 +897,8 @@ void TypePrinter::printAtomicAfter(const AtomicType *T, raw_ostream &OS) { }
 void TypePrinter::printPipeBefore(const PipeType *T, raw_ostream &OS) {
   IncludeStrongLifetimeRAII Strong(Policy);
 
-  OS << "pipe";
+  OS << "pipe ";
+  print(T->getElementType(), OS, StringRef());
   spaceBeforePlaceHolder(OS);
 }
 
@@ -904,18 +939,19 @@ void TypePrinter::AppendScope(DeclContext *DC, raw_ostream &OS) {
 }
 
 void TypePrinter::printTag(TagDecl *D, raw_ostream &OS) {
-  if (Policy.SuppressTag)
+  if (Policy.IncludeTagDefinition) {
+    PrintingPolicy SubPolicy = Policy;
+    SubPolicy.IncludeTagDefinition = false;
+    D->print(OS, SubPolicy, Indentation);
+    spaceBeforePlaceHolder(OS);
     return;
+  }
 
   bool HasKindDecoration = false;
 
-  // bool SuppressTagKeyword
-  //   = Policy.LangOpts.CPlusPlus || Policy.SuppressTagKeyword;
-
   // We don't print tags unless this is an elaborated type.
   // In C, we just assume every RecordType is an elaborated type.
-  if (!(Policy.LangOpts.CPlusPlus || Policy.SuppressTagKeyword ||
-        D->getTypedefNameForAnonDecl())) {
+  if (!Policy.SuppressTagKeyword && !D->getTypedefNameForAnonDecl()) {
     HasKindDecoration = true;
     OS << D->getKindName();
     OS << ' ';
@@ -1060,14 +1096,16 @@ void TypePrinter::printInjectedClassNameAfter(const InjectedClassNameType *T,
 
 void TypePrinter::printElaboratedBefore(const ElaboratedType *T,
                                         raw_ostream &OS) {
-  if (Policy.SuppressTag && isa<TagType>(T->getNamedType()))
-    return;
-  OS << TypeWithKeyword::getKeywordName(T->getKeyword());
-  if (T->getKeyword() != ETK_None)
-    OS << " ";
-  NestedNameSpecifier* Qualifier = T->getQualifier();
-  if (Qualifier)
-    Qualifier->print(OS, Policy);
+  // The tag definition will take care of these.
+  if (!Policy.IncludeTagDefinition)
+  {
+    OS << TypeWithKeyword::getKeywordName(T->getKeyword());
+    if (T->getKeyword() != ETK_None)
+      OS << " ";
+    NestedNameSpecifier* Qualifier = T->getQualifier();
+    if (Qualifier)
+      Qualifier->print(OS, Policy);
+  }
   
   ElaboratedTypePolicyRAII PolicyRAII(Policy);
   printBefore(T->getNamedType(), OS);
@@ -1305,6 +1343,7 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
   case AttributedType::attr_fastcall: OS << "fastcall"; break;
   case AttributedType::attr_stdcall: OS << "stdcall"; break;
   case AttributedType::attr_thiscall: OS << "thiscall"; break;
+  case AttributedType::attr_swiftcall: OS << "swiftcall"; break;
   case AttributedType::attr_vectorcall: OS << "vectorcall"; break;
   case AttributedType::attr_pascal: OS << "pascal"; break;
   case AttributedType::attr_ms_abi: OS << "ms_abi"; break;
@@ -1321,6 +1360,12 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
    break;
   }
   case AttributedType::attr_inteloclbicc: OS << "inteloclbicc"; break;
+  case AttributedType::attr_preserve_most:
+    OS << "preserve_most";
+    break;
+  case AttributedType::attr_preserve_all:
+    OS << "preserve_all";
+    break;
   }
   OS << "))";
 }
@@ -1543,7 +1588,13 @@ void Qualifiers::print(raw_ostream &OS, const PrintingPolicy& Policy,
 
   unsigned quals = getCVRQualifiers();
   if (quals) {
-    AppendTypeQualList(OS, quals, Policy.LangOpts.C99);
+    AppendTypeQualList(OS, quals, Policy.Restrict);
+    addSpace = true;
+  }
+  if (hasUnaligned()) {
+    if (addSpace)
+      OS << ' ';
+    OS << "__unaligned";
     addSpace = true;
   }
   if (unsigned addrspace = getAddressSpace()) {
@@ -1617,11 +1668,11 @@ std::string QualType::getAsString(const Type *ty, Qualifiers qs) {
 
 void QualType::print(const Type *ty, Qualifiers qs,
                      raw_ostream &OS, const PrintingPolicy &policy,
-                     const Twine &PlaceHolder) {
+                     const Twine &PlaceHolder, unsigned Indentation) {
   SmallString<128> PHBuf;
   StringRef PH = PlaceHolder.toStringRef(PHBuf);
 
-  TypePrinter(policy).print(ty, qs, OS, PH);
+  TypePrinter(policy, Indentation).print(ty, qs, OS, PH);
 }
 
 void QualType::getAsStringInternal(const Type *ty, Qualifiers qs,

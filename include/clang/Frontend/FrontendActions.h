@@ -129,6 +129,7 @@ protected:
                                                  StringRef InFile) override;
 
 public:
+  ~SyntaxOnlyAction() override;
   bool hasCodeCompletionSupport() const override { return true; }
 };
 
@@ -168,7 +169,7 @@ public:
  */
 class ASTMergeAction : public FrontendAction {
   /// \brief The action that the merge action adapts.
-  FrontendAction *AdaptedAction;
+  std::unique_ptr<FrontendAction> AdaptedAction;
   
   /// \brief The set of AST files to merge.
   std::vector<std::string> ASTFiles;
@@ -184,7 +185,8 @@ protected:
   void EndSourceFileAction() override;
 
 public:
-  ASTMergeAction(FrontendAction *AdaptedAction, ArrayRef<std::string> ASTFiles);
+  ASTMergeAction(std::unique_ptr<FrontendAction> AdaptedAction,
+                 ArrayRef<std::string> ASTFiles);
   ~ASTMergeAction() override;
 
   bool usesPreprocessorOnly() const override;

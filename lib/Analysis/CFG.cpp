@@ -825,7 +825,7 @@ private:
     // * Variable x is equal to the largest literal.
     // * Variable x is greater than largest literal.
     bool AlwaysTrue = true, AlwaysFalse = true;
-    for (llvm::APSInt Value : Values) {
+    for (const llvm::APSInt &Value : Values) {
       TryResult Res1, Res2;
       Res1 = analyzeLogicOperatorCondition(BO1, Value, L1);
       Res2 = analyzeLogicOperatorCondition(BO2, Value, L2);
@@ -3397,8 +3397,10 @@ CFGBlock *CFGBuilder::VisitCXXForRangeStmt(CXXForRangeStmt *S) {
   // Create local scopes and destructors for range, begin and end variables.
   if (Stmt *Range = S->getRangeStmt())
     addLocalScopeForStmt(Range);
-  if (Stmt *BeginEnd = S->getBeginEndStmt())
-    addLocalScopeForStmt(BeginEnd);
+  if (Stmt *Begin = S->getBeginStmt())
+    addLocalScopeForStmt(Begin);
+  if (Stmt *End = S->getEndStmt())
+    addLocalScopeForStmt(End);
   addAutomaticObjDtors(ScopePos, save_scope_pos.get(), S);
 
   LocalScope::const_iterator ContinueScopePos = ScopePos;
@@ -3489,7 +3491,8 @@ CFGBlock *CFGBuilder::VisitCXXForRangeStmt(CXXForRangeStmt *S) {
 
   // Add the initialization statements.
   Block = createBlock();
-  addStmt(S->getBeginEndStmt());
+  addStmt(S->getBeginStmt());
+  addStmt(S->getEndStmt());
   return addStmt(S->getRangeStmt());
 }
 
@@ -4514,7 +4517,7 @@ void CFGBlock::dump(const CFG* cfg, const LangOptions &LO,
   print(llvm::errs(), cfg, LO, ShowColors);
 }
 
-void CFGBlock::dump() const {
+LLVM_DUMP_METHOD void CFGBlock::dump() const {
   dump(getParent(), LangOptions(), false);
 }
 

@@ -380,7 +380,7 @@ public:
   /// \note Most clients should use setFileManager, which will implicitly reset
   /// the virtual file system to the one contained in the file manager.
   void setVirtualFileSystem(IntrusiveRefCntPtr<vfs::FileSystem> FS) {
-    VirtualFileSystem = FS;
+    VirtualFileSystem = std::move(FS);
   }
 
   /// }
@@ -748,10 +748,12 @@ public:
   ///
   /// \return True on success.
   static bool InitializeSourceManager(const FrontendInputFile &Input,
-                DiagnosticsEngine &Diags,
-                FileManager &FileMgr,
-                SourceManager &SourceMgr,
-                const FrontendOptions &Opts);
+                                      DiagnosticsEngine &Diags,
+                                      FileManager &FileMgr,
+                                      SourceManager &SourceMgr,
+                                      HeaderSearch *HS,
+                                      DependencyOutputOptions &DepOpts,
+                                      const FrontendOptions &Opts);
 
   /// }
 
