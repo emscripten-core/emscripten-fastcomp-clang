@@ -369,18 +369,16 @@ void PrintPPOutputPPCallbacks::MacroUndefined(const Token &MacroNameTok,
   setEmittedDirectiveOnThisLine();
 }
 
-static void outputPrintable(llvm::raw_ostream& OS,
-                                             const std::string &Str) {
-    for (unsigned i = 0, e = Str.size(); i != e; ++i) {
-      unsigned char Char = Str[i];
-      if (isPrintable(Char) && Char != '\\' && Char != '"')
-        OS << (char)Char;
-      else  // Output anything hard as an octal escape.
-        OS << '\\'
-           << (char)('0'+ ((Char >> 6) & 7))
-           << (char)('0'+ ((Char >> 3) & 7))
-           << (char)('0'+ ((Char >> 0) & 7));
-    }
+static void outputPrintable(raw_ostream &OS, StringRef Str) {
+  for (unsigned char Char : Str) {
+    if (isPrintable(Char) && Char != '\\' && Char != '"')
+      OS << (char)Char;
+    else // Output anything hard as an octal escape.
+      OS << '\\'
+         << (char)('0' + ((Char >> 6) & 7))
+         << (char)('0' + ((Char >> 3) & 7))
+         << (char)('0' + ((Char >> 0) & 7));
+  }
 }
 
 void PrintPPOutputPPCallbacks::PragmaMessage(SourceLocation Loc,
@@ -577,6 +575,15 @@ struct UnknownPragmaHandler : public PragmaHandler {
     Callbacks->MoveToLine(PragmaTok.getLocation());
     Callbacks->OS.write(Prefix, strlen(Prefix));
 
+    if (ShouldExpandTokens) {
+      // The first token does not have expanded macros. Expand them, if
+      // required.
+      auto Toks = llvm::make_unique<Token[]>(1);
+      Toks[0] = PragmaTok;
+      PP.EnterTokenStream(std::move(Toks), /*NumToks=*/1,
+                          /*DisableMacroExpansion=*/false);
+      PP.Lex(PragmaTok);
+    }
     Token PrevToken;
     Token PrevPrevToken;
     PrevToken.startToken();

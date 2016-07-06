@@ -17,6 +17,7 @@ add_clang_unittest(ToolingTests
   RewriterTest.cpp
   RefactoringCallbacksTest.cpp
   ReplacementsYamlTest.cpp
+  QualTypeNamesTest.cpp
   )
 
 # XXX Emscripten: Hotfix for bug https://llvm.org/bugs/show_bug.cgi?id=26089

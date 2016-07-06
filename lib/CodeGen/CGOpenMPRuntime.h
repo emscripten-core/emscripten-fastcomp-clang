@@ -18,14 +18,14 @@
 #include "clang/Basic/OpenMPKinds.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/ValueHandle.h"
 
 namespace llvm {
 class ArrayType;
 class Constant;
-class Function;
 class FunctionType;
 class GlobalVariable;
 class StructType;
@@ -402,30 +402,27 @@ private:
     /// \brief Initialize target region entry.
     void initializeTargetRegionEntryInfo(unsigned DeviceID, unsigned FileID,
                                          StringRef ParentName, unsigned LineNum,
-                                         unsigned ColNum, unsigned Order);
+                                         unsigned Order);
     /// \brief Register target region entry.
     void registerTargetRegionEntryInfo(unsigned DeviceID, unsigned FileID,
                                        StringRef ParentName, unsigned LineNum,
-                                       unsigned ColNum, llvm::Constant *Addr,
+                                       llvm::Constant *Addr,
                                        llvm::Constant *ID);
     /// \brief Return true if a target region entry with the provided
     /// information exists.
     bool hasTargetRegionEntryInfo(unsigned DeviceID, unsigned FileID,
-                                  StringRef ParentName, unsigned LineNum,
-                                  unsigned ColNum) const;
+                                  StringRef ParentName, unsigned LineNum) const;
     /// brief Applies action \a Action on all registered entries.
     typedef llvm::function_ref<void(unsigned, unsigned, StringRef, unsigned,
-                                    unsigned, OffloadEntryInfoTargetRegion &)>
+                                    OffloadEntryInfoTargetRegion &)>
         OffloadTargetRegionEntryInfoActTy;
     void actOnTargetRegionEntriesInfo(
         const OffloadTargetRegionEntryInfoActTy &Action);
 
   private:
     // Storage for target region entries kind. The storage is to be indexed by
-    // file ID, device ID, parent function name, lane number, and column number.
+    // file ID, device ID, parent function name and line number.
     typedef llvm::DenseMap<unsigned, OffloadEntryInfoTargetRegion>
-        OffloadEntriesTargetRegionPerColumn;
-    typedef llvm::DenseMap<unsigned, OffloadEntriesTargetRegionPerColumn>
         OffloadEntriesTargetRegionPerLine;
     typedef llvm::StringMap<OffloadEntriesTargetRegionPerLine>
         OffloadEntriesTargetRegionPerParentName;
@@ -442,9 +439,10 @@ private:
   /// compilation unit. The function that does the registration is returned.
   llvm::Function *createOffloadingBinaryDescriptorRegistration();
 
-  /// \brief Creates offloading entry for the provided address \a Addr,
-  /// name \a Name and size \a Size.
-  void createOffloadEntry(llvm::Constant *Addr, StringRef Name, uint64_t Size);
+  /// \brief Creates offloading entry for the provided entry ID \a ID,
+  /// address \a Addr and size \a Size.
+  void createOffloadEntry(llvm::Constant *ID, llvm::Constant *Addr,
+                          uint64_t Size);
 
   /// \brief Creates all the offload entries in the current compilation unit
   /// along with the associated metadata.
@@ -530,7 +528,7 @@ private:
                                               const llvm::Twine &Name);
 
   /// \brief Set of threadprivate variables with the generated initializer.
-  llvm::DenseSet<const VarDecl *> ThreadPrivateWithDefinition;
+  llvm::SmallPtrSet<const VarDecl *, 4> ThreadPrivateWithDefinition;
 
   /// \brief Emits initialization code for the threadprivate variables.
   /// \param VDAddr Address of the global variable \a VD.

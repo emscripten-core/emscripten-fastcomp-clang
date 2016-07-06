@@ -17,6 +17,7 @@
 
 #include "clang/AST/DeclBase.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/TrailingObjects.h"
 
 namespace clang {
 class Expr;
@@ -86,6 +87,35 @@ public:
   static bool classofKind(Kind K) { return K == OMPThreadPrivate; }
 };
 
-}  // end namespace clang
+/// Pseudo declaration for capturing expressions. Also is used for capturing of
+/// non-static data members in non-static member functions.
+///
+/// Clang supports capturing of variables only, but OpenMP 4.5 allows to
+/// privatize non-static members of current class in non-static member
+/// functions. This pseudo-declaration allows properly handle this kind of
+/// capture by wrapping captured expression into a variable-like declaration.
+class OMPCapturedExprDecl final : public VarDecl {
+  friend class ASTDeclReader;
+  void anchor() override;
+
+  OMPCapturedExprDecl(ASTContext &C, DeclContext *DC, IdentifierInfo *Id,
+                      QualType Type)
+      : VarDecl(OMPCapturedExpr, C, DC, SourceLocation(), SourceLocation(), Id,
+                Type, nullptr, SC_None) {
+    setImplicit();
+  }
+
+public:
+  static OMPCapturedExprDecl *Create(ASTContext &C, DeclContext *DC,
+                                     IdentifierInfo *Id, QualType T);
+
+  static OMPCapturedExprDecl *CreateDeserialized(ASTContext &C, unsigned ID);
+
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Decl *D) { return classofKind(D->getKind()); }
+  static bool classofKind(Kind K) { return K == OMPCapturedExpr; }
+};
+
+} // end namespace clang
 
 #endif

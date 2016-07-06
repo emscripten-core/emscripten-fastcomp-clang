@@ -425,11 +425,11 @@ void EmitAssemblyHelper::CreatePasses(FunctionInfoIndex *FunctionIndex) {
         !CodeGenOpts.CoverageNoFunctionNamesInData;
     Options.ExitBlockBeforeBody = CodeGenOpts.CoverageExitBlockBeforeBody;
     MPM->add(createGCOVProfilerPass(Options));
-    if (CodeGenOpts.getDebugInfo() == CodeGenOptions::NoDebugInfo)
+    if (CodeGenOpts.getDebugInfo() == codegenoptions::NoDebugInfo)
       MPM->add(createStripSymbolsPass(true));
   }
 
-  if (CodeGenOpts.ProfileInstrGenerate) {
+  if (CodeGenOpts.hasProfileClangInstr()) {
     InstrProfOptions Options;
     Options.NoRedZone = CodeGenOpts.DisableRedZone;
     Options.InstrProfileOutput = CodeGenOpts.InstrProfileOutput;
@@ -558,19 +558,7 @@ TargetMachine *EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   Options.DataSections = CodeGenOpts.DataSections;
   Options.UniqueSectionNames = CodeGenOpts.UniqueSectionNames;
   Options.EmulatedTLS = CodeGenOpts.EmulatedTLS;
-  switch (CodeGenOpts.getDebuggerTuning()) {
-  case CodeGenOptions::DebuggerKindGDB:
-    Options.DebuggerTuning = llvm::DebuggerKind::GDB;
-    break;
-  case CodeGenOptions::DebuggerKindLLDB:
-    Options.DebuggerTuning = llvm::DebuggerKind::LLDB;
-    break;
-  case CodeGenOptions::DebuggerKindSCE:
-    Options.DebuggerTuning = llvm::DebuggerKind::SCE;
-    break;
-  default:
-    break;
-  }
+  Options.DebuggerTuning = CodeGenOpts.getDebuggerTuning();
 
   Options.MCOptions.MCRelaxAll = CodeGenOpts.RelaxAll;
   Options.MCOptions.MCSaveTempLabels = CodeGenOpts.SaveTempLabels;

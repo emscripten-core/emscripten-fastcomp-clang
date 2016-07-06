@@ -536,34 +536,10 @@ NumericLiteralParser::NumericLiteralParser(StringRef TokSpelling,
     s = SkipDigits(s);
     if (s == ThisTokEnd) {
       // Done.
-    } else if (isHexDigit(*s) && !(*s == 'e' || *s == 'E')) {
-      PP.Diag(PP.AdvanceToTokenCharacter(TokLoc, s - ThisTokBegin),
-              diag::err_invalid_digit) << StringRef(s, 1) << 0;
-      hadError = true;
-      return;
-    } else if (*s == '.') {
-      checkSeparator(TokLoc, s, CSK_AfterDigits);
-      s++;
-      saw_period = true;
-      checkSeparator(TokLoc, s, CSK_BeforeDigits);
-      s = SkipDigits(s);
-    }
-    if ((*s == 'e' || *s == 'E')) { // exponent
-      checkSeparator(TokLoc, s, CSK_AfterDigits);
-      const char *Exponent = s;
-      s++;
-      saw_exponent = true;
-      if (*s == '+' || *s == '-')  s++; // sign
-      checkSeparator(TokLoc, s, CSK_BeforeDigits);
-      const char *first_non_digit = SkipDigits(s);
-      if (first_non_digit != s) {
-        s = first_non_digit;
-      } else {
-        PP.Diag(PP.AdvanceToTokenCharacter(TokLoc, Exponent - ThisTokBegin),
-                diag::err_exponent_has_no_digits);
-        hadError = true;
+    } else {
+      ParseDecimalOrOctalCommon(TokLoc);
+      if (hadError)
         return;
-      }
     }
   }
 
@@ -693,6 +669,49 @@ NumericLiteralParser::NumericLiteralParser(StringRef TokSpelling,
   }
 }
 
+/// ParseDecimalOrOctalCommon - This method is called for decimal or octal
+/// numbers. It issues an error for illegal digits, and handles floating point
+/// parsing. If it detects a floating point number, the radix is set to 10.
+void NumericLiteralParser::ParseDecimalOrOctalCommon(SourceLocation TokLoc){
+  assert((radix == 8 || radix == 10) && "Unexpected radix");
+
+  // If we have a hex digit other than 'e' (which denotes a FP exponent) then
+  // the code is using an incorrect base.
+  if (isHexDigit(*s) && *s != 'e' && *s != 'E') {
+    PP.Diag(PP.AdvanceToTokenCharacter(TokLoc, s-ThisTokBegin),
+            diag::err_invalid_digit) << StringRef(s, 1) << (radix == 8 ? 1 : 0);
+    hadError = true;
+    return;
+  }
+
+  if (*s == '.') {
+    checkSeparator(TokLoc, s, CSK_AfterDigits);
+    s++;
+    radix = 10;
+    saw_period = true;
+    checkSeparator(TokLoc, s, CSK_BeforeDigits);
+    s = SkipDigits(s); // Skip suffix.
+  }
+  if (*s == 'e' || *s == 'E') { // exponent
+    checkSeparator(TokLoc, s, CSK_AfterDigits);
+    const char *Exponent = s;
+    s++;
+    radix = 10;
+    saw_exponent = true;
+    if (*s == '+' || *s == '-')  s++; // sign
+    const char *first_non_digit = SkipDigits(s);
+    if (containsDigits(s, first_non_digit)) {
+      checkSeparator(TokLoc, s, CSK_BeforeDigits);
+      s = first_non_digit;
+    } else {
+      PP.Diag(PP.AdvanceToTokenCharacter(TokLoc, Exponent-ThisTokBegin),
+              diag::err_exponent_has_no_digits);
+      hadError = true;
+      return;
+    }
+  }
+}
+
 /// Determine whether a suffix is a valid ud-suffix. We avoid treating reserved
 /// suffixes as ud-suffixes, because the diagnostic experience is better if we
 /// treat it as an invalid suffix.
@@ -752,19 +771,21 @@ void NumericLiteralParser::ParseNumberStartingWithZero(SourceLocation TokLoc) {
     radix = 16;
     DigitsBegin = s;
     s = SkipHexDigits(s);
-    bool noSignificand = (s == DigitsBegin);
+    bool HasSignificandDigits = containsDigits(DigitsBegin, s);
     if (s == ThisTokEnd) {
       // Done.
     } else if (*s == '.') {
       s++;
       saw_period = true;
       const char *floatDigitsBegin = s;
-      checkSeparator(TokLoc, s, CSK_BeforeDigits);
       s = SkipHexDigits(s);
-      noSignificand &= (floatDigitsBegin == s);
+      if (containsDigits(floatDigitsBegin, s))
+        HasSignificandDigits = true;
+      if (HasSignificandDigits)
+        checkSeparator(TokLoc, floatDigitsBegin, CSK_BeforeDigits);
     }
 
-    if (noSignificand) {
+    if (!HasSignificandDigits) {
       PP.Diag(PP.AdvanceToTokenCharacter(TokLoc, s - ThisTokBegin),
         diag::err_hexconstant_requires) << 1;
       hadError = true;
@@ -780,7 +801,7 @@ void NumericLiteralParser::ParseNumberStartingWithZero(SourceLocation TokLoc) {
       saw_exponent = true;
       if (*s == '+' || *s == '-')  s++; // sign
       const char *first_non_digit = SkipDigits(s);
-      if (first_non_digit == s) {
+      if (!containsDigits(s, first_non_digit)) {
         PP.Diag(PP.AdvanceToTokenCharacter(TokLoc, Exponent-ThisTokBegin),
                 diag::err_exponent_has_no_digits);
         hadError = true;
@@ -843,40 +864,7 @@ void NumericLiteralParser::ParseNumberStartingWithZero(SourceLocation TokLoc) {
     }
   }
 
-  // If we have a hex digit other than 'e' (which denotes a FP exponent) then
-  // the code is using an incorrect base.
-  if (isHexDigit(*s) && *s != 'e' && *s != 'E') {
-    PP.Diag(PP.AdvanceToTokenCharacter(TokLoc, s-ThisTokBegin),
-            diag::err_invalid_digit) << StringRef(s, 1) << 1;
-    hadError = true;
-    return;
-  }
-
-  if (*s == '.') {
-    s++;
-    radix = 10;
-    saw_period = true;
-    checkSeparator(TokLoc, s, CSK_BeforeDigits);
-    s = SkipDigits(s); // Skip suffix.
-  }
-  if (*s == 'e' || *s == 'E') { // exponent
-    checkSeparator(TokLoc, s, CSK_AfterDigits);
-    const char *Exponent = s;
-    s++;
-    radix = 10;
-    saw_exponent = true;
-    if (*s == '+' || *s == '-')  s++; // sign
-    const char *first_non_digit = SkipDigits(s);
-    if (first_non_digit != s) {
-      checkSeparator(TokLoc, s, CSK_BeforeDigits);
-      s = first_non_digit;
-    } else {
-      PP.Diag(PP.AdvanceToTokenCharacter(TokLoc, Exponent-ThisTokBegin),
-              diag::err_exponent_has_no_digits);
-      hadError = true;
-      return;
-    }
-  }
+  ParseDecimalOrOctalCommon(TokLoc);
 }
 
 static bool alwaysFitsInto64Bits(unsigned Radix, unsigned NumDigits) {

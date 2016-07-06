@@ -14,8 +14,11 @@
   id _Y;
   id _Z;
   id _K;
+  id _L;
   id _N;
   id _M;
+  id _P;
+  id _Q;
   id _V;
   id _W;
 }
@@ -23,8 +26,12 @@
 @property(retain) id Y;
 @property(assign) id Z;
 @property(assign) id K;
+@property(weak) id L;
 @property(readonly) id N;
 @property(retain) id M;
+@property(weak) id P; // expected-warning {{'_P' instance variable in 'MyClass' was not retained by a synthesized property but was released in 'dealloc'}}
+@property(weak) id Q;
+
 @property(retain) id V;
 @property(retain) id W;
 -(id) O;
@@ -33,13 +40,15 @@
 
 @implementation MyClass
 @synthesize X = _X;
-@synthesize Y = _Y; // expected-warning{{The '_Y' instance variable was retained by a synthesized property but wasn't released in 'dealloc'}}
-@synthesize Z = _Z; // expected-warning{{The '_Z' instance variable was not retained by a synthesized property but was released in 'dealloc'}}
+@synthesize Y = _Y; // expected-warning{{The '_Y' instance variable in 'MyClass' was retained by a synthesized property but was not released in 'dealloc'}}
+@synthesize Z = _Z; // expected-warning{{The '_Z' instance variable in 'MyClass' was not retained by a synthesized property but was released in 'dealloc'}}
 @synthesize K = _K;
-@synthesize N = _N;
+@synthesize L = _L; // no-warning
+@synthesize N = _N; // no-warning
 @synthesize M = _M;
+@synthesize Q = _Q; // expected-warning {{'_Q' instance variable in 'MyClass' was not retained by a synthesized property but was released in 'dealloc'}}
 @synthesize V = _V;
-@synthesize W = _W; // expected-warning{{The '_W' instance variable was retained by a synthesized property but wasn't released in 'dealloc'}}
+@synthesize W = _W; // expected-warning{{The '_W' instance variable in 'MyClass' was retained by a synthesized property but was not released in 'dealloc'}}
 
 -(id) O{ return 0; }
 -(void) setO:(id)arg { }
@@ -54,6 +63,9 @@
   [self setV:0]; // This will release '_V'
   [self setW:@"newW"]; // This will release '_W', but retain the new value
   self.O = 0; // no-warning  
+
+  [_Q release];
+  self.P = 0;
   [super dealloc];
   return 0;
 }

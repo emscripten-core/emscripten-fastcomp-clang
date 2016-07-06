@@ -163,6 +163,18 @@ public:
   /// otherwise (including when the argument is nullptr).
   bool TraverseStmt(Stmt *S, DataRecursionQueue *Queue = nullptr);
 
+  /// Invoked before visiting a statement or expression via data recursion.
+  ///
+  /// \returns false to skip visiting the node, true otherwise.
+  bool dataTraverseStmtPre(Stmt *S) { return true; }
+
+  /// Invoked after visiting a statement or expression via data recursion.
+  /// This is not invoked if the previously invoked \c dataTraverseStmtPre
+  /// returned false.
+  ///
+  /// \returns false if the visitation was terminated early, true otherwise.
+  bool dataTraverseStmtPost(Stmt *S) { return true; }
+
   /// \brief Recursively visit a type, by dispatching to
   /// Traverse*Type() based on the argument's getTypeClass() property.
   ///
@@ -557,7 +569,10 @@ bool RecursiveASTVisitor<Derived>::TraverseStmt(Stmt *S,
     Stmt *CurrS = LocalQueue.pop_back_val();
 
     size_t N = LocalQueue.size();
-    TRY_TO(dataTraverseNode(CurrS, &LocalQueue));
+    if (getDerived().dataTraverseStmtPre(CurrS)) {
+      TRY_TO(dataTraverseNode(CurrS, &LocalQueue));
+      TRY_TO(dataTraverseStmtPost(CurrS));
+    }
     // Process new children in the order they were added.
     std::reverse(LocalQueue.begin() + N, LocalQueue.end());
   }
@@ -809,6 +824,11 @@ bool RecursiveASTVisitor<Derived>::TraverseConstructorInitializer(
 
   if (Init->isWritten() || getDerived().shouldVisitImplicitCode())
     TRY_TO(TraverseStmt(Init->getInit()));
+
+  if (Init->getNumArrayIndices() && getDerived().shouldVisitImplicitCode())
+    for (VarDecl *VD : Init->getArrayIndexes()) {
+      TRY_TO(TraverseDecl(VD));
+    }
   return true;
 }
 
@@ -1428,6 +1448,8 @@ DEF_TRAVERSE_DECL(OMPThreadPrivateDecl, {
     TRY_TO(TraverseStmt(I));
   }
 })
+
+DEF_TRAVERSE_DECL(OMPCapturedExprDecl, { TRY_TO(TraverseVarHelper(D)); })
 
 // A helper method for TemplateDecl's children.
 template <typename Derived>
@@ -2433,6 +2455,18 @@ DEF_TRAVERSE_STMT(OMPTargetDirective,
 DEF_TRAVERSE_STMT(OMPTargetDataDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
+DEF_TRAVERSE_STMT(OMPTargetEnterDataDirective,
+                  { TRY_TO(TraverseOMPExecutableDirective(S)); })
+
+DEF_TRAVERSE_STMT(OMPTargetExitDataDirective,
+                  { TRY_TO(TraverseOMPExecutableDirective(S)); })
+
+DEF_TRAVERSE_STMT(OMPTargetParallelDirective,
+                  { TRY_TO(TraverseOMPExecutableDirective(S)); })
+
+DEF_TRAVERSE_STMT(OMPTargetParallelForDirective,
+                  { TRY_TO(TraverseOMPExecutableDirective(S)); })
+
 DEF_TRAVERSE_STMT(OMPTeamsDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
@@ -2778,6 +2812,20 @@ bool RecursiveASTVisitor<Derived>::VisitOMPNumTasksClause(
 template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPHintClause(OMPHintClause *C) {
   TRY_TO(TraverseStmt(C->getHint()));
+  return true;
+}
+
+template <typename Derived>
+bool RecursiveASTVisitor<Derived>::VisitOMPDistScheduleClause(
+    OMPDistScheduleClause *C) {
+  TRY_TO(TraverseStmt(C->getChunkSize()));
+  TRY_TO(TraverseStmt(C->getHelperChunkSize()));
+  return true;
+}
+
+template <typename Derived>
+bool
+RecursiveASTVisitor<Derived>::VisitOMPDefaultmapClause(OMPDefaultmapClause *C) {
   return true;
 }
 

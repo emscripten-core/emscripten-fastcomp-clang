@@ -1788,7 +1788,7 @@ void CXXNameMangler::mangleQualifiers(Qualifiers Quals) {
     if (Context.getASTContext().addressSpaceMapManglingFor(AS)) {
       //  <target-addrspace> ::= "AS" <address-space-number>
       unsigned TargetAS = Context.getASTContext().getTargetAddressSpace(AS);
-      ASString = "AS" + llvm::utostr_32(TargetAS);
+      ASString = "AS" + llvm::utostr(TargetAS);
     } else {
       switch (AS) {
       default: llvm_unreachable("Not a language specific address space");
@@ -2111,7 +2111,7 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
     Out << "20ocl_image2dmsaadepth";
     break;
   case BuiltinType::OCLImage2dArrayMSAADepth:
-    Out << "35ocl_image2darraymsaadepth";
+    Out << "25ocl_image2darraymsaadepth";
     break;
   case BuiltinType::OCLImage3d:
     Out << "11ocl_image3d";

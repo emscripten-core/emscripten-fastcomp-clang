@@ -486,12 +486,13 @@ void Module::print(raw_ostream &OS, unsigned Indent) const {
   OS << "}\n";
 }
 
-void Module::dump() const {
+LLVM_DUMP_METHOD void Module::dump() const {
   print(llvm::errs());
 }
 
 void VisibleModuleSet::setVisible(Module *M, SourceLocation Loc,
                                   VisibleCallback Vis, ConflictCallback Cb) {
+  assert(Loc.isValid() && "setVisible expects a valid import location");
   if (isVisible(M))
     return;
 

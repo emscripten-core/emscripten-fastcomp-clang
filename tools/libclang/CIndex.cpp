@@ -24,6 +24,7 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/Mangle.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/AST/VTableBuilder.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticCategories.h"
 #include "clang/Basic/DiagnosticIDs.h"
@@ -1077,7 +1078,8 @@ bool CursorVisitor::VisitObjCPropertyDecl(ObjCPropertyDecl *PD) {
 
   IdentifierInfo *PropertyId = PD->getIdentifier();
   ObjCPropertyDecl *prevDecl =
-    ObjCPropertyDecl::findPropertyDecl(cast<DeclContext>(ID), PropertyId);
+    ObjCPropertyDecl::findPropertyDecl(cast<DeclContext>(ID), PropertyId,
+                                       PD->getQueryKind());
 
   if (!prevDecl)
     return false;
@@ -1953,6 +1955,11 @@ public:
   void VisitOMPAtomicDirective(const OMPAtomicDirective *D);
   void VisitOMPTargetDirective(const OMPTargetDirective *D);
   void VisitOMPTargetDataDirective(const OMPTargetDataDirective *D);
+  void VisitOMPTargetEnterDataDirective(const OMPTargetEnterDataDirective *D);
+  void VisitOMPTargetExitDataDirective(const OMPTargetExitDataDirective *D);
+  void VisitOMPTargetParallelDirective(const OMPTargetParallelDirective *D);
+  void
+  VisitOMPTargetParallelForDirective(const OMPTargetParallelForDirective *D);
   void VisitOMPTeamsDirective(const OMPTeamsDirective *D);
   void VisitOMPTaskLoopDirective(const OMPTaskLoopDirective *D);
   void VisitOMPTaskLoopSimdDirective(const OMPTaskLoopSimdDirective *D);
@@ -2221,6 +2228,13 @@ void OMPClauseEnqueue::VisitOMPDependClause(const OMPDependClause *C) {
 }
 void OMPClauseEnqueue::VisitOMPMapClause(const OMPMapClause *C) {
   VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPDistScheduleClause(
+    const OMPDistScheduleClause *C) {
+  Visitor->AddStmt(C->getChunkSize());
+  Visitor->AddStmt(C->getHelperChunkSize());
+}
+void OMPClauseEnqueue::VisitOMPDefaultmapClause(const OMPDefaultmapClause *C) {
 }
 }
 
@@ -2626,6 +2640,26 @@ void EnqueueVisitor::VisitOMPTargetDirective(const OMPTargetDirective *D) {
 void EnqueueVisitor::VisitOMPTargetDataDirective(const 
                                                  OMPTargetDataDirective *D) {
   VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTargetEnterDataDirective(
+    const OMPTargetEnterDataDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTargetExitDataDirective(
+    const OMPTargetExitDataDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTargetParallelDirective(
+    const OMPTargetParallelDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTargetParallelForDirective(
+    const OMPTargetParallelForDirective *D) {
+  VisitOMPLoopDirective(D);
 }
 
 void EnqueueVisitor::VisitOMPTeamsDirective(const OMPTeamsDirective *D) {
@@ -3284,6 +3318,331 @@ enum CXErrorCode clang_parseTranslationUnit2FullArgv(
   return result;
 }
 
+CXString clang_Type_getObjCEncoding(CXType CT) {
+  CXTranslationUnit tu = static_cast<CXTranslationUnit>(CT.data[1]);
+  ASTContext &Ctx = getASTUnit(tu)->getASTContext();
+  std::string encoding;
+  Ctx.getObjCEncodingForType(QualType::getFromOpaquePtr(CT.data[0]),
+                             encoding);
+
+  return cxstring::createDup(encoding);
+}
+
+static const IdentifierInfo *getMacroIdentifier(CXCursor C) {
+  if (C.kind == CXCursor_MacroDefinition) {
+    if (const MacroDefinitionRecord *MDR = getCursorMacroDefinition(C))
+      return MDR->getName();
+  } else if (C.kind == CXCursor_MacroExpansion) {
+    MacroExpansionCursor ME = getCursorMacroExpansion(C);
+    return ME.getName();
+  }
+  return nullptr;
+}
+
+unsigned clang_Cursor_isMacroFunctionLike(CXCursor C) {
+  const IdentifierInfo *II = getMacroIdentifier(C);
+  if (!II) {
+    return false;
+  }
+  ASTUnit *ASTU = getCursorASTUnit(C);
+  Preprocessor &PP = ASTU->getPreprocessor();
+  if (const MacroInfo *MI = PP.getMacroInfo(II))
+    return MI->isFunctionLike();
+  return false;
+}
+
+unsigned clang_Cursor_isMacroBuiltin(CXCursor C) {
+  const IdentifierInfo *II = getMacroIdentifier(C);
+  if (!II) {
+    return false;
+  }
+  ASTUnit *ASTU = getCursorASTUnit(C);
+  Preprocessor &PP = ASTU->getPreprocessor();
+  if (const MacroInfo *MI = PP.getMacroInfo(II))
+    return MI->isBuiltinMacro();
+  return false;
+}
+
+unsigned clang_Cursor_isFunctionInlined(CXCursor C) {
+  const Decl *D = getCursorDecl(C);
+  const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D);
+  if (!FD) {
+    return false;
+  }
+  return FD->isInlined();
+}
+
+static StringLiteral* getCFSTR_value(CallExpr *callExpr) {
+  if (callExpr->getNumArgs() != 1) {
+    return nullptr;
+  }
+
+  StringLiteral *S = nullptr;
+  auto *arg = callExpr->getArg(0);
+  if (arg->getStmtClass() == Stmt::ImplicitCastExprClass) {
+    ImplicitCastExpr *I = static_cast<ImplicitCastExpr *>(arg);
+    auto *subExpr = I->getSubExprAsWritten();
+
+    if(subExpr->getStmtClass() != Stmt::StringLiteralClass){
+      return nullptr;
+    }
+
+    S = static_cast<StringLiteral *>(I->getSubExprAsWritten());
+  } else if (arg->getStmtClass() == Stmt::StringLiteralClass) {
+    S = static_cast<StringLiteral *>(callExpr->getArg(0));
+  } else {
+    return nullptr;
+  }
+  return S;
+}
+
+typedef struct {
+  CXEvalResultKind EvalType;
+  union {
+    int intVal;
+    double floatVal;
+    char *stringVal;
+  } EvalData;
+} ExprEvalResult;
+
+void clang_EvalResult_dispose(CXEvalResult E) {
+  ExprEvalResult *ER = (ExprEvalResult *)E;
+  if (ER) {
+    CXEvalResultKind evalType = ER->EvalType;
+
+    if (evalType != CXEval_UnExposed &&  evalType != CXEval_Float &&
+            evalType != CXEval_Int && ER->EvalData.stringVal) {
+            free((void *) ER->EvalData.stringVal);
+    }
+    free((void *)ER);
+  }
+}
+
+CXEvalResultKind clang_EvalResult_getKind(CXEvalResult E) {
+  if (!E) {
+    return CXEval_UnExposed;
+  }
+  return ((ExprEvalResult *)E)->EvalType;
+}
+
+int clang_EvalResult_getAsInt(CXEvalResult E) {
+  if (!E) {
+    return 0;
+  }
+  return ((ExprEvalResult *)E)->EvalData.intVal;
+}
+
+double clang_EvalResult_getAsDouble(CXEvalResult E) {
+  if (!E) {
+    return 0;
+  }
+  return ((ExprEvalResult *)E)->EvalData.floatVal;
+}
+
+const char* clang_EvalResult_getAsStr(CXEvalResult E) {
+  if (!E) {
+    return nullptr;
+  }
+  return ((ExprEvalResult *)E)->EvalData.stringVal;
+}
+
+static const ExprEvalResult* evaluateExpr(Expr *expr, CXCursor C) {
+  Expr::EvalResult ER;
+  ASTContext &ctx = getCursorContext(C);
+  if (!expr) {
+    return nullptr;
+  }
+  expr = expr->IgnoreParens();
+  bool res = expr->EvaluateAsRValue(ER, ctx);
+  QualType rettype;
+  CallExpr *callExpr;
+  ExprEvalResult *result = (ExprEvalResult *) malloc(sizeof(ExprEvalResult));
+  if (!result) {
+    return nullptr;
+  }
+  result->EvalType = CXEval_UnExposed;
+
+  if (res) {
+
+    if (ER.Val.isInt()) {
+      result->EvalType = CXEval_Int;
+      result->EvalData.intVal = ER.Val.getInt().getExtValue();
+      return result;
+    } else if (ER.Val.isFloat()) {
+
+      llvm::SmallVector<char, 100> Buffer;
+      ER.Val.getFloat().toString(Buffer);
+      std::string floatStr(Buffer.data(), Buffer.size());
+      result->EvalType = CXEval_Float;
+      bool ignored;
+      llvm::APFloat apFloat = ER.Val.getFloat();
+      apFloat.convert(llvm::APFloat::IEEEdouble,
+                      llvm::APFloat::rmNearestTiesToEven, &ignored);
+      result->EvalData.floatVal = apFloat.convertToDouble();
+      return result;
+
+    } else if (expr->getStmtClass() == Stmt::ImplicitCastExprClass) {
+
+      const ImplicitCastExpr *I = dyn_cast<ImplicitCastExpr>(expr);
+      auto *subExpr = I->getSubExprAsWritten();
+      if (subExpr->getStmtClass() == Stmt::StringLiteralClass ||
+          subExpr->getStmtClass() == Stmt::ObjCStringLiteralClass) {
+
+        const StringLiteral *StrE = nullptr;
+        const ObjCStringLiteral *ObjCExpr;
+        ObjCExpr = dyn_cast<ObjCStringLiteral>(subExpr);
+
+        if (ObjCExpr) {
+          StrE = ObjCExpr->getString();
+          result->EvalType = CXEval_ObjCStrLiteral;
+        } else {
+          StrE = cast<StringLiteral>(I->getSubExprAsWritten());
+          result->EvalType = CXEval_StrLiteral;
+        }
+
+        std::string strRef(StrE->getString().str());
+        result->EvalData.stringVal = (char *)malloc(strRef.size()+1);
+        strncpy((char*)result->EvalData.stringVal, strRef.c_str(),
+                   strRef.size());
+        result->EvalData.stringVal[strRef.size()] = '\0';
+        return result;
+      }
+
+    } else if (expr->getStmtClass() == Stmt::ObjCStringLiteralClass ||
+             expr->getStmtClass() == Stmt::StringLiteralClass) {
+
+      const StringLiteral *StrE = nullptr;
+      const ObjCStringLiteral *ObjCExpr;
+      ObjCExpr = dyn_cast<ObjCStringLiteral>(expr);
+
+      if (ObjCExpr) {
+        StrE = ObjCExpr->getString();
+        result->EvalType = CXEval_ObjCStrLiteral;
+      } else {
+        StrE = cast<StringLiteral>(expr);
+        result->EvalType = CXEval_StrLiteral;
+      }
+
+      std::string strRef(StrE->getString().str());
+      result->EvalData.stringVal = (char *)malloc(strRef.size()+1);
+      strncpy((char*)result->EvalData.stringVal, strRef.c_str(),
+                  strRef.size());
+      result->EvalData.stringVal[strRef.size()] = '\0';
+      return result;
+
+    } else if (expr->getStmtClass() == Stmt::CStyleCastExprClass) {
+
+      CStyleCastExpr *CC = static_cast<CStyleCastExpr *>(expr);
+
+      rettype = CC->getType();
+      if (rettype.getAsString() == "CFStringRef" &&
+            CC->getSubExpr()->getStmtClass() == Stmt::CallExprClass) {
+
+        callExpr = static_cast<CallExpr *>(CC->getSubExpr());
+        StringLiteral* S = getCFSTR_value(callExpr);
+        if (S) {
+          std::string strLiteral(S->getString().str());
+          result->EvalType = CXEval_CFStr;
+
+          result->EvalData.stringVal = (char *)malloc(strLiteral.size()+1);
+          strncpy((char*)result->EvalData.stringVal, strLiteral.c_str(),
+                     strLiteral.size());
+          result->EvalData.stringVal[strLiteral.size()] = '\0';
+          return result;
+        }
+      }
+
+    } else if (expr->getStmtClass() == Stmt::CallExprClass) {
+
+      callExpr = static_cast<CallExpr *>(expr);
+      rettype = callExpr->getCallReturnType(ctx);
+
+      if (rettype->isVectorType() || callExpr->getNumArgs() > 1) {
+        return nullptr;
+      }
+      if (rettype->isIntegralType(ctx) || rettype->isRealFloatingType()) {
+        if(callExpr->getNumArgs() == 1 &&
+              !callExpr->getArg(0)->getType()->isIntegralType(ctx)){
+
+          return nullptr;
+        }
+      } else if(rettype.getAsString() == "CFStringRef") {
+
+        StringLiteral* S = getCFSTR_value(callExpr);
+        if (S) {
+          std::string strLiteral(S->getString().str());
+          result->EvalType = CXEval_CFStr;
+          result->EvalData.stringVal = (char *)malloc(strLiteral.size()+1);
+          strncpy((char*)result->EvalData.stringVal, strLiteral.c_str(),
+                     strLiteral.size());
+          result->EvalData.stringVal[strLiteral.size()] = '\0';
+          return result;
+        }
+      }
+
+    } else if (expr->getStmtClass() == Stmt::DeclRefExprClass) {
+
+      DeclRefExpr *D = static_cast<DeclRefExpr *>(expr);
+      ValueDecl *V = D->getDecl();
+      if (V->getKind() == Decl::Function) {
+        std::string strName(V->getNameAsString());
+        result->EvalType = CXEval_Other;
+        result->EvalData.stringVal = (char *)malloc(strName.size()+1);
+        strncpy((char*)result->EvalData.stringVal, strName.c_str(),
+                   strName.size());
+        result->EvalData.stringVal[strName.size()] = '\0';
+        return result;
+      }
+    }
+
+  }
+
+  clang_EvalResult_dispose((CXEvalResult *)result);
+  return nullptr;
+}
+
+CXEvalResult clang_Cursor_Evaluate(CXCursor C) {
+  const Decl *D = getCursorDecl(C);
+  if (D) {
+    const Expr *expr = nullptr;
+    if (auto *Var = dyn_cast<VarDecl>(D)) {
+      expr = Var->getInit();
+    } else if (auto *Field = dyn_cast<FieldDecl>(D)) {
+      expr = Field->getInClassInitializer();
+    }
+    if (expr)
+      return const_cast<CXEvalResult>(reinterpret_cast<const void *>(
+          evaluateExpr(const_cast<Expr *>(expr), C)));
+    return nullptr;
+  }
+
+  const CompoundStmt *compoundStmt = dyn_cast_or_null<CompoundStmt>(getCursorStmt(C));
+  if (compoundStmt) {
+    Expr *expr = nullptr;
+    for (auto *bodyIterator : compoundStmt->body()) {
+      if ((expr = dyn_cast<Expr>(bodyIterator))) {
+        break;
+      }
+    }
+    if (expr)
+      return const_cast<CXEvalResult>(
+          reinterpret_cast<const void *>(evaluateExpr(expr, C)));
+  }
+  return nullptr;
+}
+
+unsigned clang_Cursor_hasAttrs(CXCursor C) {
+  const Decl *D = getCursorDecl(C);
+  if (!D) {
+    return 0;
+  }
+
+  if (D->hasAttrs()) {
+    return 1;
+  }
+
+  return 0;
+}
 unsigned clang_defaultSaveOptions(CXTranslationUnit TU) {
   return CXSaveTranslationUnit_None;
 }  
@@ -3628,6 +3987,39 @@ static std::string getMangledStructor(std::unique_ptr<MangleContext> &M,
     M->mangleCXXCtor(CD, static_cast<CXXCtorType>(StructorType), FOS);
   else if (const auto *DD = dyn_cast_or_null<CXXDestructorDecl>(ND))
     M->mangleCXXDtor(DD, static_cast<CXXDtorType>(StructorType), FOS);
+
+  std::string BackendBuf;
+  llvm::raw_string_ostream BOS(BackendBuf);
+
+  llvm::Mangler::getNameWithPrefix(BOS, llvm::Twine(FOS.str()), *DL);
+
+  return BOS.str();
+}
+
+static std::string getMangledName(std::unique_ptr<MangleContext> &M,
+                                  std::unique_ptr<llvm::DataLayout> &DL,
+                                  const NamedDecl *ND) {
+  std::string FrontendBuf;
+  llvm::raw_string_ostream FOS(FrontendBuf);
+
+  M->mangleName(ND, FOS);
+
+  std::string BackendBuf;
+  llvm::raw_string_ostream BOS(BackendBuf);
+
+  llvm::Mangler::getNameWithPrefix(BOS, llvm::Twine(FOS.str()), *DL);
+
+  return BOS.str();
+}
+
+static std::string getMangledThunk(std::unique_ptr<MangleContext> &M,
+                                   std::unique_ptr<llvm::DataLayout> &DL,
+                                   const CXXMethodDecl *MD,
+                                   const ThunkInfo &T) {
+  std::string FrontendBuf;
+  llvm::raw_string_ostream FOS(FrontendBuf);
+
+  M->mangleThunk(MD, T, FOS);
 
   std::string BackendBuf;
   llvm::raw_string_ostream BOS(BackendBuf);
@@ -4053,6 +4445,12 @@ CXStringSet *clang_Cursor_getCXXManglings(CXCursor C) {
       if (DD->isVirtual())
         Manglings.emplace_back(getMangledStructor(M, DL, DD, Dtor_Deleting));
     }
+  } else if (const auto *MD = dyn_cast_or_null<CXXMethodDecl>(ND)) {
+    Manglings.emplace_back(getMangledName(M, DL, ND));
+    if (MD->isVirtual())
+      if (const auto *TIV = Ctx.getVTableContext()->getThunkInfo(MD))
+        for (const auto &T : *TIV)
+          Manglings.emplace_back(getMangledThunk(M, DL, MD, T));
   }
 
   return cxstring::createSet(Manglings);
@@ -4510,6 +4908,14 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPTargetDirective");
   case CXCursor_OMPTargetDataDirective:
     return cxstring::createRef("OMPTargetDataDirective");
+  case CXCursor_OMPTargetEnterDataDirective:
+    return cxstring::createRef("OMPTargetEnterDataDirective");
+  case CXCursor_OMPTargetExitDataDirective:
+    return cxstring::createRef("OMPTargetExitDataDirective");
+  case CXCursor_OMPTargetParallelDirective:
+    return cxstring::createRef("OMPTargetParallelDirective");
+  case CXCursor_OMPTargetParallelForDirective:
+    return cxstring::createRef("OMPTargetParallelForDirective");
   case CXCursor_OMPTeamsDirective:
     return cxstring::createRef("OMPTeamsDirective");
   case CXCursor_OMPCancellationPointDirective:
@@ -5264,6 +5670,7 @@ CXCursor clang_getCursorDefinition(CXCursor C) {
   case Decl::StaticAssert:
   case Decl::Block:
   case Decl::Captured:
+  case Decl::OMPCapturedExpr:
   case Decl::Label:  // FIXME: Is this right??
   case Decl::ClassScopeFunctionSpecialization:
   case Decl::Import:

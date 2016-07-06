@@ -816,9 +816,6 @@ protected:
     /// \brief Whether this variable is (C++0x) constexpr.
     unsigned IsConstexpr : 1;
 
-    /// \brief Whether this variable is a (C++ Concepts TS) concept.
-    unsigned IsConcept : 1;
-
     /// \brief Whether this variable is the implicit variable for a lambda
     /// init-capture.
     unsigned IsInitCapture : 1;
@@ -1192,15 +1189,6 @@ public:
   void setConstexpr(bool IC) {
     assert(!isa<ParmVarDecl>(this));
     NonParmVarDeclBits.IsConstexpr = IC;
-  }
-
-  /// Whether this variable is (C++ Concepts TS) concept.
-  bool isConcept() const {
-    return isa<ParmVarDecl>(this) ? false : NonParmVarDeclBits.IsConcept;
-  }
-  void setConcept(bool IC) {
-    assert(!isa<ParmVarDecl>(this));
-    NonParmVarDeclBits.IsConcept = IC;
   }
 
   /// Whether this variable is the implicit variable for a lambda init-capture.
@@ -1954,6 +1942,7 @@ public:
   unsigned getMinRequiredArguments() const;
 
   QualType getReturnType() const {
+    assert(getType()->getAs<FunctionType>() && "Expected a FunctionType!");
     return getType()->getAs<FunctionType>()->getReturnType();
   }
 
@@ -1964,6 +1953,7 @@ public:
 
   /// \brief Determine the type of an expression that calls this function.
   QualType getCallResultType() const {
+    assert(getType()->getAs<FunctionType>() && "Expected a FunctionType!");
     return getType()->getAs<FunctionType>()->getCallResultType(getASTContext());
   }
 

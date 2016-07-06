@@ -123,6 +123,10 @@
 // PR24003: -momit-leaf-frame-pointer
 // PR24003: -Os
 
+// RUN: %clang_cl --target=i686-pc-win32 /Oy- /O2 -### -- %s 2>&1 | FileCheck -check-prefix=Oy_2 %s
+// Oy_2: -momit-leaf-frame-pointer
+// Oy_2: -O2
+
 // RUN: %clang_cl /Zs /Oy -- %s 2>&1
 
 // RUN: %clang_cl --target=i686-pc-win32 /Oy- -### -- %s 2>&1 | FileCheck -check-prefix=Oy_ %s
@@ -375,11 +379,11 @@
 
 // RUN: %clang_cl /Zi /c -### -- %s 2>&1 | FileCheck -check-prefix=Zi %s
 // Zi: "-gcodeview"
-// Zi: "-debug-info-kind=line-tables-only"
+// Zi: "-debug-info-kind=limited"
 
 // RUN: %clang_cl /Z7 /c -### -- %s 2>&1 | FileCheck -check-prefix=Z7 %s
 // Z7: "-gcodeview"
-// Z7: "-debug-info-kind=line-tables-only"
+// Z7: "-debug-info-kind=limited"
 
 // RUN: %clang_cl /c -### -- %s 2>&1 | FileCheck -check-prefix=BreproDefault %s
 // BreproDefault: "-mincremental-linker-compatible"
