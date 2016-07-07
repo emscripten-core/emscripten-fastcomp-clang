@@ -909,6 +909,16 @@ void OMPClausePrinter::VisitOMPMapClause(OMPMapClause *Node) {
     OS << ")";
   }
 }
+
+void OMPClausePrinter::VisitOMPDistScheduleClause(OMPDistScheduleClause *Node) {
+  OS << "dist_schedule(" << getOpenMPSimpleClauseTypeName(
+                           OMPC_dist_schedule, Node->getDistScheduleKind());
+  if (Node->getChunkSize()) {
+    OS << ", ";
+    Node->getChunkSize()->printPretty(OS, nullptr, Policy);
+  }
+  OS << ")";
+}
 }
 
 //===----------------------------------------------------------------------===//
@@ -1048,6 +1058,18 @@ void StmtPrinter::VisitOMPTargetDirective(OMPTargetDirective *Node) {
 
 void StmtPrinter::VisitOMPTargetDataDirective(OMPTargetDataDirective *Node) {
   Indent() << "#pragma omp target data ";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPTargetEnterDataDirective(
+    OMPTargetEnterDataDirective *Node) {
+  Indent() << "#pragma omp target enter data ";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPTargetExitDataDirective(
+    OMPTargetExitDataDirective *Node) {
+  Indent() << "#pragma omp target exit data ";
   PrintOMPExecutableDirective(Node);
 }
 

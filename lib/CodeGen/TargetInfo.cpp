@@ -217,7 +217,7 @@ static Address emitVoidPtrDirectVAArg(CodeGenFunction &CGF,
   }
 
   // Advance the pointer past the argument, then store that back.
-  CharUnits FullDirectSize = DirectSize.RoundUpToAlignment(SlotSize);
+  CharUnits FullDirectSize = DirectSize.alignTo(SlotSize);
   llvm::Value *NextPtr =
     CGF.Builder.CreateConstInBoundsByteGEP(Addr.getPointer(), FullDirectSize,
                                            "argp.next");
@@ -1529,7 +1529,7 @@ X86_32ABIInfo::addFieldToArgStruct(SmallVector<llvm::Type *, 6> &FrameFields,
 
   // Insert padding bytes to respect alignment.
   CharUnits FieldEnd = StackOffset;
-  StackOffset = FieldEnd.RoundUpToAlignment(FieldAlign);
+  StackOffset = FieldEnd.alignTo(FieldAlign);
   if (StackOffset != FieldEnd) {
     CharUnits NumBytes = StackOffset - FieldEnd;
     llvm::Type *Ty = llvm::Type::getInt8Ty(getVMContext());
@@ -1663,6 +1663,10 @@ void X86_32TargetCodeGenInfo::setTargetAttributes(const Decl *D,
                       llvm::AttributeSet::get(CGM.getLLVMContext(),
                                               llvm::AttributeSet::FunctionIndex,
                                               B));
+    }
+    if (FD->hasAttr<AnyX86InterruptAttr>()) {
+      llvm::Function *Fn = cast<llvm::Function>(GV);
+      Fn->setCallingConv(llvm::CallingConv::X86_INTR);
     }
   }
 }
@@ -1969,6 +1973,16 @@ public:
             ('T' << 24);
     return llvm::ConstantInt::get(CGM.Int32Ty, Sig);
   }
+
+  void setTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
+                           CodeGen::CodeGenModule &CGM) const override {
+    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D)) {
+      if (FD->hasAttr<AnyX86InterruptAttr>()) {
+        llvm::Function *Fn = cast<llvm::Function>(GV);
+        Fn->setCallingConv(llvm::CallingConv::X86_INTR);
+      }
+    }
+  }
 };
 
 class PS4TargetCodeGenInfo : public X86_64TargetCodeGenInfo {
@@ -2085,6 +2099,13 @@ void WinX86_64TargetCodeGenInfo::setTargetAttributes(const Decl *D,
                                                      llvm::GlobalValue *GV,
                                             CodeGen::CodeGenModule &CGM) const {
   TargetCodeGenInfo::setTargetAttributes(D, GV, CGM);
+
+  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D)) {
+    if (FD->hasAttr<AnyX86InterruptAttr>()) {
+      llvm::Function *Fn = cast<llvm::Function>(GV);
+      Fn->setCallingConv(llvm::CallingConv::X86_INTR);
+    }
+  }
 
   addStackProbeSizeTargetAttribute(D, GV, CGM);
 }
@@ -2830,7 +2851,7 @@ GetX86_64ByValArgumentPair(llvm::Type *Lo, llvm::Type *Hi,
   // the second element at offset 8.  Check for this:
   unsigned LoSize = (unsigned)TD.getTypeAllocSize(Lo);
   unsigned HiAlign = TD.getABITypeAlignment(Hi);
-  unsigned HiStart = llvm::RoundUpToAlignment(LoSize, HiAlign);
+  unsigned HiStart = llvm::alignTo(LoSize, HiAlign);
   assert(HiStart != 0 && HiStart <= 8 && "Invalid x86-64 argument pair!");
 
   // To handle this, we have to increase the size of the low part so that the
@@ -3630,7 +3651,7 @@ Address PPC32_SVR4_ABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAList,
     CharUnits Size;
     if (!isIndirect) {
       auto TypeInfo = CGF.getContext().getTypeInfoInChars(Ty);
-      Size = TypeInfo.first.RoundUpToAlignment(OverflowAreaAlign);
+      Size = TypeInfo.first.alignTo(OverflowAreaAlign);
     } else {
       Size = CGF.getPointerSize();
     }
@@ -4081,13 +4102,13 @@ PPC64_SVR4_ABIInfo::classifyArgumentType(QualType Ty) const {
       // Types up to 8 bytes are passed as integer type (which will be
       // properly aligned in the argument save area doubleword).
       if (Bits <= GPRBits)
-        CoerceTy = llvm::IntegerType::get(getVMContext(),
-                                          llvm::RoundUpToAlignment(Bits, 8));
+        CoerceTy =
+            llvm::IntegerType::get(getVMContext(), llvm::alignTo(Bits, 8));
       // Larger types are passed as arrays, with the base type selected
       // according to the required alignment in the save area.
       else {
         uint64_t RegBits = ABIAlign * 8;
-        uint64_t NumRegs = llvm::RoundUpToAlignment(Bits, RegBits) / RegBits;
+        uint64_t NumRegs = llvm::alignTo(Bits, RegBits) / RegBits;
         llvm::Type *RegTy = llvm::IntegerType::get(getVMContext(), RegBits);
         CoerceTy = llvm::ArrayType::get(RegTy, NumRegs);
       }
@@ -4147,8 +4168,8 @@ PPC64_SVR4_ABIInfo::classifyReturnType(QualType RetTy) const {
         CoerceTy = llvm::IntegerType::get(getVMContext(), GPRBits);
         CoerceTy = llvm::StructType::get(CoerceTy, CoerceTy, nullptr);
       } else
-        CoerceTy = llvm::IntegerType::get(getVMContext(),
-                                          llvm::RoundUpToAlignment(Bits, 8));
+        CoerceTy =
+            llvm::IntegerType::get(getVMContext(), llvm::alignTo(Bits, 8));
       return ABIArgInfo::getDirect(CoerceTy);
     }
 
@@ -4541,7 +4562,7 @@ Address AArch64ABIInfo::EmitAAPCSVAArg(Address VAListAddr,
     reg_offs = CGF.Builder.CreateLoad(reg_offs_p, "gr_offs");
     reg_top_index = 1; // field number for __gr_top
     reg_top_offset = CharUnits::fromQuantity(8);
-    RegSize = llvm::RoundUpToAlignment(RegSize, 8);
+    RegSize = llvm::alignTo(RegSize, 8);
   } else {
     // 4 is the field number of __vr_offs.
     reg_offs_p =
@@ -4711,7 +4732,7 @@ Address AArch64ABIInfo::EmitAAPCSVAArg(Address VAListAddr,
   if (IsIndirect)
     StackSize = StackSlotSize;
   else
-    StackSize = TyInfo.first.RoundUpToAlignment(StackSlotSize);
+    StackSize = TyInfo.first.alignTo(StackSlotSize);
 
   llvm::Value *StackSizeC = CGF.Builder.getSize(StackSize);
   llvm::Value *NewStack =
@@ -5324,7 +5345,7 @@ ABIArgInfo ARMABIInfo::classifyReturnType(QualType RetTy,
   } else if (Size <= 128 && getABIKind() == AAPCS16_VFP) {
     llvm::Type *Int32Ty = llvm::Type::getInt32Ty(getVMContext());
     llvm::Type *CoerceTy =
-        llvm::ArrayType::get(Int32Ty, llvm::RoundUpToAlignment(Size, 32) / 32);
+        llvm::ArrayType::get(Int32Ty, llvm::alignTo(Size, 32) / 32);
     return ABIArgInfo::getDirect(CoerceTy);
   }
 
@@ -6134,8 +6155,8 @@ MipsABIInfo::classifyArgumentType(QualType Ty, uint64_t &Offset) const {
 
   Align = std::min(std::max(Align, (uint64_t)MinABIStackAlignInBytes),
                    (uint64_t)StackAlignInBytes);
-  unsigned CurrOffset = llvm::RoundUpToAlignment(Offset, Align);
-  Offset = CurrOffset + llvm::RoundUpToAlignment(TySize, Align * 8) / 8;
+  unsigned CurrOffset = llvm::alignTo(Offset, Align);
+  Offset = CurrOffset + llvm::alignTo(TySize, Align * 8) / 8;
 
   if (isAggregateTypeForABI(Ty) || Ty->isVectorType()) {
     // Ignore empty aggregates.
@@ -6636,7 +6657,7 @@ private:
         return;
 
       // Finish the current 64-bit word.
-      uint64_t Aligned = llvm::RoundUpToAlignment(Size, 64);
+      uint64_t Aligned = llvm::alignTo(Size, 64);
       if (Aligned > Size && Aligned <= ToSize) {
         Elems.push_back(llvm::IntegerType::get(Context, Aligned - Size));
         Size = Aligned;
@@ -6753,7 +6774,7 @@ SparcV9ABIInfo::classifyType(QualType Ty, unsigned SizeLimit) const {
 
   CoerceBuilder CB(getVMContext(), getDataLayout());
   CB.addStruct(0, StrTy);
-  CB.pad(llvm::RoundUpToAlignment(CB.DL.getTypeSizeInBits(StrTy), 64));
+  CB.pad(llvm::alignTo(CB.DL.getTypeSizeInBits(StrTy), 64));
 
   // Try to use the original type for coercion.
   llvm::Type *CoerceTy = CB.isUsableType(StrTy) ? StrTy : CB.getType();
@@ -6795,7 +6816,7 @@ Address SparcV9ABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
 
   case ABIArgInfo::Direct: {
     auto AllocSize = getDataLayout().getTypeAllocSize(AI.getCoerceToType());
-    Stride = CharUnits::fromQuantity(AllocSize).RoundUpToAlignment(SlotSize);
+    Stride = CharUnits::fromQuantity(AllocSize).alignTo(SlotSize);
     ArgAddr = Addr;
     break;
   }
@@ -7022,7 +7043,7 @@ Address XCoreABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
     Val = Builder.CreateBitCast(AP, ArgPtrTy);
     ArgSize = CharUnits::fromQuantity(
                        getDataLayout().getTypeAllocSize(AI.getCoerceToType()));
-    ArgSize = ArgSize.RoundUpToAlignment(SlotSize);
+    ArgSize = ArgSize.alignTo(SlotSize);
     break;
   case ABIArgInfo::Indirect:
     Val = Builder.CreateElementBitCast(AP, ArgPtrTy);

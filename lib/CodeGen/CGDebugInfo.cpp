@@ -1536,8 +1536,9 @@ static bool shouldOmitDefinition(CodeGenOptions::DebugInfoKind DebugKind,
                                  const RecordDecl *RD,
                                  const LangOptions &LangOpts) {
   // Does the type exist in an imported clang module?
-  if (DebugTypeExtRefs && RD->isFromASTFile() && RD->getDefinition())
-      return true;
+  if (DebugTypeExtRefs && RD->isFromASTFile() && RD->getDefinition() &&
+      (RD->isExternallyVisible() || !RD->getName().empty()))
+    return true;
 
   if (DebugKind > CodeGenOptions::LimitedDebugInfo)
     return false;
@@ -1739,11 +1740,14 @@ CGDebugInfo::getOrCreateModuleRef(ExternalASTSource::ASTSourceDescriptor Mod,
 
   bool IsRootModule = M ? !M->Parent : true;
   if (CreateSkeletonCU && IsRootModule) {
+    // PCH files don't have a signature field in the control block,
+    // but LLVM detects skeleton CUs by looking for a non-zero DWO id.
+    uint64_t Signature = Mod.getSignature() ? Mod.getSignature() : ~1ULL;
     llvm::DIBuilder DIB(CGM.getModule());
     DIB.createCompileUnit(TheCU->getSourceLanguage(), Mod.getModuleName(),
                           Mod.getPath(), TheCU->getProducer(), true,
                           StringRef(), 0, Mod.getASTFile(),
-                          llvm::DIBuilder::FullDebug, Mod.getSignature());
+                          llvm::DIBuilder::FullDebug, Signature);
     DIB.finalize();
   }
   llvm::DIModule *Parent =
@@ -2220,8 +2224,12 @@ llvm::DIModule *CGDebugInfo::getParentModuleOrNull(const Decl *D) {
     // option.
     FullSourceLoc Loc(D->getLocation(), CGM.getContext().getSourceManager());
     if (Module *M = ClangModuleMap->inferModuleFromLocation(Loc)) {
+      // This is a (sub-)module.
       auto Info = ExternalASTSource::ASTSourceDescriptor(*M);
       return getOrCreateModuleRef(Info, /*SkeletonCU=*/false);
+    } else {
+      // This the precompiled header being built.
+      return getOrCreateModuleRef(PCHDescriptor, /*SkeletonCU=*/false);
     }
   }
 
@@ -2896,8 +2904,7 @@ llvm::DIType *CGDebugInfo::EmitTypeForVarWithBlocksAttr(const VarDecl *VD,
                   CGM.getTarget().getPointerAlign(0))) {
     CharUnits FieldOffsetInBytes =
         CGM.getContext().toCharUnitsFromBits(FieldOffset);
-    CharUnits AlignedOffsetInBytes =
-        FieldOffsetInBytes.RoundUpToAlignment(Align);
+    CharUnits AlignedOffsetInBytes = FieldOffsetInBytes.alignTo(Align);
     CharUnits NumPaddingBytes = AlignedOffsetInBytes - FieldOffsetInBytes;
 
     if (NumPaddingBytes.isPositive()) {

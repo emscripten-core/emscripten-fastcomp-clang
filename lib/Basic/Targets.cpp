@@ -102,9 +102,7 @@ protected:
 
 public:
   CloudABITargetInfo(const llvm::Triple &Triple)
-      : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
-  }
+      : OSTargetInfo<Target>(Triple) {}
 };
 
 static void getDarwinDefines(MacroBuilder &Builder, const LangOptions &Opts,
@@ -242,6 +240,7 @@ public:
       this->TLSSupported = !Triple.isOSVersionLT(2);
 
     this->MCountName = "\01mcount";
+    this->UserLabelPrefix = "_";
   }
 
   std::string isValidSectionSpecifier(StringRef SR) const override {
@@ -284,8 +283,6 @@ protected:
 public:
   DragonFlyBSDTargetInfo(const llvm::Triple &Triple)
       : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
-
     switch (Triple.getArch()) {
     default:
     case llvm::Triple::x86:
@@ -372,8 +369,6 @@ protected:
   }
 public:
   FreeBSDTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
-
     switch (Triple.getArch()) {
     default:
     case llvm::Triple::x86:
@@ -413,9 +408,7 @@ protected:
   }
 public:
   KFreeBSDTargetInfo(const llvm::Triple &Triple)
-      : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
-  }
+      : OSTargetInfo<Target>(Triple) {}
 };
 
 // Minix Target
@@ -437,9 +430,7 @@ protected:
     DefineStd(Builder, "unix", Opts);
   }
 public:
-  MinixTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
-  }
+  MinixTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {}
 };
 
 // Linux target
@@ -512,7 +503,6 @@ protected:
   }
 public:
   NetBSDTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
     this->MCountName = "_mcount";
   }
 };
@@ -533,7 +523,6 @@ protected:
   }
 public:
   OpenBSDTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
     this->TLSSupported = false;
 
       switch (Triple.getArch()) {
@@ -581,7 +570,6 @@ protected:
   }
 public:
   BitrigTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
     this->MCountName = "__mcount";
   }
 };
@@ -599,9 +587,7 @@ protected:
     Builder.defineMacro("__ELF__");
   }
 public:
-  PSPTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
-  }
+  PSPTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {}
 };
 
 // PS3 PPU Target
@@ -621,7 +607,6 @@ protected:
   }
 public:
   PS3PPUTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
     this->LongWidth = this->LongAlign = 32;
     this->PointerWidth = this->PointerAlign = 32;
     this->IntMaxType = TargetInfo::SignedLongLong;
@@ -649,7 +634,6 @@ public:
 
     // On PS4, TLS variable cannot be aligned to more than 32 bytes (256 bits).
     this->MaxTLSAlign = 256;
-    this->UserLabelPrefix = "";
 
     switch (Triple.getArch()) {
     default:
@@ -769,7 +753,6 @@ protected:
 
 public:
   NaClTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
     this->LongAlign = 32;
     this->LongWidth = 32;
     this->PointerAlign = 32;
@@ -823,7 +806,6 @@ public:
   explicit WebAssemblyOSTargetInfo(const llvm::Triple &Triple)
       : OSTargetInfo<Target>(Triple) {
     this->MCountName = "__mcount";
-    this->UserLabelPrefix = "";
     this->TheCXXABI.set(TargetCXXABI::WebAssembly);
   }
 };
@@ -861,6 +843,7 @@ public:
     SimdDefaultAlign = 128;
     LongDoubleWidth = LongDoubleAlign = 128;
     LongDoubleFormat = &llvm::APFloat::PPCDoubleDouble;
+    UserLabelPrefix = "_";
   }
 
   /// \brief Flags for architecture specific defines.
@@ -1676,6 +1659,7 @@ public:
     NoAsmVariants = true;
     // Set the default GPU to sm20
     GPU = GK_SM20;
+    UserLabelPrefix = "_";
   }
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
@@ -3716,6 +3700,8 @@ public:
     // FIXME: Check that we actually have cmpxchg8b before setting
     // MaxAtomicInlineWidth. (cmpxchg8b is an i586 instruction.)
     MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
+
+    UserLabelPrefix = "_";
   }
   BuiltinVaListKind getBuiltinVaListKind() const override {
     return TargetInfo::CharPtrBuiltinVaList;
@@ -3927,7 +3913,6 @@ public:
     IntPtrType = SignedLong;
     PtrDiffType = SignedLong;
     ProcessIDType = SignedLong;
-    this->UserLabelPrefix = "";
     this->TLSSupported = false;
   }
   void getTargetDefines(const LangOptions &Opts,
@@ -3944,6 +3929,7 @@ public:
   MCUX86_32TargetInfo(const llvm::Triple &Triple) : X86_32TargetInfo(Triple) {
     LongDoubleWidth = 64;
     LongDoubleFormat = &llvm::APFloat::IEEEdouble;
+    UserLabelPrefix = "";
   }
 
   CallingConvCheckResult checkCallingConvention(CallingConv CC) const override {
@@ -3973,8 +3959,6 @@ protected:
 
 public:
   RTEMSTargetInfo(const llvm::Triple &Triple) : OSTargetInfo<Target>(Triple) {
-    this->UserLabelPrefix = "";
-
     switch (Triple.getArch()) {
     default:
     case llvm::Triple::x86:
@@ -4001,7 +3985,6 @@ public:
     SizeType = UnsignedLong;
     IntPtrType = SignedLong;
     PtrDiffType = SignedLong;
-    this->UserLabelPrefix = "";
   }
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
@@ -4049,6 +4032,8 @@ public:
     // x86-64 has atomics up to 16 bytes.
     MaxAtomicPromoteWidth = 128;
     MaxAtomicInlineWidth = 128;
+
+    UserLabelPrefix = "_";
   }
   BuiltinVaListKind getBuiltinVaListKind() const override {
     return TargetInfo::X86_64ABIBuiltinVaList;
@@ -4104,7 +4089,6 @@ public:
     SizeType = UnsignedLongLong;
     PtrDiffType = SignedLongLong;
     IntPtrType = SignedLongLong;
-    this->UserLabelPrefix = "";
   }
 
   void getTargetDefines(const LangOptions &Opts,
@@ -4587,6 +4571,8 @@ public:
     // that follows it, `bar', `bar' will be aligned as the  type of the
     // zero length bitfield.
     UseZeroLengthBitfieldAlignment = true;
+
+    UserLabelPrefix = "_";
   }
 
   StringRef getABI() const override { return ABI; }
@@ -5164,7 +5150,6 @@ public:
     TLSSupported = false;
     WCharType = UnsignedShort;
     SizeType = UnsignedInt;
-    UserLabelPrefix = "";
   }
   void getVisualStudioDefines(const LangOptions &Opts,
                               MacroBuilder &Builder) const {
@@ -5364,6 +5349,8 @@ public:
 
     // AArch64 targets default to using the ARM C++ ABI.
     TheCXXABI.set(TargetCXXABI::GenericAArch64);
+
+    UserLabelPrefix = "_";
   }
 
   StringRef getABI() const override { return ABI; }
@@ -5888,7 +5875,9 @@ class SparcTargetInfo : public TargetInfo {
   bool SoftFloat;
 public:
   SparcTargetInfo(const llvm::Triple &Triple)
-      : TargetInfo(Triple), SoftFloat(false) {}
+      : TargetInfo(Triple), SoftFloat(false) {
+    UserLabelPrefix = "_";
+  }
 
   bool handleTargetFeatures(std::vector<std::string> &Features,
                             DiagnosticsEngine &Diags) override {
@@ -6189,6 +6178,7 @@ public:
     MinGlobalAlign = 16;
     DataLayoutString = "E-m:e-i1:8:16-i8:8:16-i64:64-f128:64-a:8:16-n32:64";
     MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
+    UserLabelPrefix = "_";
   }
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
@@ -6348,6 +6338,7 @@ public:
     PtrDiffType = SignedInt;
     SigAtomicType = SignedLong;
     DataLayoutString = "e-m:e-p:16:16-i32:16:32-a:16-n8:16";
+    UserLabelPrefix = "_";
   }
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
@@ -6444,6 +6435,7 @@ public:
                        "-f64:32-v64:32-v128:32-a:0:32-n32";
     AddrSpaceMap = &TCEOpenCLAddrSpaceMap;
     UseAddrSpaceMapMangling = true;
+    UserLabelPrefix = "_";
   }
 
   void getTargetDefines(const LangOptions &Opts,
@@ -6546,6 +6538,7 @@ public:
         IsNan2008(false), IsSingleFloat(false), FloatABI(HardFloat),
         DspRev(NoDSP), HasMSA(false), HasFP64(false), ABI(ABIStr) {
     TheCXXABI.set(TargetCXXABI::GenericMIPS);
+    UserLabelPrefix = "_";
   }
 
   bool isNaN2008Default() const {
@@ -7180,7 +7173,6 @@ class PNaClTargetInfo : public TargetInfo {
 public:
   PNaClTargetInfo(const llvm::Triple &Triple) : TargetInfo(Triple) {
     BigEndian = false;
-    this->UserLabelPrefix = "";
     this->LongAlign = 32;
     this->LongWidth = 32;
     this->PointerAlign = 32;

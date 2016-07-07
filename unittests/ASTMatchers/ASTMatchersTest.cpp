@@ -1608,6 +1608,103 @@ TEST(Matcher, AnyArgument) {
   EXPECT_TRUE(notMatches("void x(int, int) { x(1, 2); }", CallArgumentY));
 }
 
+TEST(ForEachArgumentWithParam, ReportsNoFalsePositives) {
+  StatementMatcher ArgumentY =
+      declRefExpr(to(varDecl(hasName("y")))).bind("arg");
+  DeclarationMatcher IntParam = parmVarDecl(hasType(isInteger())).bind("param");
+  StatementMatcher CallExpr =
+      callExpr(forEachArgumentWithParam(ArgumentY, IntParam));
+
+  // IntParam does not match.
+  EXPECT_TRUE(notMatches("void f(int* i) { int* y; f(y); }", CallExpr));
+  // ArgumentY does not match.
+  EXPECT_TRUE(notMatches("void f(int i) { int x; f(x); }", CallExpr));
+}
+
+TEST(ForEachArgumentWithParam, MatchesCXXMemberCallExpr) {
+  StatementMatcher ArgumentY =
+      declRefExpr(to(varDecl(hasName("y")))).bind("arg");
+  DeclarationMatcher IntParam = parmVarDecl(hasType(isInteger())).bind("param");
+  StatementMatcher CallExpr =
+      callExpr(forEachArgumentWithParam(ArgumentY, IntParam));
+  EXPECT_TRUE(matchAndVerifyResultTrue(
+      "struct S {"
+      "  const S& operator[](int i) { return *this; }"
+      "};"
+      "void f(S S1) {"
+      "  int y = 1;"
+      "  S1[y];"
+      "}",
+      CallExpr, new VerifyIdIsBoundTo<ParmVarDecl>("param", 1)));
+
+  StatementMatcher CallExpr2 =
+      callExpr(forEachArgumentWithParam(ArgumentY, IntParam));
+  EXPECT_TRUE(matchAndVerifyResultTrue(
+      "struct S {"
+      "  static void g(int i);"
+      "};"
+      "void f() {"
+      "  int y = 1;"
+      "  S::g(y);"
+      "}",
+      CallExpr2, new VerifyIdIsBoundTo<ParmVarDecl>("param", 1)));
+}
+
+TEST(ForEachArgumentWithParam, MatchesCallExpr) {
+  StatementMatcher ArgumentY =
+      declRefExpr(to(varDecl(hasName("y")))).bind("arg");
+  DeclarationMatcher IntParam = parmVarDecl(hasType(isInteger())).bind("param");
+  StatementMatcher CallExpr =
+      callExpr(forEachArgumentWithParam(ArgumentY, IntParam));
+
+  EXPECT_TRUE(
+      matchAndVerifyResultTrue("void f(int i) { int y; f(y); }", CallExpr,
+                               new VerifyIdIsBoundTo<ParmVarDecl>("param")));
+  EXPECT_TRUE(
+      matchAndVerifyResultTrue("void f(int i) { int y; f(y); }", CallExpr,
+                               new VerifyIdIsBoundTo<DeclRefExpr>("arg")));
+
+  EXPECT_TRUE(matchAndVerifyResultTrue(
+      "void f(int i, int j) { int y; f(y, y); }", CallExpr,
+      new VerifyIdIsBoundTo<ParmVarDecl>("param", 2)));
+  EXPECT_TRUE(matchAndVerifyResultTrue(
+      "void f(int i, int j) { int y; f(y, y); }", CallExpr,
+      new VerifyIdIsBoundTo<DeclRefExpr>("arg", 2)));
+}
+
+TEST(ForEachArgumentWithParam, MatchesConstructExpr) {
+  StatementMatcher ArgumentY =
+      declRefExpr(to(varDecl(hasName("y")))).bind("arg");
+  DeclarationMatcher IntParam = parmVarDecl(hasType(isInteger())).bind("param");
+  StatementMatcher ConstructExpr =
+      cxxConstructExpr(forEachArgumentWithParam(ArgumentY, IntParam));
+
+  EXPECT_TRUE(matchAndVerifyResultTrue(
+      "struct C {"
+      "  C(int i) {}"
+      "};"
+      "int y = 0;"
+      "C Obj(y);",
+      ConstructExpr, new VerifyIdIsBoundTo<ParmVarDecl>("param")));
+}
+
+TEST(ForEachArgumentWithParam, HandlesBoundNodesForNonMatches) {
+  EXPECT_TRUE(matchAndVerifyResultTrue(
+      "void g(int i, int j) {"
+      "  int a;"
+      "  int b;"
+      "  int c;"
+      "  g(a, 0);"
+      "  g(a, b);"
+      "  g(0, b);"
+      "}",
+      functionDecl(
+          forEachDescendant(varDecl().bind("v")),
+          forEachDescendant(callExpr(forEachArgumentWithParam(
+              declRefExpr(to(decl(equalsBoundNode("v")))), parmVarDecl())))),
+      new VerifyIdIsBoundTo<VarDecl>("v", 4)));
+}
+
 TEST(Matcher, ArgumentCount) {
   StatementMatcher Call1Arg = callExpr(argumentCountIs(1));
 
@@ -1715,6 +1812,13 @@ TEST(IsExternC, MatchesExternCFunctionDeclarations) {
   EXPECT_TRUE(matches("extern \"C\" { void f() {} }",
               functionDecl(isExternC())));
   EXPECT_TRUE(notMatches("void f() {}", functionDecl(isExternC())));
+}
+
+TEST(IsDefaulted, MatchesDefaultedFunctionDeclarations) {
+  EXPECT_TRUE(notMatches("class A { ~A(); };",
+                         functionDecl(hasName("~A"), isDefaulted())));
+  EXPECT_TRUE(matches("class B { ~B() = default; };",
+                      functionDecl(hasName("~B"), isDefaulted())));
 }
 
 TEST(IsDeleted, MatchesDeletedFunctionDeclarations) {
@@ -1924,6 +2028,16 @@ TEST(Matcher, MatchesVirtualMethod) {
   EXPECT_TRUE(notMatches("class X { int f(); };", cxxMethodDecl(isVirtual())));
 }
 
+TEST(Matcher, MatchesVirtualAsWrittenMethod) {
+  EXPECT_TRUE(matches("class A { virtual int f(); };"
+                      "class B : public A { int f(); };",
+                      cxxMethodDecl(isVirtualAsWritten(), hasName("::A::f"))));
+  EXPECT_TRUE(
+      notMatches("class A { virtual int f(); };"
+                 "class B : public A { int f(); };",
+                 cxxMethodDecl(isVirtualAsWritten(), hasName("::B::f"))));
+}
+
 TEST(Matcher, MatchesPureMethod) {
   EXPECT_TRUE(matches("class X { virtual int f() = 0; };",
                       cxxMethodDecl(isPure(), hasName("::X::f"))));
@@ -1943,6 +2057,21 @@ TEST(Matcher, MatchesCopyAssignmentOperator) {
                       cxxMethodDecl(isCopyAssignmentOperator())));
   EXPECT_TRUE(notMatches("class X { X &operator=(X &&); };",
                       cxxMethodDecl(isCopyAssignmentOperator())));
+}
+
+TEST(Matcher, MatchesMoveAssignmentOperator) {
+  EXPECT_TRUE(notMatches("class X { X &operator=(X); };",
+                         cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(matches("class X { X &operator=(X &&); };",
+                      cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(matches("class X { X &operator=(const X &&); };",
+                      cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(matches("class X { X &operator=(volatile X &&); };",
+                      cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(matches("class X { X &operator=(const volatile X &&); };",
+                      cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(notMatches("class X { X &operator=(X &); };",
+                         cxxMethodDecl(isMoveAssignmentOperator())));
 }
 
 TEST(Matcher, MatchesConstMethod) {
@@ -2869,6 +2998,10 @@ TEST(HasBody, FindsBodyOfForWhileDoLoops) {
               doStmt(hasBody(compoundStmt()))));
   EXPECT_TRUE(matches("void f() { int p[2]; for (auto x : p) {} }",
               cxxForRangeStmt(hasBody(compoundStmt()))));
+  EXPECT_TRUE(matches("void f() {}", functionDecl(hasBody(compoundStmt()))));
+  EXPECT_TRUE(notMatches("void f();", functionDecl(hasBody(compoundStmt()))));
+  EXPECT_TRUE(matches("void f(); void f() {}",
+                         functionDecl(hasBody(compoundStmt()))));
 }
 
 TEST(HasAnySubstatement, MatchesForTopLevelCompoundStatement) {
@@ -3563,6 +3696,14 @@ TEST(ExceptionHandling, SimpleCases) {
                          varDecl(isExceptionVariable())));
 }
 
+TEST(ParenExpression, SimpleCases) {
+  EXPECT_TRUE(matches("int i = (3);", parenExpr()));
+  EXPECT_TRUE(matches("int i = (3 + 7);", parenExpr()));
+  EXPECT_TRUE(notMatches("int i = 3;", parenExpr()));
+  EXPECT_TRUE(notMatches("int foo() { return 1; }; int a = foo();",
+                         parenExpr()));
+}
+
 TEST(HasConditionVariableStatement, DoesNotMatchCondition) {
   EXPECT_TRUE(notMatches(
       "void x() { if(true) {} }",
@@ -4089,6 +4230,14 @@ TEST(HasAncestor, MatchesAllAncestors) {
           allOf(
               hasAncestor(cxxRecordDecl(isTemplateInstantiation())),
               hasAncestor(cxxRecordDecl(unless(isTemplateInstantiation())))))));
+}
+
+TEST(HasAncestor, ImplicitArrayCopyCtorDeclRefExpr) {
+  EXPECT_TRUE(matches("struct MyClass {\n"
+                      "  int c[1];\n"
+                      "  static MyClass Create() { return MyClass(); }\n"
+                      "};",
+                      declRefExpr(to(decl(hasAncestor(decl()))))));
 }
 
 TEST(HasParent, MatchesAllParents) {
