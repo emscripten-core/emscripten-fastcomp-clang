@@ -640,6 +640,9 @@ public:
     for (auto &Arg : FI.arguments())
       Arg.info = classifyArgumentType(Arg.type);
   }
+
+  Address EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
+                    QualType Ty) const;
 };
 
 class EmscriptenTargetCodeGenInfo : public TargetCodeGenInfo {
@@ -670,6 +673,14 @@ ABIArgInfo EmscriptenABIInfo::classifyReturnType(QualType RetTy) const {
 
   // Otherwise just do the default thing.
   return DefaultABIInfo::classifyReturnType(RetTy);
+}
+
+Address EmscriptenABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
+                                      QualType Ty) const {
+  return emitVoidPtrVAArg(CGF, VAListAddr, Ty, /*Indirect=*/ false,
+                          getContext().getTypeInfoInChars(Ty),
+                          CharUnits::fromQuantity(4),
+                          /*AllowHigherAlign=*/ true);
 }
 // @LOCALMOD-END Emscripten
 
