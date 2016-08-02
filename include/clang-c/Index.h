@@ -326,7 +326,7 @@ clang_isFileMultipleIncludeGuarded(CXTranslationUnit tu, CXFile file);
  *
  * \param tu the translation unit
  *
- * \param file_name the name of the file.
+* \param file_name the name of the file.
  *
  * \returns the file handle for the named file in the translation unit \p tu,
  * or a NULL file handle if the file was not a part of this translation unit.
@@ -2014,7 +2014,11 @@ enum CXCursorKind {
    */
   CXCursor_OMPArraySectionExpr           = 147,
 
-  CXCursor_LastExpr                      = CXCursor_OMPArraySectionExpr,
+  /** \brief Represents an @available(...) check.
+   */
+  CXCursor_ObjCAvailabilityCheckExpr     = 148,
+
+  CXCursor_LastExpr                      = CXCursor_ObjCAvailabilityCheckExpr,
 
   /* Statements */
   CXCursor_FirstStmt                     = 200,
@@ -2309,7 +2313,19 @@ enum CXCursorKind {
    */
   CXCursor_OMPDistributeParallelForDirective = 266,
 
-  CXCursor_LastStmt                = CXCursor_OMPDistributeParallelForDirective,
+  /** \brief OpenMP distribute parallel for simd directive.
+   */
+  CXCursor_OMPDistributeParallelForSimdDirective = 267,
+
+  /** \brief OpenMP distribute simd directive.
+   */
+  CXCursor_OMPDistributeSimdDirective = 268,
+
+  /** \brief OpenMP target parallel for simd directive.
+   */
+  CXCursor_OMPTargetParallelForSimdDirective = 269,
+
+  CXCursor_LastStmt = CXCursor_OMPTargetParallelForSimdDirective,
 
   /**
    * \brief Cursor that represents the translation unit itself.
@@ -2570,7 +2586,7 @@ typedef struct CXPlatformAvailability {
    * \brief A string that describes the platform for which this structure
    * provides availability information.
    *
-   * Possible values are "ios" or "macosx".
+   * Possible values are "ios" or "macos".
    */
   CXString Platform;
   /**

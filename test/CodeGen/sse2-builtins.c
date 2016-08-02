@@ -507,7 +507,7 @@ long long test_mm_cvtsd_si64(__m128d A) {
 
 __m128 test_mm_cvtsd_ss(__m128 A, __m128d B) {
   // CHECK-LABEL: test_mm_cvtsd_ss
-  // CHECK: fptrunc double %{{.*}} to float
+  // CHECK: call <4 x float> @llvm.x86.sse2.cvtsd2ss(<4 x float> %{{.*}}, <2 x double> %{{.*}})
   return _mm_cvtsd_ss(A, B);
 }
 
@@ -569,21 +569,19 @@ __m128i test_mm_cvttpd_epi32(__m128d A) {
 
 __m128i test_mm_cvttps_epi32(__m128 A) {
   // CHECK-LABEL: test_mm_cvttps_epi32
-  // CHECK: fptosi <4 x float> %{{.*}} to <4 x i32>
+  // CHECK: call <4 x i32> @llvm.x86.sse2.cvttps2dq(<4 x float> %{{.*}})
   return _mm_cvttps_epi32(A);
 }
 
 int test_mm_cvttsd_si32(__m128d A) {
   // CHECK-LABEL: test_mm_cvttsd_si32
-  // CHECK: extractelement <2 x double> %{{.*}}, i32 0
-  // CHECK: fptosi double %{{.*}} to i32
+  // CHECK: call i32 @llvm.x86.sse2.cvttsd2si(<2 x double> %{{.*}})
   return _mm_cvttsd_si32(A);
 }
 
 long long test_mm_cvttsd_si64(__m128d A) {
   // CHECK-LABEL: test_mm_cvttsd_si64
-  // CHECK: extractelement <2 x double> %{{.*}}, i32 0
-  // CHECK: fptosi double %{{.*}} to i64
+  // CHECK: call i64 @llvm.x86.sse2.cvttsd2si64(<2 x double> %{{.*}})
   return _mm_cvttsd_si64(A);
 }
 
@@ -699,6 +697,14 @@ __m128i test_mm_loadu_si128(__m128i const* A) {
   // CHECK-LABEL: test_mm_loadu_si128
   // CHECK: load <2 x i64>, <2 x i64>* %{{.*}}, align 1{{$}}
   return _mm_loadu_si128(A);
+}
+
+__m128i test_mm_loadu_si64(void const* A) {
+  // CHECK-LABEL: test_mm_loadu_si64
+  // CHECK: load i64, i64* %{{.*}}, align 1{{$}}
+  // CHECK: insertelement <2 x i64> undef, i64 %{{.*}}, i32 0
+  // CHECK: insertelement <2 x i64> %{{.*}}, i64 0, i32 1
+  return _mm_loadu_si64(A);
 }
 
 __m128i test_mm_madd_epi16(__m128i A, __m128i B) {
@@ -1532,12 +1538,3 @@ __m128i test_mm_xor_si128(__m128i A, __m128i B) {
   // CHECK: xor <2 x i64> %{{.*}}, %{{.*}}
   return _mm_xor_si128(A, B);
 }
-
-__m128i test_mm_loadu_si64(void const* A) {
-  // CHECK-LABEL: test_mm_loadu_si64
-  // CHECK: load i64, i64* %{{.*}}, align 1{{$}}
-  // CHECK: insertelement <2 x i64> undef, i64 %{{.*}}, i32 0
-  // CHECK: insertelement <2 x i64> %{{.*}}, i64 0, i32 1
-  return _mm_loadu_si64(A);
-}
-

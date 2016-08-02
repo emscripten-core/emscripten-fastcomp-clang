@@ -983,13 +983,16 @@ namespace clang {
 
       /// \brief The internal '__NSConstantString' tag type.
       PREDEF_DECL_CF_CONSTANT_STRING_TAG_ID = 15,
+
+      /// \brief The internal '__type_pack_element' template.
+      PREDEF_DECL_TYPE_PACK_ELEMENT_ID = 16,
     };
 
     /// \brief The number of declaration IDs that are predefined.
     ///
     /// For more information about predefined declarations, see the
     /// \c PredefinedDeclIDs type and the PREDEF_DECL_*_ID constants.
-    const unsigned int NUM_PREDEF_DECL_IDS = 16;
+    const unsigned int NUM_PREDEF_DECL_IDS = 17;
 
     /// \brief Record of updates for a declaration that was modified after
     /// being deserialized. This can occur within DECLTYPES_BLOCK_ID.
@@ -1346,8 +1349,10 @@ namespace clang {
       STMT_OBJC_AT_THROW,
       /// \brief An ObjCAutoreleasePoolStmt record.
       STMT_OBJC_AUTORELEASE_POOL,
-      /// \brief A ObjCBoolLiteralExpr record.
+      /// \brief An ObjCBoolLiteralExpr record.
       EXPR_OBJC_BOOL_LITERAL,
+      /// \brief An ObjCAvailabilityCheckExpr record.
+      EXPR_OBJC_AVAILABILITY_CHECK,
 
       // C++
       
@@ -1473,6 +1478,9 @@ namespace clang {
       STMT_OMP_DISTRIBUTE_DIRECTIVE,
       STMT_OMP_TARGET_UPDATE_DIRECTIVE,
       STMT_OMP_DISTRIBUTE_PARALLEL_FOR_DIRECTIVE,
+      STMT_OMP_DISTRIBUTE_PARALLEL_FOR_SIMD_DIRECTIVE,
+      STMT_OMP_DISTRIBUTE_SIMD_DIRECTIVE,
+      STMT_OMP_TARGET_PARALLEL_FOR_SIMD_DIRECTIVE,
       EXPR_OMP_ARRAY_SECTION,
 
       // ARC

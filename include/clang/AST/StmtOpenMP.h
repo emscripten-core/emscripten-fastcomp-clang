@@ -770,7 +770,10 @@ public:
            T->getStmtClass() == OMPTaskLoopSimdDirectiveClass ||
            T->getStmtClass() == OMPDistributeDirectiveClass ||
            T->getStmtClass() == OMPTargetParallelForDirectiveClass ||
-           T->getStmtClass() == OMPDistributeParallelForDirectiveClass;
+           T->getStmtClass() == OMPDistributeParallelForDirectiveClass ||
+           T->getStmtClass() == OMPDistributeParallelForSimdDirectiveClass ||
+           T->getStmtClass() == OMPDistributeSimdDirectiveClass ||
+           T->getStmtClass() == OMPTargetParallelForSimdDirectiveClass;
   }
 };
 
@@ -2881,6 +2884,212 @@ public:
     return T->getStmtClass() == OMPDistributeParallelForDirectiveClass;
   }
 };
+
+/// This represents '#pragma omp distribute parallel for simd' composite
+/// directive.
+///
+/// \code
+/// #pragma omp distribute parallel for simd private(x)
+/// \endcode
+/// In this example directive '#pragma omp distribute parallel for simd' has
+/// clause 'private' with the variables 'x'
+///
+class OMPDistributeParallelForSimdDirective final : public OMPLoopDirective {
+  friend class ASTStmtReader;
+
+  /// Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  OMPDistributeParallelForSimdDirective(SourceLocation StartLoc,
+                                        SourceLocation EndLoc,
+                                        unsigned CollapsedNum,
+                                        unsigned NumClauses)
+      : OMPLoopDirective(this, OMPDistributeParallelForSimdDirectiveClass,
+                         OMPD_distribute_parallel_for_simd, StartLoc, 
+                         EndLoc, CollapsedNum, NumClauses) {}
+
+  /// Build an empty directive.
+  ///
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  explicit OMPDistributeParallelForSimdDirective(unsigned CollapsedNum,
+                                                 unsigned NumClauses)
+      : OMPLoopDirective(this, OMPDistributeParallelForSimdDirectiveClass,
+                         OMPD_distribute_parallel_for_simd, 
+                         SourceLocation(), SourceLocation(), CollapsedNum,
+                         NumClauses) {}
+
+public:
+  /// Creates directive with a list of \a Clauses.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param CollapsedNum Number of collapsed loops.
+  /// \param Clauses List of clauses.
+  /// \param AssociatedStmt Statement, associated with the directive.
+  /// \param Exprs Helper expressions for CodeGen.
+  ///
+  static OMPDistributeParallelForSimdDirective *Create(
+      const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+      unsigned CollapsedNum, ArrayRef<OMPClause *> Clauses,
+      Stmt *AssociatedStmt, const HelperExprs &Exprs);
+
+  /// Creates an empty directive with the place for \a NumClauses clauses.
+  ///
+  /// \param C AST context.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  static OMPDistributeParallelForSimdDirective *CreateEmpty(
+      const ASTContext &C, unsigned NumClauses, unsigned CollapsedNum,
+      EmptyShell);
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPDistributeParallelForSimdDirectiveClass;
+  }
+};
+
+/// This represents '#pragma omp distribute simd' composite directive.
+///
+/// \code
+/// #pragma omp distribute simd private(x)
+/// \endcode
+/// In this example directive '#pragma omp distribute simd' has clause
+/// 'private' with the variables 'x'
+///
+class OMPDistributeSimdDirective final : public OMPLoopDirective {
+  friend class ASTStmtReader;
+
+  /// Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  OMPDistributeSimdDirective(SourceLocation StartLoc, SourceLocation EndLoc,
+                             unsigned CollapsedNum, unsigned NumClauses)
+      : OMPLoopDirective(this, OMPDistributeSimdDirectiveClass,
+                         OMPD_distribute_simd, StartLoc, EndLoc, CollapsedNum,
+                         NumClauses) {}
+
+  /// Build an empty directive.
+  ///
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  explicit OMPDistributeSimdDirective(unsigned CollapsedNum, 
+                                      unsigned NumClauses)
+      : OMPLoopDirective(this, OMPDistributeSimdDirectiveClass,
+                         OMPD_distribute_simd, SourceLocation(),
+                         SourceLocation(), CollapsedNum, NumClauses) {}
+
+public:
+  /// Creates directive with a list of \a Clauses.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param CollapsedNum Number of collapsed loops.
+  /// \param Clauses List of clauses.
+  /// \param AssociatedStmt Statement, associated with the directive.
+  /// \param Exprs Helper expressions for CodeGen.
+  ///
+  static OMPDistributeSimdDirective *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+         unsigned CollapsedNum, ArrayRef<OMPClause *> Clauses,
+         Stmt *AssociatedStmt, const HelperExprs &Exprs);
+
+  /// Creates an empty directive with the place for \a NumClauses clauses.
+  ///
+  /// \param C AST context.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  static OMPDistributeSimdDirective *CreateEmpty(const ASTContext &C,
+                                                 unsigned NumClauses,
+                                                 unsigned CollapsedNum,
+                                                 EmptyShell);
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPDistributeSimdDirectiveClass;
+  }
+};
+
+/// This represents '#pragma omp target parallel for simd' directive.
+///
+/// \code
+/// #pragma omp target parallel for simd private(a) map(b) safelen(c)
+/// \endcode
+/// In this example directive '#pragma omp target parallel for simd' has clauses
+/// 'private' with the variable 'a', 'map' with the variable 'b' and 'safelen'
+/// with the variable 'c'.
+///
+class OMPTargetParallelForSimdDirective final : public OMPLoopDirective {
+  friend class ASTStmtReader;
+
+  /// Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  OMPTargetParallelForSimdDirective(SourceLocation StartLoc, SourceLocation EndLoc,
+                                unsigned CollapsedNum, unsigned NumClauses)
+      : OMPLoopDirective(this, OMPTargetParallelForSimdDirectiveClass,
+                         OMPD_target_parallel_for_simd, StartLoc, EndLoc,
+                         CollapsedNum, NumClauses) {}
+
+  /// Build an empty directive.
+  ///
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  explicit OMPTargetParallelForSimdDirective(unsigned CollapsedNum,
+                                             unsigned NumClauses)
+      : OMPLoopDirective(this, OMPTargetParallelForSimdDirectiveClass,
+                         OMPD_target_parallel_for_simd, SourceLocation(),
+                         SourceLocation(), CollapsedNum, NumClauses) {}
+
+public:
+  /// Creates directive with a list of \a Clauses.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param CollapsedNum Number of collapsed loops.
+  /// \param Clauses List of clauses.
+  /// \param AssociatedStmt Statement, associated with the directive.
+  /// \param Exprs Helper expressions for CodeGen.
+  ///
+  static OMPTargetParallelForSimdDirective *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+         unsigned CollapsedNum, ArrayRef<OMPClause *> Clauses,
+         Stmt *AssociatedStmt, const HelperExprs &Exprs);
+
+  /// Creates an empty directive with the place for \a NumClauses clauses.
+  ///
+  /// \param C AST context.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  static OMPTargetParallelForSimdDirective *CreateEmpty(const ASTContext &C,
+                                                        unsigned NumClauses,
+                                                        unsigned CollapsedNum,
+                                                        EmptyShell);
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPTargetParallelForSimdDirectiveClass;
+  }
+};
+
 } // end namespace clang
 
 #endif

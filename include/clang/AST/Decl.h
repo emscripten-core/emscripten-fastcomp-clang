@@ -1780,6 +1780,17 @@ public:
     return isDefined(Definition);
   }
 
+  /// \brief Get the definition for this declaration.
+  FunctionDecl *getDefinition() {
+    const FunctionDecl *Definition;
+    if (isDefined(Definition))
+      return const_cast<FunctionDecl *>(Definition);
+    return nullptr;
+  }
+  const FunctionDecl *getDefinition() const {
+    return const_cast<FunctionDecl *>(this)->getDefinition();
+  }
+
   /// getBody - Retrieve the body (definition) of the function. The
   /// function body might be in any of the (re-)declarations of this
   /// function. The variant that accepts a FunctionDecl pointer will
@@ -2770,7 +2781,7 @@ protected:
   /// the TU.
   unsigned IsCompleteDefinitionRequired : 1;
 private:
-  SourceLocation RBraceLoc;
+  SourceRange BraceRange;
 
   // A struct representing syntactic qualifier info,
   // to be used for the (uncommon) case of out-of-line declarations.
@@ -2832,8 +2843,8 @@ public:
   using redeclarable_base::getMostRecentDecl;
   using redeclarable_base::isFirstDecl;
 
-  SourceLocation getRBraceLoc() const { return RBraceLoc; }
-  void setRBraceLoc(SourceLocation L) { RBraceLoc = L; }
+  SourceRange getBraceRange() const { return BraceRange; }
+  void setBraceRange(SourceRange R) { BraceRange = R; }
 
   /// getInnerLocStart - Return SourceLocation representing start of source
   /// range ignoring outer template declarations.
@@ -3659,6 +3670,14 @@ public:
   void setParam(unsigned i, ImplicitParamDecl *P) {
     assert(i < NumParams);
     getParams()[i] = P;
+  }
+
+  // ArrayRef interface to parameters.
+  ArrayRef<ImplicitParamDecl *> parameters() const {
+    return {getParams(), getNumParams()};
+  }
+  MutableArrayRef<ImplicitParamDecl *> parameters() {
+    return {getParams(), getNumParams()};
   }
 
   /// \brief Retrieve the parameter containing captured variables.

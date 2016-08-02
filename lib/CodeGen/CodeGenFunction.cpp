@@ -397,6 +397,12 @@ bool CodeGenFunction::ShouldInstrumentFunction() {
   return true;
 }
 
+/// ShouldXRayInstrument - Return true if the current function should be
+/// instrumented with XRay nop sleds.
+bool CodeGenFunction::ShouldXRayInstrumentFunction() const {
+  return CGM.getCodeGenOpts().XRayInstrumentFunctions;
+}
+
 /// EmitFunctionInstrumentation - Emit LLVM code to call the specified
 /// instrumentation function with the current function and the call site, if
 /// function instrumentation is enabled.
@@ -516,7 +522,8 @@ static void GenOpenCLArgMetadata(const FunctionDecl *FD, llvm::Function *Fn,
       // Get argument type name.
       std::string typeName;
       if (isPipe)
-        typeName = cast<PipeType>(ty)->getElementType().getAsString(Policy);
+        typeName = ty.getCanonicalType()->getAs<PipeType>()->getElementType()
+                     .getAsString(Policy);
       else
         typeName = ty.getUnqualifiedType().getAsString(Policy);
 
@@ -529,8 +536,9 @@ static void GenOpenCLArgMetadata(const FunctionDecl *FD, llvm::Function *Fn,
 
       std::string baseTypeName;
       if (isPipe)
-        baseTypeName =
-          cast<PipeType>(ty)->getElementType().getCanonicalType().getAsString(Policy);
+        baseTypeName = ty.getCanonicalType()->getAs<PipeType>()
+                          ->getElementType().getCanonicalType()
+                          .getAsString(Policy);
       else
         baseTypeName =
           ty.getUnqualifiedType().getCanonicalType().getAsString(Policy);
@@ -683,6 +691,20 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
     Fn->addFnAttr(llvm::Attribute::SanitizeMemory);
   if (SanOpts.has(SanitizerKind::SafeStack))
     Fn->addFnAttr(llvm::Attribute::SafeStack);
+
+  // Apply xray attributes to the function (as a string, for now)
+  if (D && ShouldXRayInstrumentFunction()) {
+    if (const auto *XRayAttr = D->getAttr<XRayInstrumentAttr>()) {
+      if (XRayAttr->alwaysXRayInstrument())
+        Fn->addFnAttr("function-instrument", "xray-always");
+      if (XRayAttr->neverXRayInstrument())
+        Fn->addFnAttr("function-instrument", "xray-never");
+    } else {
+      Fn->addFnAttr(
+          "xray-instruction-threshold",
+          llvm::itostr(CGM.getCodeGenOpts().XRayInstructionThreshold));
+    }
+  }
 
   // Pass inline keyword to optimizer if it appears explicitly on any
   // declaration. Also, in the case of -fno-inline attach NoInline

@@ -1193,8 +1193,8 @@ void InitListChecker::CheckSubElementType(const InitializedEntity &Entity,
     // Fall through for subaggregate initialization.
 
   } else {
-    assert((ElemType->isRecordType() || ElemType->isVectorType()) &&
-           "Unexpected type");
+    assert((ElemType->isRecordType() || ElemType->isVectorType() ||
+            ElemType->isClkEventT()) && "Unexpected type");
 
     // C99 6.7.8p13:
     //
@@ -5741,8 +5741,11 @@ PerformConstructorInitialization(Sema &S,
       : Kind.getParenRange();
 
     if (auto *Shadow = dyn_cast<ConstructorUsingShadowDecl>(
-            Step.Function.FoundDecl.getDecl()))
+            Step.Function.FoundDecl.getDecl())) {
       Constructor = S.findInheritingConstructor(Loc, Constructor, Shadow);
+      if (S.DiagnoseUseOfDecl(Constructor, Loc))
+        return ExprError();
+    }
     S.MarkFunctionReferenced(Loc, Constructor);
 
     CurInit = new (S.Context) CXXTemporaryObjectExpr(

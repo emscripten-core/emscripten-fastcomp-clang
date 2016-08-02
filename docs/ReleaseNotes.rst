@@ -51,13 +51,16 @@ Major New Features
   linkers that is a relatively expensive option. It can be passed explicitly
   with -Wl,--build-id. To have clang always pass it, build clang with
   -DENABLE_LINKER_BUILD_ID.
+- On Itanium ABI targets, attribute abi_tag is now supported for compatibility
+  with GCC. Clang implementation of abi_tag is mostly compatible with GCC ABI
+  version 10.
 
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Clang's diagnostics are constantly being improved to catch more issues,
 explain them more clearly, and provide more accurate source information
-about them. The improvements since the 3.7 release include:
+about them. The improvements since the 3.8 release include:
 
 -  ...
 
@@ -72,12 +75,25 @@ New Pragmas in Clang
 
 Clang now supports the ...
 
+
+Attribute Changes in Clang
+--------------------------
+
+- The ``nodebug`` attribute may now be applied to static, global, and local
+  variables (but not parameters or non-static data members). This will suppress
+  all debugging information for the variable (and its type, if there are no
+  other uses of the type).
+
+
 Windows Support
 ---------------
 
 Clang's support for building native Windows programs ...
 
 TLS is enabled for Cygwin defaults to -femulated-tls.
+
+Proper support, including correct mangling and overloading, added for
+MS-specific "__unaligned" type qualifier.
 
 
 C Language Changes in Clang

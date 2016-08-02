@@ -11,13 +11,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CodeGenFunction.h"
 #include "CGCXXABI.h"
 #include "CGCall.h"
+#include "CGCleanup.h"
 #include "CGDebugInfo.h"
 #include "CGObjCRuntime.h"
 #include "CGOpenMPRuntime.h"
 #include "CGRecordLayout.h"
+#include "CodeGenFunction.h"
 #include "CodeGenModule.h"
 #include "TargetInfo.h"
 #include "clang/AST/ASTContext.h"
@@ -423,6 +424,23 @@ EmitMaterializeTemporaryExpr(const MaterializeTemporaryExpr *M) {
       EmitAnyExprToMem(E, Object, Qualifiers(), /*IsInit*/true);
     }
   } else {
+    switch (M->getStorageDuration()) {
+    case SD_Automatic:
+    case SD_FullExpression:
+      if (auto *Size = EmitLifetimeStart(
+              CGM.getDataLayout().getTypeAllocSize(Object.getElementType()),
+              Object.getPointer())) {
+        if (M->getStorageDuration() == SD_Automatic)
+          pushCleanupAfterFullExpr<CallLifetimeEnd>(NormalEHLifetimeMarker,
+                                                    Object, Size);
+        else
+          pushFullExprCleanup<CallLifetimeEnd>(NormalEHLifetimeMarker, Object,
+                                               Size);
+      }
+      break;
+    default:
+      break;
+    }
     EmitAnyExprToMem(E, Object, Qualifiers(), /*IsInit*/true);
   }
   pushTemporaryCleanup(*this, M, E, Object);
@@ -1740,8 +1758,7 @@ void CodeGenFunction::EmitStoreThroughExtVectorComponentLValue(RValue Src,
 
   if (const VectorType *VTy = Dst.getType()->getAs<VectorType>()) {
     unsigned NumSrcElts = VTy->getNumElements();
-    unsigned NumDstElts =
-       cast<llvm::VectorType>(Vec->getType())->getNumElements();
+    unsigned NumDstElts = Vec->getType()->getVectorNumElements();
     if (NumDstElts == NumSrcElts) {
       // Use shuffle vector is the src and destination are the same number of
       // elements and restore the vector mask since it is on the side it will be

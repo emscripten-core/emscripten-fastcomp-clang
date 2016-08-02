@@ -222,7 +222,7 @@ static Optional<Visibility> getVisibilityOf(const NamedDecl *D,
   // implies visibility(default).
   if (D->getASTContext().getTargetInfo().getTriple().isOSDarwin()) {
     for (const auto *A : D->specific_attrs<AvailabilityAttr>())
-      if (A->getPlatform()->getName().equals("macosx"))
+      if (A->getPlatform()->getName().equals("macos"))
         return DefaultVisibility;
   }
 
@@ -1428,10 +1428,8 @@ void NamedDecl::printQualifiedName(raw_ostream &OS,
     if (const auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(DC)) {
       OS << Spec->getName();
       const TemplateArgumentList &TemplateArgs = Spec->getTemplateArgs();
-      TemplateSpecializationType::PrintTemplateArgumentList(OS,
-                                                            TemplateArgs.data(),
-                                                            TemplateArgs.size(),
-                                                            P);
+      TemplateSpecializationType::PrintTemplateArgumentList(
+          OS, TemplateArgs.asArray(), P);
     } else if (const auto *ND = dyn_cast<NamespaceDecl>(DC)) {
       if (P.SuppressUnwrittenScope &&
           (ND->isAnonymousNamespace() || ND->isInline()))
@@ -2444,7 +2442,7 @@ void FunctionDecl::getNameForDiagnostic(
   const TemplateArgumentList *TemplateArgs = getTemplateSpecializationArgs();
   if (TemplateArgs)
     TemplateSpecializationType::PrintTemplateArgumentList(
-        OS, TemplateArgs->data(), TemplateArgs->size(), Policy);
+        OS, TemplateArgs->asArray(), Policy);
 }
 
 bool FunctionDecl::isVariadic() const {
@@ -3527,6 +3525,7 @@ SourceLocation TagDecl::getOuterLocStart() const {
 }
 
 SourceRange TagDecl::getSourceRange() const {
+  SourceLocation RBraceLoc = BraceRange.getEnd();
   SourceLocation E = RBraceLoc.isValid() ? RBraceLoc : getLocation();
   return SourceRange(getOuterLocStart(), E);
 }

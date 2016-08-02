@@ -12407,8 +12407,7 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
   if (CXXDestructorDecl *DD =
           dyn_cast<CXXDestructorDecl>(TheCall->getMethodDecl())) {
     // a->A::f() doesn't go through the vtable, except in AppleKext mode.
-    bool CallCanBeVirtual = !cast<MemberExpr>(NakedMemExpr)->hasQualifier() ||
-                            getLangOpts().AppleKext;
+    bool CallCanBeVirtual = !MemExpr->hasQualifier() || getLangOpts().AppleKext;
     CheckVirtualDtorCall(DD, MemExpr->getLocStart(), /*IsDelete=*/false,
                          CallCanBeVirtual, /*WarnOnNonAbstractTypes=*/true,
                          MemExpr->getMemberLoc());
@@ -13021,6 +13020,9 @@ Expr *Sema::FixOverloadedFunctionReference(Expr *E, DeclAccessPair Found,
           = Context.getTypeDeclType(cast<RecordDecl>(Method->getDeclContext()));
         QualType MemPtrType
           = Context.getMemberPointerType(Fn->getType(), ClassType.getTypePtr());
+        // Under the MS ABI, lock down the inheritance model now.
+        if (Context.getTargetInfo().getCXXABI().isMicrosoft())
+          (void)isCompleteType(UnOp->getOperatorLoc(), MemPtrType);
 
         return new (Context) UnaryOperator(SubExpr, UO_AddrOf, MemPtrType,
                                            VK_RValue, OK_Ordinary,

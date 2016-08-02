@@ -793,6 +793,7 @@ public:
   };
 
   /// PropertyAttributeKind - list of property attributes.
+  /// Keep this list in sync with LLVM's Dwarf.h ApplePropertyAttributes.
   enum ObjCPropertyAttributeKind {
     DQ_PR_noattr = 0x0,
     DQ_PR_readonly = 0x01,
@@ -1632,6 +1633,7 @@ public:
     MemberContext,       // Struct/Union field.
     BlockContext,        // Declaration within a block in a function.
     ForContext,          // Declaration within first part of a for loop.
+    InitStmtContext,     // Declaration within optional init stmt of if/switch.
     ConditionContext,    // Condition declaration in a C++ if/switch/while/for.
     TemplateParamContext,// Within a template parameter list.
     CXXNewContext,       // C++ new-expression.
@@ -1810,6 +1812,7 @@ public:
     case MemberContext:
     case BlockContext:
     case ForContext:
+    case InitStmtContext:
     case ConditionContext:
       return false;
 
@@ -1844,6 +1847,7 @@ public:
     case MemberContext:
     case BlockContext:
     case ForContext:
+    case InitStmtContext:
     case ConditionContext:
     case PrototypeContext:
     case LambdaExprParameterContext:
@@ -1877,6 +1881,7 @@ public:
     case MemberContext:
     case BlockContext:
     case ForContext:
+    case InitStmtContext:
     case ConditionContext:
     case PrototypeContext:
     case LambdaExprParameterContext:
@@ -1921,6 +1926,7 @@ public:
     case FileContext:
     case BlockContext:
     case ForContext:
+    case InitStmtContext:
       return true;
 
     case ConditionContext:
@@ -2119,9 +2125,10 @@ public:
     case FileContext:
     case MemberContext:
     case BlockContext:
+    case ForContext:
+    case InitStmtContext:
       return true;
 
-    case ForContext:
     case ConditionContext:
     case KNRTypeListContext:
     case TypeNameContext:

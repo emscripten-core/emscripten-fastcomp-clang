@@ -447,10 +447,8 @@ void Sema::PrintInstantiationStack() {
       SmallVector<char, 128> TemplateArgsStr;
       llvm::raw_svector_ostream OS(TemplateArgsStr);
       Template->printName(OS);
-      TemplateSpecializationType::PrintTemplateArgumentList(OS,
-                                                         Active->TemplateArgs,
-                                                      Active->NumTemplateArgs,
-                                                      getPrintingPolicy());
+      TemplateSpecializationType::PrintTemplateArgumentList(
+          OS, Active->template_arguments(), getPrintingPolicy());
       Diags.Report(Active->PointOfInstantiation,
                    diag::note_default_arg_instantiation_here)
         << OS.str()
@@ -501,10 +499,8 @@ void Sema::PrintInstantiationStack() {
       SmallVector<char, 128> TemplateArgsStr;
       llvm::raw_svector_ostream OS(TemplateArgsStr);
       FD->printName(OS);
-      TemplateSpecializationType::PrintTemplateArgumentList(OS,
-                                                         Active->TemplateArgs,
-                                                      Active->NumTemplateArgs,
-                                                      getPrintingPolicy());
+      TemplateSpecializationType::PrintTemplateArgumentList(
+          OS, Active->template_arguments(), getPrintingPolicy());
       Diags.Report(Active->PointOfInstantiation,
                    diag::note_default_function_arg_instantiation_here)
         << OS.str()
@@ -2094,7 +2090,7 @@ Sema::InstantiateClass(SourceLocation PointOfInstantiation,
   if (TSK == TSK_ImplicitInstantiation) {
     Instantiation->setLocation(Pattern->getLocation());
     Instantiation->setLocStart(Pattern->getInnerLocStart());
-    Instantiation->setRBraceLoc(Pattern->getRBraceLoc());
+    Instantiation->setBraceRange(Pattern->getBraceRange());
   }
 
   if (!Instantiation->isInvalidDecl()) {

@@ -1448,6 +1448,12 @@ bool CodeGenModule::MayBeEmittedEagerly(const ValueDecl *Global) {
       // Implicit template instantiations may change linkage if they are later
       // explicitly instantiated, so they should not be emitted eagerly.
       return false;
+  if (const auto *VD = dyn_cast<VarDecl>(Global))
+    if (Context.getInlineVariableDefinitionKind(VD) ==
+        ASTContext::InlineVariableDefinitionKind::WeakUnknown)
+      // A definition of an inline constexpr static data member may change
+      // linkage later if it's redeclared outside the class.
+      return false;
   // If OpenMP is enabled and threadprivates must be generated like TLS, delay
   // codegen for global variables, because they may be marked as threadprivate.
   if (LangOpts.OpenMP && LangOpts.OpenMPUseTLS &&
@@ -1596,8 +1602,14 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
                             VD->hasAttr<CUDADeviceAttr>());
     if (!MustEmitForCuda &&
         VD->isThisDeclarationADefinition() != VarDecl::Definition &&
-        !Context.isMSStaticDataMemberInlineDefinition(VD))
+        !Context.isMSStaticDataMemberInlineDefinition(VD)) {
+      // If this declaration may have caused an inline variable definition to
+      // change linkage, make sure that it's emitted.
+      if (Context.getInlineVariableDefinitionKind(VD) ==
+          ASTContext::InlineVariableDefinitionKind::Strong)
+        GetAddrOfGlobalVar(VD);
       return;
+    }
   }
 
   // Defer code generation to first use when possible, e.g. if this is an inline
@@ -2611,7 +2623,7 @@ static bool isVarDeclStrongDefinition(const ASTContext &Context,
   if (shouldBeInCOMDAT(CGM, *D))
     return true;
 
-  // Declarations with a required alignment do not have common linakge in MSVC
+  // Declarations with a required alignment do not have common linkage in MSVC
   // mode.
   if (Context.getTargetInfo().getCXXABI().isMicrosoft()) {
     if (D->hasAttr<AlignedAttr>())
@@ -2672,9 +2684,18 @@ llvm::GlobalValue::LinkageTypes CodeGenModule::getLLVMLinkageForDeclarator(
   // explicit instantiations can occur in multiple translation units
   // and must all be equivalent. However, we are not allowed to
   // throw away these explicit instantiations.
-  if (Linkage == GVA_StrongODR)
-    return !Context.getLangOpts().AppleKext ? llvm::Function::WeakODRLinkage
-                                            : llvm::Function::ExternalLinkage;
+  //
+  // We don't currently support CUDA device code spread out across multiple TUs,
+  // so say that CUDA templates are either external (for kernels) or internal.
+  // This lets llvm perform aggressive inter-procedural optimizations.
+  if (Linkage == GVA_StrongODR) {
+    if (Context.getLangOpts().AppleKext)
+      return llvm::Function::ExternalLinkage;
+    if (Context.getLangOpts().CUDA && Context.getLangOpts().CUDAIsDevice)
+      return D->hasAttr<CUDAGlobalAttr>() ? llvm::Function::ExternalLinkage
+                                          : llvm::Function::InternalLinkage;
+    return llvm::Function::WeakODRLinkage;
+  }
 
   // C++ doesn't have tentative definitions and thus cannot have common
   // linkage.
@@ -2831,6 +2852,10 @@ static void ReplaceUsesOfNonProtoTypeWithRealFunction(llvm::GlobalValue *Old,
 }
 
 void CodeGenModule::HandleCXXStaticMemberVarInstantiation(VarDecl *VD) {
+  auto DK = VD->isThisDeclarationADefinition();
+  if (DK == VarDecl::Definition && VD->hasAttr<DLLImportAttr>())
+    return;
+
   TemplateSpecializationKind TSK = VD->getTemplateSpecializationKind();
   // If we have a definition, this might be a deferred decl. If the
   // instantiation is explicit, make sure we emit it at the end.
@@ -3189,10 +3214,8 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   case llvm::Triple::UnknownObjectFormat:
     llvm_unreachable("unknown file format");
   case llvm::Triple::COFF:
-    GV->setSection(".rdata.cfstring");
-    break;
   case llvm::Triple::ELF:
-    GV->setSection(".rodata.cfstring");
+    GV->setSection("cfstring");
     break;
   case llvm::Triple::MachO:
     GV->setSection("__DATA,__cfstring");

@@ -302,6 +302,19 @@ public:
 
   llvm::Instruction *CurrentFuncletPad = nullptr;
 
+  class CallLifetimeEnd final : public EHScopeStack::Cleanup {
+    llvm::Value *Addr;
+    llvm::Value *Size;
+
+  public:
+    CallLifetimeEnd(Address addr, llvm::Value *size)
+        : Addr(addr.getPointer()), Size(size) {}
+
+    void Emit(CodeGenFunction &CGF, Flags flags) override {
+      CGF.EmitLifetimeEnd(Size, Addr);
+    }
+  };
+
   /// Header for data within LifetimeExtendedCleanupStack.
   struct LifetimeExtendedCleanupHeader {
     /// The size of the following cleanup object.
@@ -1508,6 +1521,10 @@ public:
   /// instrumented with __cyg_profile_func_* calls
   bool ShouldInstrumentFunction();
 
+  /// ShouldXRayInstrument - Return true if the current function should be
+  /// instrumented with XRay nop sleds.
+  bool ShouldXRayInstrumentFunction() const;
+
   /// EmitFunctionInstrumentation - Emit LLVM code to call the specified
   /// instrumentation function with the current function and the call site, if
   /// function instrumentation is enabled.
@@ -2486,6 +2503,11 @@ public:
   void EmitOMPDistributeLoop(const OMPDistributeDirective &S);
   void EmitOMPDistributeParallelForDirective(
       const OMPDistributeParallelForDirective &S);
+  void EmitOMPDistributeParallelForSimdDirective(
+      const OMPDistributeParallelForSimdDirective &S);
+  void EmitOMPDistributeSimdDirective(const OMPDistributeSimdDirective &S);
+  void EmitOMPTargetParallelForSimdDirective(
+      const OMPTargetParallelForSimdDirective &S);
 
   /// Emit outlined function for the target directive.
   static std::pair<llvm::Function * /*OutlinedFn*/,
