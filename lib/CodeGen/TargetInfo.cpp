@@ -680,10 +680,8 @@ ABIArgInfo EmscriptenABIInfo::classifyReturnType(QualType RetTy) const {
 
 Address EmscriptenABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
                                       QualType Ty) const {
-  return emitVoidPtrVAArg(CGF, VAListAddr, Ty, /*Indirect=*/ false,
-                          getContext().getTypeInfoInChars(Ty),
-                          CharUnits::fromQuantity(4),
-                          /*AllowHigherAlign=*/ true);
+  // Just like PNaCl.
+  return EmitVAArgInstr(CGF, VAListAddr, Ty, ABIArgInfo::getDirect());
 }
 // @LOCALMOD-END Emscripten
 
