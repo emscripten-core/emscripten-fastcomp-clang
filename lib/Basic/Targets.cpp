@@ -318,9 +318,6 @@ protected:
                     MacroBuilder &Builder) const override {
     // A macro for the platform.
     Builder.defineMacro("__EMSCRIPTEN__");
-    // Earlier versions of Emscripten defined this, so we continue to define it
-    // for compatibility, for now. Users should ideally prefer __EMSCRIPTEN__.
-    Builder.defineMacro("EMSCRIPTEN");
     // A common platform macro.
     if (Opts.POSIXThreads)
       Builder.defineMacro("_REENTRANT");
