@@ -64,6 +64,9 @@
 //
 // 
 // RUN: %clang_cc1 -std=c11 -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix C11 %s
+// RUN: %clang_cc1 -std=c1x -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix C11 %s
+// RUN: %clang_cc1 -std=iso9899:2011 -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix C11 %s
+// RUN: %clang_cc1 -std=iso9899:201x -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix C11 %s
 //
 // C11:#define __STDC_UTF_16__ 1
 // C11:#define __STDC_UTF_32__ 1
@@ -205,6 +208,12 @@
 // O1:#define __OPTIMIZE__ 1
 //
 //
+// RUN: %clang_cc1 -Og -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix Og %s
+//
+// Og-NOT:#define __OPTIMIZE_SIZE__
+// Og	:#define __OPTIMIZE__ 1
+//
+//
 // RUN: %clang_cc1 -Os -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix Os %s
 //
 // Os:#define __OPTIMIZE_SIZE__ 1
@@ -247,6 +256,7 @@
 
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=aarch64-none-none < /dev/null | FileCheck -match-full-lines -check-prefix AARCH64 %s
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=arm64-none-none < /dev/null | FileCheck -match-full-lines -check-prefix AARCH64 %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=arm64-none-none < /dev/null | FileCheck -match-full-lines -check-prefix AARCH64 -check-prefix AARCH64-CXX %s
 //
 // AARCH64:#define _LP64 1
 // AARCH64-NOT:#define __AARCH64EB__ 1
@@ -393,6 +403,7 @@
 // AARCH64:#define __SIZE_MAX__ 18446744073709551615UL
 // AARCH64:#define __SIZE_TYPE__ long unsigned int
 // AARCH64:#define __SIZE_WIDTH__ 64
+// AARCH64-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 16UL
 // AARCH64:#define __UINT16_C_SUFFIX__
 // AARCH64:#define __UINT16_MAX__ 65535
 // AARCH64:#define __UINT16_TYPE__ unsigned short
@@ -1206,6 +1217,7 @@
 // AARCH64-DARWIN: #define __aarch64__ 1
 
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=arm-none-none < /dev/null | FileCheck -match-full-lines -check-prefix ARM %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=arm-none-none < /dev/null | FileCheck -match-full-lines -check-prefix ARM -check-prefix ARM-CXX %s
 //
 // ARM-NOT:#define _LP64
 // ARM:#define __APCS_32__ 1
@@ -1351,6 +1363,7 @@
 // ARM:#define __SIZE_MAX__ 4294967295U
 // ARM:#define __SIZE_TYPE__ unsigned int
 // ARM:#define __SIZE_WIDTH__ 32
+// ARM-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 8U
 // ARM:#define __UINT16_C_SUFFIX__
 // ARM:#define __UINT16_MAX__ 65535
 // ARM:#define __UINT16_TYPE__ unsigned short
@@ -1975,6 +1988,11 @@
 // ARMEABIHARDFP:#define __arm 1
 // ARMEABIHARDFP:#define __arm__ 1
 
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=armv6-unknown-cloudabi-eabihf < /dev/null | FileCheck -match-full-lines -check-prefix ARMV6-CLOUDABI %s
+//
+// ARMV6-CLOUDABI:#define __CloudABI__ 1
+// ARMV6-CLOUDABI:#define __arm__ 1
+
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=arm-netbsd-eabi < /dev/null | FileCheck -match-full-lines -check-prefix ARM-NETBSD %s
 //
 // ARM-NETBSD-NOT:#define _LP64
@@ -2426,6 +2444,7 @@
 // I386:#define i386 1
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=i386-pc-linux-gnu -target-cpu pentium4 < /dev/null | FileCheck -match-full-lines -check-prefix I386-LINUX %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=i386-pc-linux-gnu -target-cpu pentium4 < /dev/null | FileCheck -match-full-lines -check-prefix I386-LINUX -check-prefix I386-LINUX-CXX %s
 //
 // I386-LINUX-NOT:#define _LP64
 // I386-LINUX:#define __BIGGEST_ALIGNMENT__ 16
@@ -2567,6 +2586,7 @@
 // I386-LINUX:#define __SIZE_MAX__ 4294967295U
 // I386-LINUX:#define __SIZE_TYPE__ unsigned int
 // I386-LINUX:#define __SIZE_WIDTH__ 32
+// I386-LINUX-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 8U
 // I386-LINUX:#define __UINT16_C_SUFFIX__
 // I386-LINUX:#define __UINT16_MAX__ 65535
 // I386-LINUX:#define __UINT16_TYPE__ unsigned short
@@ -2613,6 +2633,7 @@
 // I386-LINUX:#define i386 1
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=i386-netbsd < /dev/null | FileCheck -match-full-lines -check-prefix I386-NETBSD %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=i386-netbsd < /dev/null | FileCheck -match-full-lines -check-prefix I386-NETBSD -check-prefix I386-NETBSD-CXX %s
 //
 // I386-NETBSD-NOT:#define _LP64
 // I386-NETBSD:#define __BIGGEST_ALIGNMENT__ 16
@@ -2754,6 +2775,7 @@
 // I386-NETBSD:#define __SIZE_MAX__ 4294967295U
 // I386-NETBSD:#define __SIZE_TYPE__ unsigned int
 // I386-NETBSD:#define __SIZE_WIDTH__ 32
+// I386-NETBSD-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 4U
 // I386-NETBSD:#define __UINT16_C_SUFFIX__
 // I386-NETBSD:#define __UINT16_MAX__ 65535
 // I386-NETBSD:#define __UINT16_TYPE__ unsigned short
@@ -2813,7 +2835,8 @@
 // I386-DECLSPEC: #define __declspec{{.*}}
 
 //
-// RUN: %clang_cc1 -E -dM -ffreestanding -triple=mips-none-none < /dev/null | FileCheck -match-full-lines -check-prefix MIPS32BE %s
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=mips-none-none < /dev/null | FileCheck -match-full-lines -check-prefix MIPS32BE -check-prefix MIPS32BE-C %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=mips-none-none < /dev/null | FileCheck -match-full-lines -check-prefix MIPS32BE -check-prefix MIPS32BE-CXX %s
 //
 // MIPS32BE:#define MIPSEB 1
 // MIPS32BE:#define _ABIO32 1
@@ -2968,8 +2991,9 @@
 // MIPS32BE:#define __SIZE_MAX__ 4294967295U
 // MIPS32BE:#define __SIZE_TYPE__ unsigned int
 // MIPS32BE:#define __SIZE_WIDTH__ 32
+// MIPS32BE-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 8U
 // MIPS32BE:#define __STDC_HOSTED__ 0
-// MIPS32BE:#define __STDC_VERSION__ 201112L
+// MIPS32BE-C:#define __STDC_VERSION__ 201112L
 // MIPS32BE:#define __STDC__ 1
 // MIPS32BE:#define __UINT16_C_SUFFIX__
 // MIPS32BE:#define __UINT16_MAX__ 65535
@@ -3230,7 +3254,10 @@
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding \
 // RUN:            -triple=mips64-none-none -target-abi n32 < /dev/null \
-// RUN:   | FileCheck -match-full-lines -check-prefix MIPSN32BE %s
+// RUN:   | FileCheck -match-full-lines -check-prefix MIPSN32BE -check-prefix MIPSN32BE-C %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding \
+// RUN:            -triple=mips64-none-none -target-abi n32 < /dev/null \
+// RUN:   | FileCheck -match-full-lines -check-prefix MIPSN32BE -check-prefix MIPSN32BE-CXX %s
 //
 // MIPSN32BE: #define MIPSEB 1
 // MIPSN32BE: #define _ABIN32 2
@@ -3299,7 +3326,7 @@
 // MIPSN32BE: #define __GCC_ATOMIC_WCHAR_T_LOCK_FREE 2
 // MIPSN32BE: #define __GNUC_MINOR__ 2
 // MIPSN32BE: #define __GNUC_PATCHLEVEL__ 1
-// MIPSN32BE: #define __GNUC_STDC_INLINE__ 1
+// MIPSN32BE-C: #define __GNUC_STDC_INLINE__ 1
 // MIPSN32BE: #define __GNUC__ 4
 // MIPSN32BE: #define __GXX_ABI_VERSION 1002
 // MIPSN32BE: #define __ILP32__ 1
@@ -3419,10 +3446,11 @@
 // MIPSN32BE: #define __SIZE_MAX__ 4294967295U
 // MIPSN32BE: #define __SIZE_TYPE__ unsigned int
 // MIPSN32BE: #define __SIZE_WIDTH__ 32
+// MIPSN32BE-CXX: #define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 16U
 // MIPSN32BE: #define __STDC_HOSTED__ 0
 // MIPSN32BE: #define __STDC_UTF_16__ 1
 // MIPSN32BE: #define __STDC_UTF_32__ 1
-// MIPSN32BE: #define __STDC_VERSION__ 201112L
+// MIPSN32BE-C: #define __STDC_VERSION__ 201112L
 // MIPSN32BE: #define __STDC__ 1
 // MIPSN32BE: #define __UINT16_C_SUFFIX__
 // MIPSN32BE: #define __UINT16_FMTX__ "hX"
@@ -3841,6 +3869,7 @@
 // MIPSN32EL: #define mips 1
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=mips64-none-none < /dev/null | FileCheck -match-full-lines -check-prefix MIPS64BE %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=mips64-none-none < /dev/null | FileCheck -match-full-lines -check-prefix MIPS64BE -check-prefix MIPS64BE-CXX %s
 //
 // MIPS64BE:#define MIPSEB 1
 // MIPS64BE:#define _ABI64 3
@@ -3996,6 +4025,7 @@
 // MIPS64BE:#define __SIZE_MAX__ 18446744073709551615UL
 // MIPS64BE:#define __SIZE_TYPE__ long unsigned int
 // MIPS64BE:#define __SIZE_WIDTH__ 64
+// MIPS64BE-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 16UL
 // MIPS64BE:#define __UINT16_C_SUFFIX__
 // MIPS64BE:#define __UINT16_MAX__ 65535
 // MIPS64BE:#define __UINT16_TYPE__ unsigned short
@@ -4484,6 +4514,7 @@
 // MIPS-XXR6:#define __mips_nan2008 1
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=msp430-none-none < /dev/null | FileCheck -match-full-lines -check-prefix MSP430 %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=msp430-none-none < /dev/null | FileCheck -match-full-lines -check-prefix MSP430 -check-prefix MSP430-CXX %s
 //
 // MSP430:#define MSP430 1
 // MSP430-NOT:#define _LP64
@@ -4625,6 +4656,7 @@
 // MSP430:#define __SIZE_MAX__ 65535U
 // MSP430:#define __SIZE_TYPE__ unsigned int
 // MSP430:#define __SIZE_WIDTH__ 16
+// MSP430-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 8U
 // MSP430:#define __UINT16_C_SUFFIX__ U
 // MSP430:#define __UINT16_MAX__ 65535U
 // MSP430:#define __UINT16_TYPE__ unsigned short
@@ -4669,6 +4701,7 @@
 // MSP430:#define __clang__ 1
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=nvptx-none-none < /dev/null | FileCheck -match-full-lines -check-prefix NVPTX32 %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=nvptx-none-none < /dev/null | FileCheck -match-full-lines -check-prefix NVPTX32 -check-prefix NVPTX32-CXX %s
 //
 // NVPTX32-NOT:#define _LP64
 // NVPTX32:#define __BIGGEST_ALIGNMENT__ 8
@@ -4813,6 +4846,7 @@
 // NVPTX32:#define __SIZE_MAX__ 4294967295U
 // NVPTX32:#define __SIZE_TYPE__ unsigned int
 // NVPTX32:#define __SIZE_WIDTH__ 32
+// NVPTX32-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 8U
 // NVPTX32:#define __UINT16_C_SUFFIX__
 // NVPTX32:#define __UINT16_MAX__ 65535
 // NVPTX32:#define __UINT16_TYPE__ unsigned short
@@ -4856,6 +4890,7 @@
 // NVPTX32:#define __WINT_WIDTH__ 32
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=nvptx64-none-none < /dev/null | FileCheck -match-full-lines -check-prefix NVPTX64 %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=nvptx64-none-none < /dev/null | FileCheck -match-full-lines -check-prefix NVPTX64 -check-prefix NVPTX64-CXX %s
 //
 // NVPTX64:#define _LP64 1
 // NVPTX64:#define __BIGGEST_ALIGNMENT__ 8
@@ -5000,6 +5035,7 @@
 // NVPTX64:#define __SIZE_MAX__ 18446744073709551615UL
 // NVPTX64:#define __SIZE_TYPE__ long unsigned int
 // NVPTX64:#define __SIZE_WIDTH__ 64
+// NVPTX64-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 8UL
 // NVPTX64:#define __UINT16_C_SUFFIX__
 // NVPTX64:#define __UINT16_MAX__ 65535
 // NVPTX64:#define __UINT16_TYPE__ unsigned short
@@ -5043,6 +5079,7 @@
 // NVPTX64:#define __WINT_WIDTH__ 32
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc-none-none -target-cpu 603e < /dev/null | FileCheck -match-full-lines -check-prefix PPC603E %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=powerpc-none-none -target-cpu 603e < /dev/null | FileCheck -match-full-lines -check-prefix PPC603E-CXX %s
 //
 // PPC603E:#define _ARCH_603 1
 // PPC603E:#define _ARCH_603E 1
@@ -5192,6 +5229,7 @@
 // PPC603E:#define __SIZE_MAX__ 4294967295UL
 // PPC603E:#define __SIZE_TYPE__ long unsigned int
 // PPC603E:#define __SIZE_WIDTH__ 32
+// PPC603E-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 16UL
 // PPC603E:#define __UINT16_C_SUFFIX__
 // PPC603E:#define __UINT16_MAX__ 65535
 // PPC603E:#define __UINT16_TYPE__ unsigned short
@@ -5237,6 +5275,7 @@
 // PPC603E:#define __ppc__ 1
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc64-none-none -target-cpu pwr7 -fno-signed-char < /dev/null | FileCheck -match-full-lines -check-prefix PPC64 %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=powerpc64-none-none -target-cpu pwr7 -fno-signed-char < /dev/null | FileCheck -match-full-lines -check-prefix PPC64 -check-prefix PPC64-CXX %s
 //
 // PPC64:#define _ARCH_PPC 1
 // PPC64:#define _ARCH_PPC64 1
@@ -5392,6 +5431,7 @@
 // PPC64:#define __SIZE_MAX__ 18446744073709551615UL
 // PPC64:#define __SIZE_TYPE__ long unsigned int
 // PPC64:#define __SIZE_WIDTH__ 64
+// PPC64-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 16UL
 // PPC64:#define __UINT16_C_SUFFIX__
 // PPC64:#define __UINT16_MAX__ 65535
 // PPC64:#define __UINT16_TYPE__ unsigned short
@@ -6648,6 +6688,7 @@
 // RUN: %clang_cc1 -x cl -E -dM -ffreestanding -triple=amdgcn < /dev/null | FileCheck -match-full-lines -check-prefix AMDGCN --check-prefix AMDGPU %s
 // RUN: %clang_cc1 -x cl -E -dM -ffreestanding -triple=r600 -target-cpu caicos < /dev/null | FileCheck -match-full-lines --check-prefix AMDGPU %s
 //
+// AMDGPU:#define __ENDIAN_LITTLE__ 1
 // AMDGPU:#define cl_khr_byte_addressable_store 1
 // AMDGCN:#define cl_khr_fp64 1
 // AMDGPU:#define cl_khr_global_int32_base_atomics 1
@@ -6656,6 +6697,7 @@
 // AMDGPU:#define cl_khr_local_int32_extended_atomics 1
 
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=s390x-none-none -fno-signed-char < /dev/null | FileCheck -match-full-lines -check-prefix S390X %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=s390x-none-none -fno-signed-char < /dev/null | FileCheck -match-full-lines -check-prefix S390X -check-prefix S390X-CXX %s
 //
 // S390X:#define __BIGGEST_ALIGNMENT__ 8
 // S390X:#define __CHAR16_TYPE__ unsigned short
@@ -6792,6 +6834,7 @@
 // S390X:#define __SIZEOF_WINT_T__ 4
 // S390X:#define __SIZE_TYPE__ long unsigned int
 // S390X:#define __SIZE_WIDTH__ 64
+// S390X-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 8UL
 // S390X:#define __UINT16_C_SUFFIX__
 // S390X:#define __UINT16_MAX__ 65535
 // S390X:#define __UINT16_TYPE__ unsigned short
@@ -6840,6 +6883,8 @@
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=sparc-rtems-elf < /dev/null | FileCheck -match-full-lines -check-prefix SPARC -check-prefix SPARC-DEFAULT %s
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=sparc-none-netbsd < /dev/null | FileCheck -match-full-lines -check-prefix SPARC -check-prefix SPARC-NETOPENBSD %s
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=sparc-none-openbsd < /dev/null | FileCheck -match-full-lines -check-prefix SPARC -check-prefix SPARC-NETOPENBSD %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=sparc-none-none < /dev/null | FileCheck -match-full-lines -check-prefix SPARC -check-prefix SPARC-DEFAULT -check-prefix SPARC-DEFAULT-CXX %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=sparc-none-openbsd < /dev/null | FileCheck -match-full-lines -check-prefix SPARC -check-prefix SPARC-NETOPENBSD -check-prefix SPARC-NETOPENBSD-CXX %s
 //
 // SPARC-NOT:#define _LP64
 // SPARC:#define __BIGGEST_ALIGNMENT__ 8
@@ -6877,6 +6922,7 @@
 // SPARC:#define __FLT_MIN_EXP__ (-125)
 // SPARC:#define __FLT_MIN__ 1.17549435e-38F
 // SPARC:#define __FLT_RADIX__ 2
+// SPARC:#define __GCC_ATOMIC_LLONG_LOCK_FREE 1
 // SPARC:#define __INT16_C_SUFFIX__
 // SPARC:#define __INT16_FMTd__ "hd"
 // SPARC:#define __INT16_FMTi__ "hi"
@@ -6987,6 +7033,8 @@
 // SPARC-NETOPENBSD:#define __SIZE_MAX__ 4294967295UL
 // SPARC-NETOPENBSD:#define __SIZE_TYPE__ long unsigned int
 // SPARC:#define __SIZE_WIDTH__ 32
+// SPARC-DEFAULT-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 8U
+// SPARC-NETOPENBSD-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 8UL
 // SPARC:#define __UINT16_C_SUFFIX__
 // SPARC:#define __UINT16_MAX__ 65535
 // SPARC:#define __UINT16_TYPE__ unsigned short
@@ -7037,6 +7085,7 @@
 // SPARC:#define sparc 1
 
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=tce-none-none < /dev/null | FileCheck -match-full-lines -check-prefix TCE %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=tce-none-none < /dev/null | FileCheck -match-full-lines -check-prefix TCE -check-prefix TCE-CXX %s
 //
 // TCE-NOT:#define _LP64
 // TCE:#define __BIGGEST_ALIGNMENT__ 4
@@ -7163,6 +7212,7 @@
 // TCE:#define __SIZE_MAX__ 4294967295U
 // TCE:#define __SIZE_TYPE__ unsigned int
 // TCE:#define __SIZE_WIDTH__ 32
+// TCE-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 4U
 // TCE:#define __TCE_V1__ 1
 // TCE:#define __TCE__ 1
 // TCE:#define __UINT16_C_SUFFIX__
@@ -7204,6 +7254,7 @@
 // TCE:#define tce 1
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=x86_64-none-none < /dev/null | FileCheck -match-full-lines -check-prefix X86_64 %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=x86_64-none-none < /dev/null | FileCheck -match-full-lines -check-prefix X86_64 -check-prefix X86_64-CXX %s
 //
 // X86_64:#define _LP64 1
 // X86_64-NOT:#define _LP32 1
@@ -7352,6 +7403,7 @@
 // X86_64:#define __SSE2__ 1
 // X86_64:#define __SSE_MATH__ 1
 // X86_64:#define __SSE__ 1
+// X86_64-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 16UL
 // X86_64:#define __UINT16_C_SUFFIX__
 // X86_64:#define __UINT16_MAX__ 65535
 // X86_64:#define __UINT16_TYPE__ unsigned short
@@ -7406,6 +7458,7 @@
 // X86_64H:#define __x86_64h__ 1
 
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=x86_64-none-none-gnux32 < /dev/null | FileCheck -match-full-lines -check-prefix X32 %s
+// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=x86_64-none-none-gnux32 < /dev/null | FileCheck -match-full-lines -check-prefix X32 -check-prefix X32-CXX %s
 //
 // X32:#define _ILP32 1
 // X32-NOT:#define _LP64 1
@@ -7554,6 +7607,7 @@
 // X32:#define __SSE2__ 1
 // X32:#define __SSE_MATH__ 1
 // X32:#define __SSE__ 1
+// X32-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 16U
 // X32:#define __UINT16_C_SUFFIX__
 // X32:#define __UINT16_MAX__ 65535
 // X32:#define __UINT16_TYPE__ unsigned short
@@ -8452,10 +8506,44 @@
 // NORTTI:#define __STDC__ 1
 //
 // RUN: %clang_cc1 -triple arm-linux-androideabi -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix ANDROID %s
+// ANDROID-NOT:#define __ANDROID_API__
 // ANDROID:#define __ANDROID__ 1
+//
+// RUN: %clang_cc1 -x c++ -triple i686-linux-android -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix I386-ANDROID-CXX %s
+// I386-ANDROID-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 4U
+//
+// RUN: %clang_cc1 -x c++ -triple x86_64-linux-android -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix X86_64-ANDROID-CXX %s
+// X86_64-ANDROID-CXX:#define __STDCPP_DEFAULT_NEW_ALIGNMENT__ 16UL
+//
+// RUN: %clang_cc1 -triple arm-linux-androideabi20 -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix ANDROID20 %s
+// ANDROID20:#define __ANDROID_API__ 20
+// ANDROID20:#define __ANDROID__ 1
 //
 // RUN: %clang_cc1 -triple lanai-unknown-unknown -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix LANAI %s
 // LANAI: #define __lanai__ 1
+//
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=amd64-unknown-openbsd6.1 < /dev/null | FileCheck -match-full-lines -check-prefix OPENBSD %s
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=arm-unknown-openbsd6.1-gnueabi < /dev/null | FileCheck -match-full-lines -check-prefix OPENBSD %s
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=i386-unknown-openbsd6.1 < /dev/null | FileCheck -match-full-lines -check-prefix OPENBSD %s
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=sparc64-unknown-openbsd6.1 < /dev/null | FileCheck -match-full-lines -check-prefix OPENBSD %s
+// OPENBSD:#define __ELF__ 1
+// OPENBSD:#define __INT16_TYPE__ short
+// OPENBSD:#define __INT32_TYPE__ int
+// OPENBSD:#define __INT64_TYPE__ long long int
+// OPENBSD:#define __INT8_TYPE__ signed char
+// OPENBSD:#define __INTMAX_TYPE__ long long int
+// OPENBSD:#define __INTPTR_TYPE__ long int
+// OPENBSD:#define __OpenBSD__ 1
+// OPENBSD:#define __PTRDIFF_TYPE__ long int
+// OPENBSD:#define __SIZE_TYPE__ long unsigned int
+// OPENBSD:#define __UINT16_TYPE__ unsigned short
+// OPENBSD:#define __UINT32_TYPE__ unsigned int
+// OPENBSD:#define __UINT64_TYPE__ long long unsigned int
+// OPENBSD:#define __UINT8_TYPE__ unsigned char
+// OPENBSD:#define __UINTMAX_TYPE__ long long unsigned int
+// OPENBSD:#define __UINTPTR_TYPE__ long unsigned int
+// OPENBSD:#define __WCHAR_TYPE__ int
+// OPENBSD:#define __WINT_TYPE__ int
 //
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple=powerpc64-unknown-freebsd < /dev/null | FileCheck -match-full-lines -check-prefix PPC64-FREEBSD %s
 // PPC64-FREEBSD-NOT: #define __LONG_DOUBLE_128__ 1
@@ -8560,10 +8648,10 @@
 // WEBASSEMBLY32-NEXT:#define __INTMAX_MAX__ 9223372036854775807LL
 // WEBASSEMBLY32-NEXT:#define __INTMAX_TYPE__ long long int
 // WEBASSEMBLY32-NEXT:#define __INTMAX_WIDTH__ 64
-// WEBASSEMBLY32-NEXT:#define __INTPTR_FMTd__ "ld"
-// WEBASSEMBLY32-NEXT:#define __INTPTR_FMTi__ "li"
-// WEBASSEMBLY32-NEXT:#define __INTPTR_MAX__ 2147483647L
-// WEBASSEMBLY32-NEXT:#define __INTPTR_TYPE__ long int
+// WEBASSEMBLY32-NEXT:#define __INTPTR_FMTd__ "d"
+// WEBASSEMBLY32-NEXT:#define __INTPTR_FMTi__ "i"
+// WEBASSEMBLY32-NEXT:#define __INTPTR_MAX__ 2147483647
+// WEBASSEMBLY32-NEXT:#define __INTPTR_TYPE__ int
 // WEBASSEMBLY32-NEXT:#define __INTPTR_WIDTH__ 32
 // WEBASSEMBLY32-NEXT:#define __INT_FAST16_FMTd__ "hd"
 // WEBASSEMBLY32-NEXT:#define __INT_FAST16_FMTi__ "hi"
@@ -8622,10 +8710,10 @@
 // WEBASSEMBLY32-NEXT:#define __ORDER_PDP_ENDIAN__ 3412
 // WEBASSEMBLY32-NEXT:#define __POINTER_WIDTH__ 32
 // WEBASSEMBLY32-NEXT:#define __PRAGMA_REDEFINE_EXTNAME 1
-// WEBASSEMBLY32-NEXT:#define __PTRDIFF_FMTd__ "ld"
-// WEBASSEMBLY32-NEXT:#define __PTRDIFF_FMTi__ "li"
-// WEBASSEMBLY32-NEXT:#define __PTRDIFF_MAX__ 2147483647L
-// WEBASSEMBLY32-NEXT:#define __PTRDIFF_TYPE__ long int
+// WEBASSEMBLY32-NEXT:#define __PTRDIFF_FMTd__ "d"
+// WEBASSEMBLY32-NEXT:#define __PTRDIFF_FMTi__ "i"
+// WEBASSEMBLY32-NEXT:#define __PTRDIFF_MAX__ 2147483647
+// WEBASSEMBLY32-NEXT:#define __PTRDIFF_TYPE__ int
 // WEBASSEMBLY32-NEXT:#define __PTRDIFF_WIDTH__ 32
 // WEBASSEMBLY32-NOT:#define __REGISTER_PREFIX__
 // WEBASSEMBLY32-NEXT:#define __SCHAR_MAX__ 127
@@ -8645,12 +8733,12 @@
 // WEBASSEMBLY32-NEXT:#define __SIZEOF_SIZE_T__ 4
 // WEBASSEMBLY32-NEXT:#define __SIZEOF_WCHAR_T__ 4
 // WEBASSEMBLY32-NEXT:#define __SIZEOF_WINT_T__ 4
-// WEBASSEMBLY32-NEXT:#define __SIZE_FMTX__ "lX"
-// WEBASSEMBLY32-NEXT:#define __SIZE_FMTo__ "lo"
-// WEBASSEMBLY32-NEXT:#define __SIZE_FMTu__ "lu"
-// WEBASSEMBLY32-NEXT:#define __SIZE_FMTx__ "lx"
-// WEBASSEMBLY32-NEXT:#define __SIZE_MAX__ 4294967295UL
-// WEBASSEMBLY32-NEXT:#define __SIZE_TYPE__ long unsigned int
+// WEBASSEMBLY32-NEXT:#define __SIZE_FMTX__ "X"
+// WEBASSEMBLY32-NEXT:#define __SIZE_FMTo__ "o"
+// WEBASSEMBLY32-NEXT:#define __SIZE_FMTu__ "u"
+// WEBASSEMBLY32-NEXT:#define __SIZE_FMTx__ "x"
+// WEBASSEMBLY32-NEXT:#define __SIZE_MAX__ 4294967295U
+// WEBASSEMBLY32-NEXT:#define __SIZE_TYPE__ unsigned int
 // WEBASSEMBLY32-NEXT:#define __SIZE_WIDTH__ 32
 // WEBASSEMBLY32-NEXT:#define __STDC_HOSTED__ 0
 // WEBASSEMBLY32-NOT:#define __STDC_MB_MIGHT_NEQ_WC__
@@ -8698,12 +8786,12 @@
 // WEBASSEMBLY32-NEXT:#define __UINTMAX_MAX__ 18446744073709551615ULL
 // WEBASSEMBLY32-NEXT:#define __UINTMAX_TYPE__ long long unsigned int
 // WEBASSEMBLY32-NEXT:#define __UINTMAX_WIDTH__ 64
-// WEBASSEMBLY32-NEXT:#define __UINTPTR_FMTX__ "lX"
-// WEBASSEMBLY32-NEXT:#define __UINTPTR_FMTo__ "lo"
-// WEBASSEMBLY32-NEXT:#define __UINTPTR_FMTu__ "lu"
-// WEBASSEMBLY32-NEXT:#define __UINTPTR_FMTx__ "lx"
-// WEBASSEMBLY32-NEXT:#define __UINTPTR_MAX__ 4294967295UL
-// WEBASSEMBLY32-NEXT:#define __UINTPTR_TYPE__ long unsigned int
+// WEBASSEMBLY32-NEXT:#define __UINTPTR_FMTX__ "X"
+// WEBASSEMBLY32-NEXT:#define __UINTPTR_FMTo__ "o"
+// WEBASSEMBLY32-NEXT:#define __UINTPTR_FMTu__ "u"
+// WEBASSEMBLY32-NEXT:#define __UINTPTR_FMTx__ "x"
+// WEBASSEMBLY32-NEXT:#define __UINTPTR_MAX__ 4294967295U
+// WEBASSEMBLY32-NEXT:#define __UINTPTR_TYPE__ unsigned int
 // WEBASSEMBLY32-NEXT:#define __UINTPTR_WIDTH__ 32
 // WEBASSEMBLY32-NEXT:#define __UINT_FAST16_FMTX__ "hX"
 // WEBASSEMBLY32-NEXT:#define __UINT_FAST16_FMTo__ "ho"
@@ -9101,3 +9189,174 @@
 // RUN: %clang_cc1 -E -dM -ffreestanding -triple x86_64-windows-cygnus < /dev/null | FileCheck -match-full-lines -check-prefix CYGWIN-X64 %s
 // CYGWIN-X64: #define __USER_LABEL_PREFIX__
 
+// RUN: %clang_cc1 -E -dM -ffreestanding -triple=avr \
+// RUN:   < /dev/null \
+// RUN:   | FileCheck -match-full-lines -check-prefix=AVR %s
+//
+// AVR:#define __ATOMIC_ACQUIRE 2
+// AVR:#define __ATOMIC_ACQ_REL 4
+// AVR:#define __ATOMIC_CONSUME 1
+// AVR:#define __ATOMIC_RELAXED 0
+// AVR:#define __ATOMIC_RELEASE 3
+// AVR:#define __ATOMIC_SEQ_CST 5
+// AVR:#define __AVR__ 1
+// AVR:#define __BIGGEST_ALIGNMENT__ 1
+// AVR:#define __BYTE_ORDER__ __ORDER_LITTLE_ENDIAN__
+// AVR:#define __CHAR16_TYPE__ unsigned int
+// AVR:#define __CHAR32_TYPE__ long unsigned int
+// AVR:#define __CHAR_BIT__ 8
+// AVR:#define __DBL_DECIMAL_DIG__ 9
+// AVR:#define __DBL_DENORM_MIN__ 1.40129846e-45
+// AVR:#define __DBL_DIG__ 6
+// AVR:#define __DBL_EPSILON__ 1.19209290e-7
+// AVR:#define __DBL_HAS_DENORM__ 1
+// AVR:#define __DBL_HAS_INFINITY__ 1
+// AVR:#define __DBL_HAS_QUIET_NAN__ 1
+// AVR:#define __DBL_MANT_DIG__ 24
+// AVR:#define __DBL_MAX_10_EXP__ 38
+// AVR:#define __DBL_MAX_EXP__ 128
+// AVR:#define __DBL_MAX__ 3.40282347e+38
+// AVR:#define __DBL_MIN_10_EXP__ (-37)
+// AVR:#define __DBL_MIN_EXP__ (-125)
+// AVR:#define __DBL_MIN__ 1.17549435e-38
+// AVR:#define __FINITE_MATH_ONLY__ 0
+// AVR:#define __FLT_DECIMAL_DIG__ 9
+// AVR:#define __FLT_DENORM_MIN__ 1.40129846e-45F
+// AVR:#define __FLT_DIG__ 6
+// AVR:#define __FLT_EPSILON__ 1.19209290e-7F
+// AVR:#define __FLT_EVAL_METHOD__ 0
+// AVR:#define __FLT_HAS_DENORM__ 1
+// AVR:#define __FLT_HAS_INFINITY__ 1
+// AVR:#define __FLT_HAS_QUIET_NAN__ 1
+// AVR:#define __FLT_MANT_DIG__ 24
+// AVR:#define __FLT_MAX_10_EXP__ 38
+// AVR:#define __FLT_MAX_EXP__ 128
+// AVR:#define __FLT_MAX__ 3.40282347e+38F
+// AVR:#define __FLT_MIN_10_EXP__ (-37)
+// AVR:#define __FLT_MIN_EXP__ (-125)
+// AVR:#define __FLT_MIN__ 1.17549435e-38F
+// AVR:#define __FLT_RADIX__ 2
+// AVR:#define __GCC_ATOMIC_BOOL_LOCK_FREE 1
+// AVR:#define __GCC_ATOMIC_CHAR16_T_LOCK_FREE 1
+// AVR:#define __GCC_ATOMIC_CHAR32_T_LOCK_FREE 1
+// AVR:#define __GCC_ATOMIC_CHAR_LOCK_FREE 1
+// AVR:#define __GCC_ATOMIC_INT_LOCK_FREE 1
+// AVR:#define __GCC_ATOMIC_LLONG_LOCK_FREE 1
+// AVR:#define __GCC_ATOMIC_LONG_LOCK_FREE 1
+// AVR:#define __GCC_ATOMIC_POINTER_LOCK_FREE 1
+// AVR:#define __GCC_ATOMIC_SHORT_LOCK_FREE 1
+// AVR:#define __GCC_ATOMIC_TEST_AND_SET_TRUEVAL 1
+// AVR:#define __GCC_ATOMIC_WCHAR_T_LOCK_FREE 1
+// AVR:#define __GXX_ABI_VERSION 1002
+// AVR:#define __INT16_C_SUFFIX__ 
+// AVR:#define __INT16_MAX__ 32767
+// AVR:#define __INT16_TYPE__ short
+// AVR:#define __INT32_C_SUFFIX__ L
+// AVR:#define __INT32_MAX__ 2147483647L
+// AVR:#define __INT32_TYPE__ long int
+// AVR:#define __INT64_C_SUFFIX__ LL
+// AVR:#define __INT64_MAX__ 9223372036854775807LL
+// AVR:#define __INT64_TYPE__ long long int
+// AVR:#define __INT8_C_SUFFIX__ 
+// AVR:#define __INT8_MAX__ 127
+// AVR:#define __INT8_TYPE__ signed char
+// AVR:#define __INTMAX_C_SUFFIX__ LL
+// AVR:#define __INTMAX_MAX__ 9223372036854775807LL
+// AVR:#define __INTMAX_TYPE__ long long int
+// AVR:#define __INTPTR_MAX__ 32767
+// AVR:#define __INTPTR_TYPE__ int
+// AVR:#define __INT_FAST16_MAX__ 32767
+// AVR:#define __INT_FAST16_TYPE__ int
+// AVR:#define __INT_FAST32_MAX__ 2147483647L
+// AVR:#define __INT_FAST32_TYPE__ long int
+// AVR:#define __INT_FAST64_MAX__ 9223372036854775807LL
+// AVR:#define __INT_FAST64_TYPE__ long long int
+// AVR:#define __INT_FAST8_MAX__ 127
+// AVR:#define __INT_FAST8_TYPE__ signed char
+// AVR:#define __INT_LEAST16_MAX__ 32767
+// AVR:#define __INT_LEAST16_TYPE__ int
+// AVR:#define __INT_LEAST32_MAX__ 2147483647L
+// AVR:#define __INT_LEAST32_TYPE__ long int
+// AVR:#define __INT_LEAST64_MAX__ 9223372036854775807LL
+// AVR:#define __INT_LEAST64_TYPE__ long long int
+// AVR:#define __INT_LEAST8_MAX__ 127
+// AVR:#define __INT_LEAST8_TYPE__ signed char
+// AVR:#define __INT_MAX__ 32767
+// AVR:#define __LDBL_DECIMAL_DIG__ 9
+// AVR:#define __LDBL_DENORM_MIN__ 1.40129846e-45L
+// AVR:#define __LDBL_DIG__ 6
+// AVR:#define __LDBL_EPSILON__ 1.19209290e-7L
+// AVR:#define __LDBL_HAS_DENORM__ 1
+// AVR:#define __LDBL_HAS_INFINITY__ 1
+// AVR:#define __LDBL_HAS_QUIET_NAN__ 1
+// AVR:#define __LDBL_MANT_DIG__ 24
+// AVR:#define __LDBL_MAX_10_EXP__ 38
+// AVR:#define __LDBL_MAX_EXP__ 128
+// AVR:#define __LDBL_MAX__ 3.40282347e+38L
+// AVR:#define __LDBL_MIN_10_EXP__ (-37)
+// AVR:#define __LDBL_MIN_EXP__ (-125)
+// AVR:#define __LDBL_MIN__ 1.17549435e-38L
+// AVR:#define __LONG_LONG_MAX__ 9223372036854775807LL
+// AVR:#define __LONG_MAX__ 2147483647L
+// AVR:#define __NO_INLINE__ 1
+// AVR:#define __ORDER_BIG_ENDIAN__ 4321
+// AVR:#define __ORDER_LITTLE_ENDIAN__ 1234
+// AVR:#define __ORDER_PDP_ENDIAN__ 3412
+// AVR:#define __PRAGMA_REDEFINE_EXTNAME 1
+// AVR:#define __PTRDIFF_MAX__ 32767
+// AVR:#define __PTRDIFF_TYPE__ int
+// AVR:#define __SCHAR_MAX__ 127
+// AVR:#define __SHRT_MAX__ 32767
+// AVR:#define __SIG_ATOMIC_MAX__ 127
+// AVR:#define __SIG_ATOMIC_WIDTH__ 8
+// AVR:#define __SIZEOF_DOUBLE__ 4
+// AVR:#define __SIZEOF_FLOAT__ 4
+// AVR:#define __SIZEOF_INT__ 2
+// AVR:#define __SIZEOF_LONG_DOUBLE__ 4
+// AVR:#define __SIZEOF_LONG_LONG__ 8
+// AVR:#define __SIZEOF_LONG__ 4
+// AVR:#define __SIZEOF_POINTER__ 2
+// AVR:#define __SIZEOF_PTRDIFF_T__ 2
+// AVR:#define __SIZEOF_SHORT__ 2
+// AVR:#define __SIZEOF_SIZE_T__ 2
+// AVR:#define __SIZEOF_WCHAR_T__ 2
+// AVR:#define __SIZEOF_WINT_T__ 2
+// AVR:#define __SIZE_MAX__ 65535U
+// AVR:#define __SIZE_TYPE__ unsigned int
+// AVR:#define __STDC__ 1
+// AVR:#define __UINT16_MAX__ 65535U
+// AVR:#define __UINT16_TYPE__ unsigned short
+// AVR:#define __UINT32_C_SUFFIX__ UL
+// AVR:#define __UINT32_MAX__ 4294967295UL
+// AVR:#define __UINT32_TYPE__ long unsigned int
+// AVR:#define __UINT64_C_SUFFIX__ ULL
+// AVR:#define __UINT64_MAX__ 18446744073709551615ULL
+// AVR:#define __UINT64_TYPE__ long long unsigned int
+// AVR:#define __UINT8_C_SUFFIX__ 
+// AVR:#define __UINT8_MAX__ 255
+// AVR:#define __UINT8_TYPE__ unsigned char
+// AVR:#define __UINTMAX_C_SUFFIX__ ULL
+// AVR:#define __UINTMAX_MAX__ 18446744073709551615ULL
+// AVR:#define __UINTMAX_TYPE__ long long unsigned int
+// AVR:#define __UINTPTR_MAX__ 65535U
+// AVR:#define __UINTPTR_TYPE__ unsigned int
+// AVR:#define __UINT_FAST16_MAX__ 65535U
+// AVR:#define __UINT_FAST16_TYPE__ unsigned int
+// AVR:#define __UINT_FAST32_MAX__ 4294967295UL
+// AVR:#define __UINT_FAST32_TYPE__ long unsigned int
+// AVR:#define __UINT_FAST64_MAX__ 18446744073709551615ULL
+// AVR:#define __UINT_FAST64_TYPE__ long long unsigned int
+// AVR:#define __UINT_FAST8_MAX__ 255
+// AVR:#define __UINT_FAST8_TYPE__ unsigned char
+// AVR:#define __UINT_LEAST16_MAX__ 65535U
+// AVR:#define __UINT_LEAST16_TYPE__ unsigned int
+// AVR:#define __UINT_LEAST32_MAX__ 4294967295UL
+// AVR:#define __UINT_LEAST32_TYPE__ long unsigned int
+// AVR:#define __UINT_LEAST64_MAX__ 18446744073709551615ULL
+// AVR:#define __UINT_LEAST64_TYPE__ long long unsigned int
+// AVR:#define __UINT_LEAST8_MAX__ 255
+// AVR:#define __UINT_LEAST8_TYPE__ unsigned char
+// AVR:#define __USER_LABEL_PREFIX__ 
+// AVR:#define __WCHAR_MAX__ 32767
+// AVR:#define __WCHAR_TYPE__ int
+// AVR:#define __WINT_TYPE__ int

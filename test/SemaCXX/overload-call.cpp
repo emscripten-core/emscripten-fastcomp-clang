@@ -338,7 +338,7 @@ namespace PR5756 {
 
 // Tests the exact text used to note the candidates
 namespace test1 {
-  template <class T> void foo(T t, unsigned N); // expected-note {{candidate function [with T = int] not viable: no known conversion from 'const char [6]' to 'unsigned int' for 2nd argument}}
+  template <class T> void foo(T t, unsigned N); // expected-note {{candidate function not viable: no known conversion from 'const char [6]' to 'unsigned int' for 2nd argument}}
   void foo(int n, char N); // expected-note {{candidate function not viable: no known conversion from 'const char [6]' to 'char' for 2nd argument}} 
   void foo(int n, const char *s, int t); // expected-note {{candidate function not viable: requires 3 arguments, but 2 were provided}}
   void foo(int n, const char *s, int t, ...); // expected-note {{candidate function not viable: requires at least 3 arguments, but 2 were provided}}
@@ -646,4 +646,15 @@ namespace PR20218 {
     f(y); // expected-error {{ambiguous}}
     g(y); // expected-error {{ambiguous}}
   }
+}
+
+namespace StringLiteralToCharAmbiguity {
+  void f(char *, int);
+  void f(const char *, unsigned);
+  void g() { f("foo", 0); }
+#if __cplusplus <= 199711L
+  // expected-error@-2 {{call to 'f' is ambiguous}}
+  // expected-note@-5 {{candidate function}}
+  // expected-note@-5 {{candidate function}}
+#endif
 }
