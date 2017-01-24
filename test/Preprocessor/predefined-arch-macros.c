@@ -1849,6 +1849,88 @@
 // CHECK_BDVER4_M64: #define __tune_bdver4__ 1
 // CHECK_BDVER4_M64: #define __x86_64 1
 // CHECK_BDVER4_M64: #define __x86_64__ 1
+// RUN: %clang -march=znver1 -m32 -E -dM %s -o - 2>&1 \
+// RUN:     -target i386-unknown-linux \
+// RUN:   | FileCheck -match-full-lines %s -check-prefix=CHECK_ZNVER1_M32
+// CHECK_ZNVER1_M32-NOT: #define __3dNOW_A__ 1
+// CHECK_ZNVER1_M32-NOT: #define __3dNOW__ 1
+// CHECK_ZNVER1_M32: #define __ADX__ 1
+// CHECK_ZNVER1_M32: #define __AES__ 1
+// CHECK_ZNVER1_M32: #define __AVX2__ 1
+// CHECK_ZNVER1_M32: #define __AVX__ 1
+// CHECK_ZNVER1_M32: #define __BMI2__ 1
+// CHECK_ZNVER1_M32: #define __BMI__ 1
+// CHECK_ZNVER1_M32: #define __F16C__ 1
+// CHECK_ZNVER1_M32: #define __FMA__ 1
+// CHECK_ZNVER1_M32: #define __FSGSBASE__ 1
+// CHECK_ZNVER1_M32: #define __LZCNT__ 1
+// CHECK_ZNVER1_M32: #define __MMX__ 1
+// CHECK_ZNVER1_M32: #define __PCLMUL__ 1
+// CHECK_ZNVER1_M32: #define __POPCNT__ 1
+// CHECK_ZNVER1_M32: #define __PRFCHW__ 1
+// CHECK_ZNVER1_M32: #define __RDRND__ 1
+// CHECK_ZNVER1_M32: #define __RDSEED__ 1
+// CHECK_ZNVER1_M32: #define __SHA__ 1
+// CHECK_ZNVER1_M32: #define __SSE2_MATH__ 1
+// CHECK_ZNVER1_M32: #define __SSE2__ 1
+// CHECK_ZNVER1_M32: #define __SSE3__ 1
+// CHECK_ZNVER1_M32: #define __SSE4A__ 1
+// CHECK_ZNVER1_M32: #define __SSE4_1__ 1
+// CHECK_ZNVER1_M32: #define __SSE4_2__ 1
+// CHECK_ZNVER1_M32: #define __SSE_MATH__ 1
+// CHECK_ZNVER1_M32: #define __SSE__ 1
+// CHECK_ZNVER1_M32: #define __SSSE3__ 1
+// CHECK_ZNVER1_M32: #define __XSAVEC__ 1
+// CHECK_ZNVER1_M32: #define __XSAVEOPT__ 1
+// CHECK_ZNVER1_M32: #define __XSAVES__ 1
+// CHECK_ZNVER1_M32: #define __XSAVE__ 1
+// CHECK_ZNVER1_M32: #define __i386 1
+// CHECK_ZNVER1_M32: #define __i386__ 1
+// CHECK_ZNVER1_M32: #define __tune_znver1__ 1
+// CHECK_ZNVER1_M32: #define __znver1 1
+// CHECK_ZNVER1_M32: #define __znver1__ 1
+// RUN: %clang -march=znver1 -m64 -E -dM %s -o - 2>&1 \
+// RUN:     -target i386-unknown-linux \
+// RUN:   | FileCheck -match-full-lines %s -check-prefix=CHECK_ZNVER1_M64
+// CHECK_ZNVER1_M64-NOT: #define __3dNOW_A__ 1
+// CHECK_ZNVER1_M64-NOT: #define __3dNOW__ 1
+// CHECK_ZNVER1_M64: #define __ADX__ 1
+// CHECK_ZNVER1_M64: #define __AES__ 1
+// CHECK_ZNVER1_M64: #define __AVX2__ 1
+// CHECK_ZNVER1_M64: #define __AVX__ 1
+// CHECK_ZNVER1_M64: #define __BMI2__ 1
+// CHECK_ZNVER1_M64: #define __BMI__ 1
+// CHECK_ZNVER1_M64: #define __F16C__ 1
+// CHECK_ZNVER1_M64: #define __FMA__ 1
+// CHECK_ZNVER1_M64: #define __FSGSBASE__ 1
+// CHECK_ZNVER1_M64: #define __LZCNT__ 1
+// CHECK_ZNVER1_M64: #define __MMX__ 1
+// CHECK_ZNVER1_M64: #define __PCLMUL__ 1
+// CHECK_ZNVER1_M64: #define __POPCNT__ 1
+// CHECK_ZNVER1_M64: #define __PRFCHW__ 1
+// CHECK_ZNVER1_M64: #define __RDRND__ 1
+// CHECK_ZNVER1_M64: #define __RDSEED__ 1
+// CHECK_ZNVER1_M64: #define __SHA__ 1
+// CHECK_ZNVER1_M64: #define __SSE2_MATH__ 1
+// CHECK_ZNVER1_M64: #define __SSE2__ 1
+// CHECK_ZNVER1_M64: #define __SSE3__ 1
+// CHECK_ZNVER1_M64: #define __SSE4A__ 1
+// CHECK_ZNVER1_M64: #define __SSE4_1__ 1
+// CHECK_ZNVER1_M64: #define __SSE4_2__ 1
+// CHECK_ZNVER1_M64: #define __SSE_MATH__ 1
+// CHECK_ZNVER1_M64: #define __SSE__ 1
+// CHECK_ZNVER1_M64: #define __SSSE3__ 1
+// CHECK_ZNVER1_M64: #define __XSAVEC__ 1
+// CHECK_ZNVER1_M64: #define __XSAVEOPT__ 1
+// CHECK_ZNVER1_M64: #define __XSAVES__ 1
+// CHECK_ZNVER1_M64: #define __XSAVE__ 1
+// CHECK_ZNVER1_M64: #define __amd64 1
+// CHECK_ZNVER1_M64: #define __amd64__ 1
+// CHECK_ZNVER1_M64: #define __tune_znver1__ 1
+// CHECK_ZNVER1_M64: #define __x86_64 1
+// CHECK_ZNVER1_M64: #define __x86_64__ 1
+// CHECK_ZNVER1_M64: #define __znver1 1
+// CHECK_ZNVER1_M64: #define __znver1__ 1
 //
 // End X86/GCC/Linux tests ------------------
 
@@ -1864,6 +1946,12 @@
 // RUN:   | FileCheck -match-full-lines %s -check-prefix=CHECK_PPC_POWER8_VECTOR_M64
 //
 // CHECK_PPC_POWER8_VECTOR_M64: #define __POWER8_VECTOR__ 1
+//
+// RUN: %clang -mpower9-vector -E -dM %s -o - 2>&1 \
+// RUN:     -target powerpc64-unknown-linux \
+// RUN:   | FileCheck -match-full-lines %s -check-prefix=CHECK_PPC_POWER9_VECTOR_M64
+//
+// CHECK_PPC_POWER9_VECTOR_M64: #define __POWER9_VECTOR__ 1
 //
 // RUN: %clang -mcrypto -E -dM %s -o - 2>&1 \
 // RUN:     -target powerpc64-unknown-linux \
@@ -1921,6 +2009,8 @@
 // RUN:   | FileCheck -match-full-lines %s -check-prefix=CHECK_MYRIAD2-1 -check-prefix=CHECK_SPARCEL
 // RUN: %clang -E -dM %s -o - -target sparcel-myriad -mcpu=myriad2.2 2>&1 \
 // RUN:   | FileCheck -match-full-lines %s -check-prefix=CHECK_MYRIAD2-2 -check-prefix=CHECK_SPARCEL
+// RUN: %clang -E -dM %s -o - -target sparcel-myriad -mcpu=ma2450 2>&1 \
+// RUN:   | FileCheck -match-full-lines %s -check-prefix=CHECK_MYRIAD2-2 -check-prefix=CHECK_SPARCEL
 // CHECK_SPARCEL: #define __LITTLE_ENDIAN__ 1
 // CHECK_MYRIAD2-1: #define __myriad2 1
 // CHECK_MYRIAD2-1: #define __myriad2__ 1
@@ -1928,6 +2018,7 @@
 // CHECK_MYRIAD2-2: #define __myriad2__ 2
 // CHECK_SPARCEL: #define __sparc 1
 // CHECK_SPARCEL: #define __sparc__ 1
+// CHECK_MYRIAD2-1: #define __sparc_v8__ 1
 // CHECK_SPARCEL: #define __sparcv8 1
 //
 // RUN: %clang -E -dM %s -o - 2>&1 \
@@ -1958,6 +2049,9 @@
 // CHECK_SYSTEMZ_Z10: #define __zarch__ 1
 //
 // RUN: %clang -march=zEC12 -E -dM %s -o - 2>&1 \
+// RUN:     -target s390x-unknown-linux \
+// RUN:   | FileCheck -match-full-lines %s -check-prefix=CHECK_SYSTEMZ_ZEC12
+// RUN: %clang -march=arch10 -E -dM %s -o - 2>&1 \
 // RUN:     -target s390x-unknown-linux \
 // RUN:   | FileCheck -match-full-lines %s -check-prefix=CHECK_SYSTEMZ_ZEC12
 //
