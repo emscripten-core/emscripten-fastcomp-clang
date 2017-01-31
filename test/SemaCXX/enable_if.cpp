@@ -417,3 +417,58 @@ template <int N> constexpr int callTemplated() { return templated<N>(); }
 constexpr int B = callTemplated<0>(); // expected-error{{initialized by a constant expression}} expected-error@-2{{no matching function for call to 'templated'}} expected-note{{in instantiation of function template}} expected-note@-9{{candidate disabled}}
 static_assert(callTemplated<1>() == 1, "");
 }
+
+namespace variadic {
+void foo(int a, int b = 0, ...) __attribute__((enable_if(a && b, ""))); // expected-note 6{{disabled}}
+
+void testFoo() {
+  foo(1, 1);
+  foo(1, 1, 2);
+  foo(1, 1, 2, 3);
+
+  foo(1, 0); // expected-error{{no matching}}
+  foo(1, 0, 2); // expected-error{{no matching}}
+  foo(1, 0, 2, 3); // expected-error{{no matching}}
+
+  int m;
+  foo(1, 1);
+  foo(1, 1, m);
+  foo(1, 1, m, 3);
+
+  foo(1, 0); // expected-error{{no matching}}
+  foo(1, 0, m); // expected-error{{no matching}}
+  foo(1, 0, m, 3); // expected-error{{no matching}}
+}
+}
+
+// Tests that we emit errors at the point of the method call, rather than the
+// beginning of the expression that happens to be a member call.
+namespace member_loc {
+  struct Foo { void bar() __attribute__((enable_if(0, ""))); }; // expected-note{{disabled}}
+  void testFoo() {
+    Foo()
+      .bar(); // expected-error{{no matching member function}}
+  }
+}
+
+// Prior bug: we wouldn't properly convert conditions to bools when
+// instantiating templates in some cases.
+namespace template_instantiation {
+template <typename T>
+struct Foo {
+  void bar(int a) __attribute__((enable_if(a, ""))); // expected-note{{disabled}}
+};
+
+void runFoo() {
+  Foo<double>().bar(0); // expected-error{{no matching}}
+  Foo<double>().bar(1);
+}
+}
+
+namespace instantiate_constexpr_in_enable_if {
+  template<typename T> struct X {
+    static constexpr bool ok() { return true; }
+    void f() __attribute__((enable_if(ok(), "")));
+  };
+  void g() { X<int>().f(); }
+}
