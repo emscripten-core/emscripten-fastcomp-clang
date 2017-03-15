@@ -51,6 +51,10 @@ struct SA {
     {}
     #pragma omp target map(to:b,e[:])
     {}
+    #pragma omp target map(b[-1:]) // expected-error {{array section must be a subset of the original array}}
+    {}
+    #pragma omp target map(b[:-1]) // expected-error {{section length is evaluated to a negative value -1}}
+    {}
 
     #pragma omp target map(always, tofrom: c,f)
     {}
@@ -284,6 +288,11 @@ void SAclient(int arg) {
     {}
   }
   }
+  #pragma omp target data map(marr[:][:][:])
+  {
+    #pragma omp target data map(marr)
+    {}
+  }
 
   #pragma omp target data map(to: t)
   {
@@ -336,6 +345,15 @@ class S5 {
   S5(const S5 &s5):a(s5.a) { }
 public:
   S5(int v):a(v) { }
+};
+
+template <class T>
+struct S6;
+
+template<>
+struct S6<int>  // expected-note {{mappable type cannot be polymorphic}}
+{
+   virtual void foo();
 };
 
 S3 h;
@@ -419,10 +437,10 @@ T tmain(T argc) {
 #pragma omp target data map(j)
 #pragma omp target map(l) map(l[:5]) // expected-error 2 {{variable already marked as mapped in current construct}} expected-note 2 {{used here}}
   foo();
-#pragma omp target data map(k[:4], j, l[:5]) // expected-note 4 {{used here}}
+#pragma omp target data map(k[:4], j, l[:5]) // expected-note 2 {{used here}}
 #pragma omp target data map(k) // expected-error 2 {{pointer cannot be mapped along with a section derived from itself}}
 #pragma omp target data map(j)
-#pragma omp target map(l) // expected-error 2 {{original storage of expression in data environment is shared but data environment do not fully contain mapped expression storage}}
+#pragma omp target map(l)
   foo();
 
 #pragma omp target data map(always, tofrom: x)
@@ -442,6 +460,7 @@ int main(int argc, char **argv) {
   int i;
   int &j = i;
   int *k = &j;
+  S6<int> m;
   int x;
   int y;
   int to, tofrom, always;
@@ -488,10 +507,10 @@ int main(int argc, char **argv) {
 #pragma omp target data map(j)
 #pragma omp target map(l) map(l[:5]) // expected-error {{variable already marked as mapped in current construct}} expected-note {{used here}}
   foo();
-#pragma omp target data map(k[:4], j, l[:5]) // expected-note 2 {{used here}}
+#pragma omp target data map(k[:4], j, l[:5]) // expected-note {{used here}}
 #pragma omp target data map(k) // expected-error {{pointer cannot be mapped along with a section derived from itself}}
 #pragma omp target data map(j)
-#pragma omp target map(l) // expected-error {{original storage of expression in data environment is shared but data environment do not fully contain mapped expression storage}}
+#pragma omp target map(l)
   foo();
 
 #pragma omp target data map(always, tofrom: x)
@@ -503,6 +522,8 @@ int main(int argc, char **argv) {
 #pragma omp target private(j) map(j) // expected-error {{private variable cannot be in a map clause in '#pragma omp target' directive}}  expected-note {{defined as private}}
   {}
 #pragma omp target firstprivate(j) map(j)  // expected-error {{firstprivate variable cannot be in a map clause in '#pragma omp target' directive}} expected-note {{defined as firstprivate}}
+  {}
+#pragma omp target map(m) // expected-error {{type 'S6<int>' is not mappable to target}}
   {}
   return tmain<int, 3>(argc)+tmain<from, 4>(argc); // expected-note {{in instantiation of function template specialization 'tmain<int, 3>' requested here}} expected-note {{in instantiation of function template specialization 'tmain<int, 4>' requested here}}
 }
