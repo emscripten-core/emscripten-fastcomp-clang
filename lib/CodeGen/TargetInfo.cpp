@@ -698,9 +698,18 @@ public:
 /// \brief Classify argument of given type \p Ty.
 ABIArgInfo EmscriptenABIInfo::classifyArgumentType(QualType Ty) const {
   if (isAggregateTypeForABI(Ty)) {
+    // Records with non-trivial destructors/copy-constructors should not be
+    // passed by value.
     if (auto RAA = getRecordArgABI(Ty, getCXXABI()))
       return getNaturalAlignIndirect(Ty, RAA == CGCXXABI::RAA_DirectInMemory);
-    return getNaturalAlignIndirect(Ty);
+    // Ignore empty structs/unions.
+    if (isEmptyRecord(getContext(), Ty, true))
+      return ABIArgInfo::getIgnore();
+    // Lower single-element structs to just pass a regular value. TODO: We
+    // could do reasonable-size multiple-element structs too, using getExpand(),
+    // though watch out for things like bitfields.
+    if (const Type *SeltTy = isSingleElementStruct(Ty, getContext()))
+      return ABIArgInfo::getDirect(CGT.ConvertType(QualType(SeltTy, 0)));
   }
 
   // Otherwise just do the default thing.
