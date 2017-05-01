@@ -708,10 +708,18 @@ ABIArgInfo EmscriptenABIInfo::classifyArgumentType(QualType Ty) const {
 
 ABIArgInfo EmscriptenABIInfo::classifyReturnType(QualType RetTy) const {
   if (isAggregateTypeForABI(RetTy)) {
-    // As an optimization, lower single-element structs to just return a regular
-    // value.
-    if (const Type *SeltTy = isSingleElementStruct(RetTy, getContext()))
-      return ABIArgInfo::getDirect(CGT.ConvertType(QualType(SeltTy, 0)));
+    // Records with non-trivial destructors/copy-constructors should not be
+    // returned by value.
+    if (!getRecordArgABI(RetTy, getCXXABI())) {
+      // Ignore empty structs/unions.
+      if (isEmptyRecord(getContext(), RetTy, true))
+        return ABIArgInfo::getIgnore();
+      // Lower single-element structs to just return a regular value. TODO: We
+      // could do reasonable-size multiple-element structs too, using
+      // ABIArgInfo::getDirect().
+      if (const Type *SeltTy = isSingleElementStruct(RetTy, getContext()))
+        return ABIArgInfo::getDirect(CGT.ConvertType(QualType(SeltTy, 0)));
+    }
   }
 
   // Otherwise just do the default thing.
