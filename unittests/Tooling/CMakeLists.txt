@@ -13,7 +13,7 @@ endif()
 add_clang_unittest(ToolingTests
   CommentHandlerTest.cpp
   CompilationDatabaseTest.cpp
-  FixItTest.cpp  
+  FixItTest.cpp
   LookupTest.cpp
   QualTypeNamesTest.cpp
   RecursiveASTVisitorTest.cpp
@@ -43,4 +43,5 @@ target_link_libraries(ToolingTests
   clangRewrite
   clangTooling
   clangToolingCore
+  clangToolingRefactor
   )

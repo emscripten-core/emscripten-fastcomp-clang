@@ -542,6 +542,7 @@ static void CheckFallThroughForBody(Sema &S, const Decl *D, const Stmt *Body,
 
   bool ReturnsVoid = false;
   bool HasNoReturn = false;
+  bool IsCoroutine = S.getCurFunction() && S.getCurFunction()->isCoroutine();
 
   if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
     if (const auto *CBody = dyn_cast<CoroutineBodyStmt>(Body))
@@ -570,8 +571,13 @@ static void CheckFallThroughForBody(Sema &S, const Decl *D, const Stmt *Body,
   // Short circuit for compilation speed.
   if (CD.checkDiagnostics(Diags, ReturnsVoid, HasNoReturn))
       return;
-
   SourceLocation LBrace = Body->getLocStart(), RBrace = Body->getLocEnd();
+  auto EmitDiag = [&](SourceLocation Loc, unsigned DiagID) {
+    if (IsCoroutine)
+      S.Diag(Loc, DiagID) << S.getCurFunction()->CoroutinePromise->getType();
+    else
+      S.Diag(Loc, DiagID);
+  };
   // Either in a function body compound statement, or a function-try-block.
   switch (CheckFallThrough(AC)) {
     case UnknownFallThrough:
@@ -579,15 +585,15 @@ static void CheckFallThroughForBody(Sema &S, const Decl *D, const Stmt *Body,
 
     case MaybeFallThrough:
       if (HasNoReturn)
-        S.Diag(RBrace, CD.diag_MaybeFallThrough_HasNoReturn);
+        EmitDiag(RBrace, CD.diag_MaybeFallThrough_HasNoReturn);
       else if (!ReturnsVoid)
-        S.Diag(RBrace, CD.diag_MaybeFallThrough_ReturnsNonVoid);
+        EmitDiag(RBrace, CD.diag_MaybeFallThrough_ReturnsNonVoid);
       break;
     case AlwaysFallThrough:
       if (HasNoReturn)
-        S.Diag(RBrace, CD.diag_AlwaysFallThrough_HasNoReturn);
+        EmitDiag(RBrace, CD.diag_AlwaysFallThrough_HasNoReturn);
       else if (!ReturnsVoid)
-        S.Diag(RBrace, CD.diag_AlwaysFallThrough_ReturnsNonVoid);
+        EmitDiag(RBrace, CD.diag_AlwaysFallThrough_ReturnsNonVoid);
       break;
     case NeverFallThroughOrReturn:
       if (ReturnsVoid && !HasNoReturn && CD.diag_NeverFallThroughOrReturn) {
@@ -972,7 +978,8 @@ namespace {
       }
     }
 
-    bool checkFallThroughIntoBlock(const CFGBlock &B, int &AnnotatedCnt) {
+    bool checkFallThroughIntoBlock(const CFGBlock &B, int &AnnotatedCnt,
+                                   bool IsTemplateInstantiation) {
       assert(!ReachableBlocks.empty() && "ReachableBlocks empty");
 
       int UnannotatedCnt = 0;
@@ -1002,8 +1009,12 @@ namespace {
                ElemIt != ElemEnd; ++ElemIt) {
             if (Optional<CFGStmt> CS = ElemIt->getAs<CFGStmt>()) {
               if (const AttributedStmt *AS = asFallThroughAttr(CS->getStmt())) {
-                S.Diag(AS->getLocStart(),
-                       diag::warn_fallthrough_attr_unreachable);
+                // Don't issue a warning for an unreachable fallthrough
+                // attribute in template instantiations as it may not be
+                // unreachable in all instantiations of the template.
+                if (!IsTemplateInstantiation)
+                  S.Diag(AS->getLocStart(),
+                         diag::warn_fallthrough_attr_unreachable);
                 markFallthroughVisited(AS);
                 ++AnnotatedCnt;
                 break;
@@ -1164,7 +1175,11 @@ static void DiagnoseSwitchLabelsFallthrough(Sema &S, AnalysisDeclContext &AC,
 
     int AnnotatedCnt;
 
-    if (!FM.checkFallThroughIntoBlock(*B, AnnotatedCnt))
+    bool IsTemplateInstantiation = false;
+    if (const FunctionDecl *Function = dyn_cast<FunctionDecl>(AC.getDecl()))
+      IsTemplateInstantiation = Function->isTemplateInstantiation();
+    if (!FM.checkFallThroughIntoBlock(*B, AnnotatedCnt,
+                                      IsTemplateInstantiation))
       continue;
 
     S.Diag(Label->getLocStart(),
@@ -2018,12 +2033,6 @@ AnalysisBasedWarnings::IssueWarnings(sema::AnalysisBasedWarnings::Policy P,
   
   // Warning: check missing 'return'
   if (P.enableCheckFallThrough) {
-    auto IsCoro = [&]() {
-      if (auto *FD = dyn_cast<FunctionDecl>(D))
-        if (FD->getBody() && isa<CoroutineBodyStmt>(FD->getBody()))
-          return true;
-      return false;
-    };
     const CheckFallThroughDiagnostics &CD =
         (isa<BlockDecl>(D)
              ? CheckFallThroughDiagnostics::MakeForBlock()
@@ -2031,7 +2040,7 @@ AnalysisBasedWarnings::IssueWarnings(sema::AnalysisBasedWarnings::Policy P,
                 cast<CXXMethodDecl>(D)->getOverloadedOperator() == OO_Call &&
                 cast<CXXMethodDecl>(D)->getParent()->isLambda())
                    ? CheckFallThroughDiagnostics::MakeForLambda()
-                   : (IsCoro()
+                   : (fscope->isCoroutine()
                           ? CheckFallThroughDiagnostics::MakeForCoroutine(D)
                           : CheckFallThroughDiagnostics::MakeForFunction(D)));
     CheckFallThroughForBody(S, D, Body, blkExpr, CD, AC);

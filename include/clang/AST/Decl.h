@@ -301,16 +301,6 @@ public:
   using Decl::isModulePrivate;
   using Decl::setModulePrivate;
 
-  /// \brief Determine whether this declaration is hidden from name lookup.
-  bool isHidden() const { return Hidden; }
-
-  /// \brief Set whether this declaration is hidden from name lookup.
-  void setHidden(bool Hide) {
-    assert((!Hide || isFromASTFile() || hasLocalOwningModuleStorage()) &&
-           "declaration with no owning module can't be hidden");
-    Hidden = Hide;
-  }
-
   /// \brief Determine whether this declaration is a C++ class member.
   bool isCXXClassMember() const {
     const DeclContext *DC = getDeclContext();
@@ -838,7 +828,7 @@ protected:
 
     /// Describes the kind of default argument for this parameter. By default
     /// this is none. If this is normal, then the default argument is stored in
-    /// the \c VarDecl initalizer expression unless we were unble to parse
+    /// the \c VarDecl initializer expression unless we were unable to parse
     /// (even an invalid) expression for the default argument.
     unsigned DefaultArgKind : 2;
 
@@ -861,6 +851,7 @@ protected:
 
   class NonParmVarDeclBitfields {
     friend class VarDecl;
+    friend class ImplicitParamDecl;
     friend class ASTDeclReader;
 
     unsigned : NumVarDeclBits;
@@ -904,6 +895,10 @@ protected:
     /// declared in the same block scope. This controls whether we should merge
     /// the type of this declaration with its previous declaration.
     unsigned PreviousDeclInSameBlockScope : 1;
+
+    /// Defines kind of the ImplicitParamDecl: 'this', 'self', 'vtt', '_cmd' or
+    /// something else.
+    unsigned ImplicitParamKind : 3;
   };
 
   union {
@@ -966,9 +961,16 @@ public:
   /// hasLocalStorage - Returns true if a variable with function scope
   ///  is a non-static local variable.
   bool hasLocalStorage() const {
-    if (getStorageClass() == SC_None)
+    if (getStorageClass() == SC_None) {
+      // OpenCL v1.2 s6.5.3: The __constant or constant address space name is
+      // used to describe variables allocated in global memory and which are
+      // accessed inside a kernel(s) as read-only variables. As such, variables
+      // in constant address space cannot have local storage.
+      if (getType().getAddressSpace() == LangAS::opencl_constant)
+        return false;
       // Second check is for C++11 [dcl.stc]p4.
       return !isFileVarDecl() && getTSCSpec() == TSCS_unspecified;
+    }
 
     // Global Named Register (GNU extension)
     if (getStorageClass() == SC_Register && !isLocalVarDeclOrParm())
@@ -1379,20 +1381,50 @@ public:
 
 class ImplicitParamDecl : public VarDecl {
   void anchor() override;
+
 public:
+  /// Defines the kind of the implicit parameter: is this an implicit parameter
+  /// with pointer to 'this', 'self', '_cmd', virtual table pointers, captured
+  /// context or something else.
+  enum ImplicitParamKind : unsigned {
+    ObjCSelf,        /// Parameter for Objective-C 'self' argument
+    ObjCCmd,         /// Parameter for Objective-C '_cmd' argument
+    CXXThis,         /// Parameter for C++ 'this' argument
+    CXXVTT,          /// Parameter for C++ virtual table pointers
+    CapturedContext, /// Parameter for captured context
+    Other,           /// Other implicit parameter
+  };
+
+  /// Create implicit parameter.
   static ImplicitParamDecl *Create(ASTContext &C, DeclContext *DC,
                                    SourceLocation IdLoc, IdentifierInfo *Id,
-                                   QualType T);
+                                   QualType T, ImplicitParamKind ParamKind);
+  static ImplicitParamDecl *Create(ASTContext &C, QualType T,
+                                   ImplicitParamKind ParamKind);
 
   static ImplicitParamDecl *CreateDeserialized(ASTContext &C, unsigned ID);
 
   ImplicitParamDecl(ASTContext &C, DeclContext *DC, SourceLocation IdLoc,
-                    IdentifierInfo *Id, QualType Type)
-    : VarDecl(ImplicitParam, C, DC, IdLoc, IdLoc, Id, Type,
-              /*tinfo*/ nullptr, SC_None) {
+                    IdentifierInfo *Id, QualType Type,
+                    ImplicitParamKind ParamKind)
+      : VarDecl(ImplicitParam, C, DC, IdLoc, IdLoc, Id, Type,
+                /*TInfo=*/nullptr, SC_None) {
+    NonParmVarDeclBits.ImplicitParamKind = ParamKind;
     setImplicit();
   }
 
+  ImplicitParamDecl(ASTContext &C, QualType Type, ImplicitParamKind ParamKind)
+      : VarDecl(ImplicitParam, C, /*DC=*/nullptr, SourceLocation(),
+                SourceLocation(), /*Id=*/nullptr, Type,
+                /*TInfo=*/nullptr, SC_None) {
+    NonParmVarDeclBits.ImplicitParamKind = ParamKind;
+    setImplicit();
+  }
+
+  /// Returns the implicit parameter kind.
+  ImplicitParamKind getParameterKind() const {
+    return static_cast<ImplicitParamKind>(NonParmVarDeclBits.ImplicitParamKind);
+  }
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) { return K == ImplicitParam; }
@@ -1605,9 +1637,14 @@ private:
 
   // FIXME: This can be packed into the bitfields in DeclContext.
   // NOTE: VC++ packs bitfields poorly if the types differ.
-  unsigned SClass : 2;
+  unsigned SClass : 3;
   unsigned IsInline : 1;
   unsigned IsInlineSpecified : 1;
+protected:
+  // This is shared by CXXConstructorDecl, CXXConversionDecl, and
+  // CXXDeductionGuideDecl.
+  unsigned IsExplicitSpecified : 1;
+private:
   unsigned IsVirtualAsWritten : 1;
   unsigned IsPure : 1;
   unsigned HasInheritedPrototype : 1;
@@ -1708,8 +1745,9 @@ protected:
                        StartLoc),
         DeclContext(DK), redeclarable_base(C), ParamInfo(nullptr), Body(),
         SClass(S), IsInline(isInlineSpecified),
-        IsInlineSpecified(isInlineSpecified), IsVirtualAsWritten(false),
-        IsPure(false), HasInheritedPrototype(false), HasWrittenPrototype(true),
+        IsInlineSpecified(isInlineSpecified), IsExplicitSpecified(false),
+        IsVirtualAsWritten(false), IsPure(false),
+        HasInheritedPrototype(false), HasWrittenPrototype(true),
         IsDeleted(false), IsTrivial(false), IsDefaulted(false),
         IsExplicitlyDefaulted(false), HasImplicitReturnZero(false),
         IsLateTemplateParsed(false), IsConstexpr(isConstexprSpecified),
@@ -1826,14 +1864,15 @@ public:
     return getBody(Definition);
   }
 
-  /// isThisDeclarationADefinition - Returns whether this specific
-  /// declaration of the function is also a definition. This does not
-  /// determine whether the function has been defined (e.g., in a
-  /// previous definition); for that information, use isDefined. Note
-  /// that this returns false for a defaulted function unless that function
-  /// has been implicitly defined (possibly as deleted).
+  /// Returns whether this specific declaration of the function is also a
+  /// definition that does not contain uninstantiated body.
+  ///
+  /// This does not determine whether the function has been defined (e.g., in a
+  /// previous definition); for that information, use isDefined.
+  ///
   bool isThisDeclarationADefinition() const {
-    return IsDeleted || Body || IsLateTemplateParsed;
+    return IsDeleted || IsDefaulted || Body || IsLateTemplateParsed ||
+      hasDefiningAttr();
   }
 
   /// doesThisDeclarationHaveABody - Returns whether this specific
@@ -2076,10 +2115,7 @@ public:
   const Attr *getUnusedResultAttr() const;
 
   /// \brief Returns true if this function or its return type has the
-  /// warn_unused_result attribute. If the return type has the attribute and
-  /// this function is a method of the return type's class, then false will be
-  /// returned to avoid spurious warnings on member methods such as assignment
-  /// operators.
+  /// warn_unused_result attribute.
   bool hasUnusedResultAttr() const { return getUnusedResultAttr() != nullptr; }
 
   /// \brief Returns the storage class as written in the source. For the
@@ -2475,7 +2511,7 @@ public:
   void setCapturedVLAType(const VariableArrayType *VLAType);
 
   /// getParent - Returns the parent of this field declaration, which
-  /// is the struct in which this method is defined.
+  /// is the struct in which this field is defined.
   const RecordDecl *getParent() const {
     return cast<RecordDecl>(getDeclContext());
   }
@@ -2635,12 +2671,17 @@ class TypedefNameDecl : public TypeDecl, public Redeclarable<TypedefNameDecl> {
   typedef std::pair<TypeSourceInfo*, QualType> ModedTInfo;
   llvm::PointerUnion<TypeSourceInfo*, ModedTInfo*> MaybeModedTInfo;
 
+  // FIXME: This can be packed into the bitfields in Decl.
+  /// If 0, we have not computed IsTransparentTag.
+  /// Otherwise, IsTransparentTag is (CacheIsTransparentTag >> 1).
+  mutable unsigned CacheIsTransparentTag : 2;
+
 protected:
   TypedefNameDecl(Kind DK, ASTContext &C, DeclContext *DC,
                   SourceLocation StartLoc, SourceLocation IdLoc,
                   IdentifierInfo *Id, TypeSourceInfo *TInfo)
       : TypeDecl(DK, DC, IdLoc, Id, StartLoc), redeclarable_base(C),
-        MaybeModedTInfo(TInfo) {}
+        MaybeModedTInfo(TInfo), CacheIsTransparentTag(0) {}
 
   typedef Redeclarable<TypedefNameDecl> redeclarable_base;
   TypedefNameDecl *getNextRedeclarationImpl() override {
@@ -2693,11 +2734,22 @@ public:
   /// this typedef declaration.
   TagDecl *getAnonDeclWithTypedefName(bool AnyRedecl = false) const;
 
+  /// Determines if this typedef shares a name and spelling location with its
+  /// underlying tag type, as is the case with the NS_ENUM macro.
+  bool isTransparentTag() const {
+    if (CacheIsTransparentTag)
+      return CacheIsTransparentTag & 0x2;
+    return isTransparentTagSlow();
+  }
+
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) {
     return K >= firstTypedefName && K <= lastTypedefName;
   }
+
+private:
+  bool isTransparentTagSlow() const;
 };
 
 /// TypedefDecl - Represents the declaration of a typedef-name via the 'typedef'
@@ -3228,6 +3280,18 @@ public:
   bool isComplete() const {
     return isCompleteDefinition() || isFixed();
   }
+
+  /// Returns true if this enum is either annotated with
+  /// enum_extensibility(closed) or isn't annotated with enum_extensibility.
+  bool isClosed() const;
+
+  /// Returns true if this enum is annotated with flag_enum and isn't annotated
+  /// with enum_extensibility(open).
+  bool isClosedFlag() const;
+
+  /// Returns true if this enum is annotated with neither flag_enum nor
+  /// enum_extensibility(open).
+  bool isClosedNonFlag() const;
 
   /// \brief Retrieve the enum definition from which this enumeration could
   /// be instantiated, if it is an instantiation (rather than a non-template).

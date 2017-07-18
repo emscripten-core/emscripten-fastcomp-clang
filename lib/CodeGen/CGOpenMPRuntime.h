@@ -527,6 +527,7 @@ public:
   /// Get combiner/initializer for the specified user-defined reduction, if any.
   virtual std::pair<llvm::Function *, llvm::Function *>
   getUserDefinedReduction(const OMPDeclareReductionDecl *D);
+
   /// \brief Emits outlined function for the specified OpenMP parallel directive
   /// \a D. This outlined function has type void(*)(kmp_int32 *ThreadID,
   /// kmp_int32 BoundID, struct context_vars*).
@@ -535,7 +536,19 @@ public:
   /// \param InnermostKind Kind of innermost directive (for simple directives it
   /// is a directive itself, for combined - its innermost directive).
   /// \param CodeGen Code generation sequence for the \a D directive.
-  virtual llvm::Value *emitParallelOrTeamsOutlinedFunction(
+  virtual llvm::Value *emitParallelOutlinedFunction(
+      const OMPExecutableDirective &D, const VarDecl *ThreadIDVar,
+      OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen);
+
+  /// \brief Emits outlined function for the specified OpenMP teams directive
+  /// \a D. This outlined function has type void(*)(kmp_int32 *ThreadID,
+  /// kmp_int32 BoundID, struct context_vars*).
+  /// \param D OpenMP directive.
+  /// \param ThreadIDVar Variable for thread id in the current OpenMP region.
+  /// \param InnermostKind Kind of innermost directive (for simple directives it
+  /// is a directive itself, for combined - its innermost directive).
+  /// \param CodeGen Code generation sequence for the \a D directive.
+  virtual llvm::Value *emitTeamsOutlinedFunction(
       const OMPExecutableDirective &D, const VarDecl *ThreadIDVar,
       OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen);
 
@@ -659,16 +672,50 @@ public:
   ///
   virtual bool isDynamic(OpenMPScheduleClauseKind ScheduleKind) const;
 
+  /// struct with the values to be passed to the dispatch runtime function
+  struct DispatchRTInput {
+    /// Loop lower bound
+    llvm::Value *LB = nullptr;
+    /// Loop upper bound
+    llvm::Value *UB = nullptr;
+    /// Chunk size specified using 'schedule' clause (nullptr if chunk
+    /// was not specified)
+    llvm::Value *Chunk = nullptr;
+    DispatchRTInput() = default;
+    DispatchRTInput(llvm::Value *LB, llvm::Value *UB, llvm::Value *Chunk)
+        : LB(LB), UB(UB), Chunk(Chunk) {}
+  };
+
+  /// Call the appropriate runtime routine to initialize it before start
+  /// of loop.
+
+  /// This is used for non static scheduled types and when the ordered
+  /// clause is present on the loop construct.
+  /// Depending on the loop schedule, it is necessary to call some runtime
+  /// routine before start of the OpenMP loop to get the loop upper / lower
+  /// bounds \a LB and \a UB and stride \a ST.
+  ///
+  /// \param CGF Reference to current CodeGenFunction.
+  /// \param Loc Clang source location.
+  /// \param ScheduleKind Schedule kind, specified by the 'schedule' clause.
+  /// \param IVSize Size of the iteration variable in bits.
+  /// \param IVSigned Sign of the interation variable.
+  /// \param Ordered true if loop is ordered, false otherwise.
+  /// \param DispatchValues struct containing llvm values for lower bound, upper
+  /// bound, and chunk expression.
+  /// For the default (nullptr) value, the chunk 1 will be used.
+  ///
   virtual void emitForDispatchInit(CodeGenFunction &CGF, SourceLocation Loc,
                                    const OpenMPScheduleTy &ScheduleKind,
                                    unsigned IVSize, bool IVSigned, bool Ordered,
-                                   llvm::Value *UB,
-                                   llvm::Value *Chunk = nullptr);
+                                   const DispatchRTInput &DispatchValues);
 
   /// \brief Call the appropriate runtime routine to initialize it before start
   /// of loop.
   ///
-  /// Depending on the loop schedule, it is nesessary to call some runtime
+  /// This is used only in case of static schedule, when the user did not
+  /// specify a ordered clause on the loop construct.
+  /// Depending on the loop schedule, it is necessary to call some runtime
   /// routine before start of the OpenMP loop to get the loop upper / lower
   /// bounds \a LB and \a UB and stride \a ST.
   ///
@@ -880,6 +927,32 @@ public:
                                     OpenMPDirectiveKind InnermostKind,
                                     const RegionCodeGenTy &CodeGen,
                                     bool HasCancel = false);
+
+  /// Emits reduction function.
+  /// \param ArgsType Array type containing pointers to reduction variables.
+  /// \param Privates List of private copies for original reduction arguments.
+  /// \param LHSExprs List of LHS in \a ReductionOps reduction operations.
+  /// \param RHSExprs List of RHS in \a ReductionOps reduction operations.
+  /// \param ReductionOps List of reduction operations in form 'LHS binop RHS'
+  /// or 'operator binop(LHS, RHS)'.
+  llvm::Value *emitReductionFunction(CodeGenModule &CGM, llvm::Type *ArgsType,
+                                     ArrayRef<const Expr *> Privates,
+                                     ArrayRef<const Expr *> LHSExprs,
+                                     ArrayRef<const Expr *> RHSExprs,
+                                     ArrayRef<const Expr *> ReductionOps);
+
+  /// Emits single reduction combiner
+  void emitSingleReductionCombiner(CodeGenFunction &CGF,
+                                   const Expr *ReductionOp,
+                                   const Expr *PrivateRef,
+                                   const DeclRefExpr *LHS,
+                                   const DeclRefExpr *RHS);
+
+  struct ReductionOptionsTy {
+    bool WithNowait;
+    bool SimpleReduction;
+    OpenMPDirectiveKind ReductionKind;
+  };
   /// \brief Emit a code for reduction clause. Next code should be emitted for
   /// reduction:
   /// \code
@@ -916,14 +989,18 @@ public:
   /// \param RHSExprs List of RHS in \a ReductionOps reduction operations.
   /// \param ReductionOps List of reduction operations in form 'LHS binop RHS'
   /// or 'operator binop(LHS, RHS)'.
-  /// \param WithNowait true if parent directive has also nowait clause, false
-  /// otherwise.
+  /// \param Options List of options for reduction codegen:
+  ///     WithNowait true if parent directive has also nowait clause, false
+  ///     otherwise.
+  ///     SimpleReduction Emit reduction operation only. Used for omp simd
+  ///     directive on the host.
+  ///     ReductionKind The kind of reduction to perform.
   virtual void emitReduction(CodeGenFunction &CGF, SourceLocation Loc,
                              ArrayRef<const Expr *> Privates,
                              ArrayRef<const Expr *> LHSExprs,
                              ArrayRef<const Expr *> RHSExprs,
                              ArrayRef<const Expr *> ReductionOps,
-                             bool WithNowait, bool SimpleReduction);
+                             ReductionOptionsTy Options);
 
   /// \brief Emit code for 'taskwait' directive.
   virtual void emitTaskwaitCall(CodeGenFunction &CGF, SourceLocation Loc);
@@ -991,7 +1068,7 @@ public:
   virtual bool emitTargetGlobalVariable(GlobalDecl GD);
 
   /// \brief Emit the global \a GD if it is meaningful for the target. Returns
-  /// if it was emitted succesfully.
+  /// if it was emitted successfully.
   /// \param GD Global to scan.
   virtual bool emitTargetGlobal(GlobalDecl GD);
 

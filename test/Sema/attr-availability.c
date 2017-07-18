@@ -30,7 +30,7 @@ void test_10095131() {
   ATSFontGetPostScriptName(100); // expected-error {{'ATSFontGetPostScriptName' is unavailable: obsoleted in macOS 9.0 - use ATSFontGetFullPostScriptName}}
 
 #if defined(WARN_PARTIAL)
-  // expected-warning@+2 {{is only available on macOS 10.8 or newer}} expected-note@+2 {{enclose 'PartiallyAvailable' in an @available check to silence this warning}}
+  // expected-warning@+2 {{is only available on macOS 10.8 or newer}} expected-note@+2 {{enclose 'PartiallyAvailable' in a __builtin_available check to silence this warning}}
 #endif
   PartiallyAvailable();
 }
@@ -74,7 +74,7 @@ extern int x;
 
 void f8() {
   int (^b)(int);
-  b = ^ (int i) __attribute__((availability(macosx,introduced=10.2))) { return 1; }; // expected-warning {{'availability' attribute ignored}}
+  b = ^ (int i) __attribute__((availability(macosx,introduced=10.2))) { return 1; }; // expected-warning {{'availability' attribute only applies to named declarations}}
 }
 
 extern int x2 __attribute__((availability(macosx,introduced=10.2))); // expected-note {{previous attribute is here}}

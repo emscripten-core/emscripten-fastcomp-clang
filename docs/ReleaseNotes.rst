@@ -1,5 +1,5 @@
 =======================================
-Clang 4.0.0 (In-Progress) Release Notes
+Clang 5.0.0 (In-Progress) Release Notes
 =======================================
 
 .. contents::
@@ -10,15 +10,15 @@ Written by the `LLVM Team <http://llvm.org/>`_
 
 .. warning::
 
-   These are in-progress notes for the upcoming Clang 4.0.0 release. You may
-   prefer the `Clang 3.9 Release Notes
-   <http://llvm.org/releases/3.9.0/tools/clang/docs/ReleaseNotes.html>`_.
+   These are in-progress notes for the upcoming Clang 5 release.
+   Release notes for previous releases can be found on
+   `the Download Page <http://releases.llvm.org/download.html>`_.
 
 Introduction
 ============
 
 This document contains the release notes for the Clang C/C++/Objective-C
-frontend, part of the LLVM Compiler Infrastructure, release 4.0.0. Here we
+frontend, part of the LLVM Compiler Infrastructure, release 5.0.0. Here we
 describe the status of Clang in some detail, including major
 improvements from the previous release and new feature work. For the
 general LLVM release notes, see `the LLVM
@@ -31,7 +31,7 @@ the latest release, please check out the main please see the `Clang Web
 Site <http://clang.llvm.org>`_ or the `LLVM Web
 Site <http://llvm.org>`_.
 
-What's New in Clang 4.0.0?
+What's New in Clang 5.0.0?
 ==========================
 
 Some of the major new features and improvements to Clang are listed
@@ -41,10 +41,6 @@ sections with improvements to Clang's support for those languages.
 
 Major New Features
 ------------------
-
-- The ``diagnose_if`` attribute has been added to clang. This attribute allows
-  clang to emit a warning or error if a function call meets one or more
-  user-specified conditions.
 
 - Enhanced devirtualization with
   `-fstrict-vtable-pointers <UsersManual.html#cmdoption-fstrict-vtable-pointers>`_.
@@ -78,17 +74,11 @@ Improvements to ThinLTO (-flto=thin)
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
--  ...
+-  -Wunused-lambda-capture warns when a variable explicitly captured
+   by a lambda is not used in the body of the lambda.
 
 New Compiler Flags
 ------------------
-
-The option -Og has been added to optimize the debugging experience.
-For now, this option is exactly the same as -O1. However, in the future,
-some other optimizations might be enabled or disabled.
-
-The option -MJ has been added to simplify adding JSON compilation
-database output into existing build systems.
 
 The option ....
 
@@ -149,7 +139,7 @@ OpenMP Support in Clang
 Internal API Changes
 --------------------
 
-These are major API changes that have happened since the 3.9 release of
+These are major API changes that have happened since the 4.0.0 release of
 Clang. If upgrading an external codebase that uses Clang as a library,
 this section should help get you past the largest hurdles of upgrading.
 
@@ -160,19 +150,89 @@ AST Matchers
 
 ...
 
+
+clang-format
+------------
+
+* Option **BreakBeforeInheritanceComma** added to break before ``:`` and ``,``  in case of
+  multiple inheritance in a class declaration. Enabled by default in the Mozilla coding style.
+
+  +---------------------+----------------------------------------+
+  | true                | false                                  |
+  +=====================+========================================+
+  | .. code-block:: c++ | .. code-block:: c++                    |
+  |                     |                                        |
+  |   class MyClass     |   class MyClass : public X, public Y { |
+  |       : public X    |   };                                   |
+  |       , public Y {  |                                        |
+  |   };                |                                        |
+  +---------------------+----------------------------------------+
+
+* Align block comment decorations.
+
+  +----------------------+---------------------+
+  | Before               | After               |
+  +======================+=====================+
+  |  .. code-block:: c++ | .. code-block:: c++ |
+  |                      |                     |
+  |    /* line 1         |   /* line 1         |
+  |      * line 2        |    * line 2         |
+  |     */               |    */               |
+  +----------------------+---------------------+
+
+* The :doc:`ClangFormatStyleOptions` documentation provides detailed examples for most options.
+
+* Namespace end comments are now added or updated automatically.
+
+  +---------------------+---------------------+
+  | Before              | After               |
+  +=====================+=====================+
+  | .. code-block:: c++ | .. code-block:: c++ |
+  |                     |                     |
+  |   namespace A {     |   namespace A {     |
+  |   int i;            |   int i;            |
+  |   int j;            |   int j;            |
+  |   }                 |   }                 |
+  +---------------------+---------------------+
+
+* Comment reflow support added. Overly long comment lines will now be reflown with the rest of
+  the paragraph instead of just broken. Option **ReflowComments** added and enabled by default.
+
 libclang
 --------
 
 ...
-
-With the option --show-description, scan-build's list of defects will also
-show the description of the defects.
 
 
 Static Analyzer
 ---------------
 
 ...
+
+Undefined Behavior Sanitizer (UBSan)
+------------------------------------
+
+- The Undefined Behavior Sanitizer has a new check for pointer overflow. This
+  check is on by default. The flag to control this functionality is
+  -fsanitize=pointer-overflow.
+
+  Pointer overflow is an indicator of undefined behavior: when a pointer
+  indexing expression wraps around the address space, or produces other
+  unexpected results, its result may not point to a valid object.
+
+- UBSan has several new checks which detect violations of nullability
+  annotations. These checks are off by default. The flag to control this group
+  of checks is -fsanitize=nullability. The checks can be individially enabled
+  by -fsanitize=nullability-arg (which checks calls),
+  -fsanitize=nullability-assign (which checks assignments), and
+  -fsanitize=nullability-return (which checks return statements).
+
+- UBSan can now detect invalid loads from bitfields and from ObjC BOOLs.
+
+- UBSan can now avoid emitting unnecessary type checks in C++ class methods and
+  in several other cases where the result is known at compile-time. UBSan can
+  also avoid emitting unnecessary overflow checks in arithmetic expressions
+  with promoted integer operands.
 
 Core Analysis Improvements
 ==========================
