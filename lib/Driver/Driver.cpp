@@ -19,6 +19,9 @@
 #include "ToolChains/Cuda.h"
 #include "ToolChains/Darwin.h"
 #include "ToolChains/DragonFly.h"
+// @LOCALMOD-START Emscripten
+#include "ToolChains/Emscripten.h"
+// @LOCALMOD-END Emscripten
 #include "ToolChains/FreeBSD.h"
 #include "ToolChains/Fuchsia.h"
 #include "ToolChains/Gnu.h"
@@ -3784,7 +3787,7 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
       break;
     // @LOCALMOD-START Emscripten
     case llvm::Triple::Emscripten:
-      TC = new toolchains::EmscriptenToolChain(*this, Target, Args);
+      TC = llvm::make_unique<toolchains::EmscriptenToolChain>(*this, Target, Args);
       break;
     // @LOCALMOD-END Emscripten
     case llvm::Triple::NaCl:
