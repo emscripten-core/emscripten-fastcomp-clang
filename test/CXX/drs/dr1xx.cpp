@@ -1,7 +1,7 @@
 // RUN: %clang_cc1 -std=c++98 -triple x86_64-unknown-unknown %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
 // RUN: %clang_cc1 -std=c++11 -triple x86_64-unknown-unknown %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
 // RUN: %clang_cc1 -std=c++14 -triple x86_64-unknown-unknown %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
-// RUN: %clang_cc1 -std=c++1z -triple x86_64-unknown-unknown %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
+// RUN: %clang_cc1 -std=c++17 -triple x86_64-unknown-unknown %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
 
 namespace dr100 { // dr100: yes
   template<const char *> struct A {}; // expected-note 0-1{{declared here}}
@@ -313,7 +313,7 @@ namespace dr126 { // dr126: no
     virtual void z() throw(long); // expected-error {{more lax}}
   };
 #else
-  void f() throw(int); // expected-error {{ISO C++1z does not allow}} expected-note {{use 'noexcept}}
+  void f() throw(int); // expected-error {{ISO C++17 does not allow}} expected-note {{use 'noexcept}}
 #endif
 }
 
@@ -535,13 +535,15 @@ namespace dr145 { // dr145: yes
   }
 }
 
-namespace dr147 { // dr147: no
+namespace dr147 { // dr147: yes
   namespace example1 {
     template<typename> struct A {
       template<typename T> A(T);
     };
-    // FIXME: This appears to be valid, and EDG and G++ accept.
+    // Per core issue 1435, this is ill-formed because A<int>::A<int> does not
+    // name the injected-class-name. (A<int>::A does, though.)
     template<> template<> A<int>::A<int>(int) {} // expected-error {{out-of-line constructor for 'A' cannot have template arguments}}
+    template<> template<> A<float>::A(float) {}
   }
   namespace example2 {
     struct A { A(); };
