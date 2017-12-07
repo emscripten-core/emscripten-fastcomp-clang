@@ -33,9 +33,9 @@ public:
     IntMaxType = Int64Type = TargetInfo::SignedLongLong;
     DoubleAlign = 64;
     LongDoubleWidth = LongDoubleAlign = 64;
-    SizeType = TargetInfo::UnsignedInt;
-    PtrDiffType = TargetInfo::SignedInt;
-    IntPtrType = TargetInfo::SignedInt;
+    SizeType = TargetInfo::UnsignedLong;
+    PtrDiffType = TargetInfo::SignedLong;
+    IntPtrType = TargetInfo::SignedLong;
     RegParmMax = 0; // Disallow regparm
 
     // Set the native integer widths set to just i32, since that's currently the
