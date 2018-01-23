@@ -75,6 +75,17 @@ public:
     // http://esdiscuss.org/topic/rename-number-prototype-clz-to-math-clz#content-36
     return false;
   }
+  IntType getIntTypeByWidth(unsigned BitWidth,
+                            bool IsSigned) const final {
+    return BitWidth == 64 ? (IsSigned ? SignedLongLong : UnsignedLongLong)
+                          : TargetInfo::getIntTypeByWidth(BitWidth, IsSigned);
+  }
+  IntType getLeastIntTypeByWidth(unsigned BitWidth,
+                                 bool IsSigned) const final {
+    return BitWidth == 64
+               ? (IsSigned ? SignedLongLong : UnsignedLongLong)
+               : TargetInfo::getLeastIntTypeByWidth(BitWidth, IsSigned);
+  }
 };
 
 // Emscripten target
