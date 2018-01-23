@@ -36,6 +36,11 @@ public:
     SizeType = TargetInfo::UnsignedLong;
     PtrDiffType = TargetInfo::SignedLong;
     IntPtrType = TargetInfo::SignedLong;
+    SuitableAlign = 128;
+    LargeArrayMinWidth = 128;
+    LargeArrayAlign = 128;
+    SimdDefaultAlign = 128;
+    SigAtomicType = SignedLong;
     RegParmMax = 0; // Disallow regparm
 
     // Set the native integer widths set to just i32, since that's currently the
