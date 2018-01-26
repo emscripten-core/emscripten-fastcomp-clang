@@ -95,7 +95,7 @@ public:
     if (isa<ObjCImplDecl>(LexicalDC) && !D->isThisDeclarationADefinition())
       DataConsumer.handleSynthesizedObjCMethod(D, DeclLoc, LexicalDC);
     else
-      DataConsumer.handleObjCMethod(D);
+      DataConsumer.handleObjCMethod(D, DeclLoc);
     return true;
   }
 
@@ -423,11 +423,13 @@ bool CXIndexDataConsumer::isFunctionLocalDecl(const Decl *D) {
   if (const NamedDecl *ND = dyn_cast<NamedDecl>(D)) {
     switch (ND->getFormalLinkage()) {
     case NoLinkage:
-    case VisibleNoLinkage:
     case InternalLinkage:
       return true;
+    case VisibleNoLinkage:
+    case ModuleInternalLinkage:
     case UniqueExternalLinkage:
       llvm_unreachable("Not a sema linkage");
+    case ModuleLinkage:
     case ExternalLinkage:
       return false;
     }
@@ -801,7 +803,8 @@ bool CXIndexDataConsumer::handleObjCCategoryImpl(const ObjCCategoryImplDecl *D) 
   return handleObjCContainer(D, CategoryLoc, getCursor(D), CatDInfo);
 }
 
-bool CXIndexDataConsumer::handleObjCMethod(const ObjCMethodDecl *D) {
+bool CXIndexDataConsumer::handleObjCMethod(const ObjCMethodDecl *D,
+                                           SourceLocation Loc) {
   bool isDef = D->isThisDeclarationADefinition();
   bool isContainer = isDef;
   bool isSkipped = false;
@@ -814,7 +817,7 @@ bool CXIndexDataConsumer::handleObjCMethod(const ObjCMethodDecl *D) {
   DeclInfo DInfo(!D->isCanonicalDecl(), isDef, isContainer);
   if (isSkipped)
     DInfo.flags |= CXIdxDeclFlag_Skipped;
-  return handleDecl(D, D->getLocation(), getCursor(D), DInfo);
+  return handleDecl(D, Loc, getCursor(D), DInfo);
 }
 
 bool CXIndexDataConsumer::handleSynthesizedObjCProperty(
@@ -1293,6 +1296,7 @@ static CXIdxEntityKind getEntityKindFromSymbolKind(SymbolKind K, SymbolLanguage 
   case SymbolKind::Constructor: return CXIdxEntity_CXXConstructor;
   case SymbolKind::Destructor: return CXIdxEntity_CXXDestructor;
   case SymbolKind::ConversionFunction: return CXIdxEntity_CXXConversionFunction;
+  case SymbolKind::Parameter: return CXIdxEntity_Variable;
   }
   llvm_unreachable("invalid symbol kind");
 }
@@ -1313,6 +1317,7 @@ static CXIdxEntityLanguage getEntityLangFromSymbolLang(SymbolLanguage L) {
   case SymbolLanguage::C: return CXIdxEntityLang_C;
   case SymbolLanguage::ObjC: return CXIdxEntityLang_ObjC;
   case SymbolLanguage::CXX: return CXIdxEntityLang_CXX;
+  case SymbolLanguage::Swift: return CXIdxEntityLang_Swift;
   }
   llvm_unreachable("invalid symbol language");
 }

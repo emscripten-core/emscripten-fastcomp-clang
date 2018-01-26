@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -fcxx-exceptions -fexceptions -fsyntax-only -verify -std=c++11 -Wc++14-compat -Wc++14-extensions -Wc++1z-extensions %s
+// RUN: %clang_cc1 -fcxx-exceptions -fexceptions -fsyntax-only -verify -std=c++11 -Wc++14-compat -Wc++14-extensions -Wc++17-extensions %s
 
 // Need std::initializer_list
 namespace std {
@@ -99,11 +99,13 @@ void fn_with_structs() {
 }
 [[]];
 struct ctordtor {
-  [[]] ctordtor();
-  [[]] ~ctordtor();
+  [[]] ctordtor [[]] () [[]];
+  ctordtor (C) [[]];
+  [[]] ~ctordtor [[]] () [[]];
 };
-[[]] ctordtor::ctordtor() {}
-[[]] ctordtor::~ctordtor() {}
+[[]] ctordtor::ctordtor [[]] () [[]] {}
+[[]] ctordtor::ctordtor (C) [[]] try {} catch (...) {}
+[[]] ctordtor::~ctordtor [[]] () [[]] {}
 extern "C++" [[]] int extern_attr;
 template <typename T> [[]] void template_attr ();
 [[]] [[]] int [[]] [[]] multi_attr [[]] [[]];
@@ -125,7 +127,7 @@ extern "C++" [[]] { } // expected-error {{an attribute list cannot appear here}}
 [[]] using ns::i; // expected-error {{an attribute list cannot appear here}}
 [[unknown]] using namespace ns; // expected-warning {{unknown attribute 'unknown' ignored}}
 [[noreturn]] using namespace ns; // expected-error {{'noreturn' attribute only applies to functions}}
-namespace [[]] ns2 {} // expected-warning {{attributes on a namespace declaration are incompatible with C++ standards before C++1z}}
+namespace [[]] ns2 {} // expected-warning {{attributes on a namespace declaration are incompatible with C++ standards before C++17}}
 
 using [[]] alignas(4) [[]] ns::i; // expected-error {{an attribute list cannot appear here}}
 using [[]] alignas(4) [[]] foobar = int; // expected-error {{an attribute list cannot appear here}} expected-error {{'alignas' attribute only applies to}}
@@ -177,7 +179,7 @@ enum [[]] E2; // expected-error {{forbids forward references}}
 enum [[]] E1;
 enum [[]] E3 : int;
 enum [[]] {
-  k_123 [[]] = 123 // expected-warning {{attributes on an enumerator declaration are incompatible with C++ standards before C++1z}}
+  k_123 [[]] = 123 // expected-warning {{attributes on an enumerator declaration are incompatible with C++ standards before C++17}}
 };
 enum [[]] E1 e; // expected-error {{an attribute list cannot appear here}}
 enum [[]] class E4 { }; // expected-error {{an attribute list cannot appear here}}
@@ -350,7 +352,7 @@ int fallthru(int n) {
   switch (n) {
   case 0:
     n += 5;
-    [[fallthrough]]; // expected-warning {{use of the 'fallthrough' attribute is a C++1z extension}}
+    [[fallthrough]]; // expected-warning {{use of the 'fallthrough' attribute is a C++17 extension}}
   case 1:
     n *= 2;
     break;
