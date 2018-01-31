@@ -47,9 +47,7 @@ bool Decl::isOutOfLine() const {
 
 TranslationUnitDecl::TranslationUnitDecl(ASTContext &ctx)
     : Decl(TranslationUnit, nullptr, SourceLocation()),
-      DeclContext(TranslationUnit), Ctx(ctx), AnonymousNamespace(nullptr) {
-  Hidden = Ctx.getLangOpts().ModulesLocalVisibility;
-}
+      DeclContext(TranslationUnit), Ctx(ctx), AnonymousNamespace(nullptr) {}
 
 //===----------------------------------------------------------------------===//
 // NamedDecl Implementation
@@ -1414,6 +1412,11 @@ void NamedDecl::printQualifiedName(raw_ostream &OS,
                                    const PrintingPolicy &P) const {
   const DeclContext *Ctx = getDeclContext();
 
+  // For ObjC methods, look through categories and use the interface as context.
+  if (auto *MD = dyn_cast<ObjCMethodDecl>(this))
+    if (auto *ID = MD->getClassInterface())
+      Ctx = ID;
+
   if (Ctx->isFunctionOrMethod()) {
     printName(OS);
     return;
@@ -2143,13 +2146,6 @@ APValue *VarDecl::evaluateValue() const {
   return evaluateValue(Notes);
 }
 
-namespace {
-// Destroy an APValue that was allocated in an ASTContext.
-void DestroyAPValue(void* UntypedValue) {
-  static_cast<APValue*>(UntypedValue)->~APValue();
-}
-} // namespace
-
 APValue *VarDecl::evaluateValue(
     SmallVectorImpl<PartialDiagnosticAt> &Notes) const {
   EvaluatedStmt *Eval = ensureEvaluatedStmt();
@@ -2181,7 +2177,7 @@ APValue *VarDecl::evaluateValue(
   if (!Result)
     Eval->Evaluated = APValue();
   else if (Eval->Evaluated.needsCleanup())
-    getASTContext().AddDeallocation(DestroyAPValue, &Eval->Evaluated);
+    getASTContext().addDestruction(&Eval->Evaluated);
 
   Eval->IsEvaluating = false;
   Eval->WasEvaluated = true;
@@ -2253,6 +2249,14 @@ bool VarDecl::checkInitIsICE() const {
   return Eval->IsICE;
 }
 
+template<typename DeclT>
+static DeclT *getDefinitionOrSelf(DeclT *D) {
+  assert(D);
+  if (auto *Def = D->getDefinition())
+    return Def;
+  return D;
+}
+
 VarDecl *VarDecl::getTemplateInstantiationPattern() const {
   // If it's a variable template specialization, find the template or partial
   // specialization from which it was instantiated.
@@ -2264,7 +2268,7 @@ VarDecl *VarDecl::getTemplateInstantiationPattern() const {
           break;
         VTD = NewVTD;
       }
-      return VTD->getTemplatedDecl()->getDefinition();
+      return getDefinitionOrSelf(VTD->getTemplatedDecl());
     }
     if (auto *VTPSD =
             From.dyn_cast<VarTemplatePartialSpecializationDecl *>()) {
@@ -2273,7 +2277,7 @@ VarDecl *VarDecl::getTemplateInstantiationPattern() const {
           break;
         VTPSD = NewVTPSD;
       }
-      return VTPSD->getDefinition();
+      return getDefinitionOrSelf<VarDecl>(VTPSD);
     }
   }
 
@@ -2282,23 +2286,18 @@ VarDecl *VarDecl::getTemplateInstantiationPattern() const {
       VarDecl *VD = getInstantiatedFromStaticDataMember();
       while (auto *NewVD = VD->getInstantiatedFromStaticDataMember())
         VD = NewVD;
-      return VD->getDefinition();
+      return getDefinitionOrSelf(VD);
     }
   }
 
   if (VarTemplateDecl *VarTemplate = getDescribedVarTemplate()) {
-
     while (VarTemplate->getInstantiatedFromMemberTemplate()) {
       if (VarTemplate->isMemberSpecialization())
         break;
       VarTemplate = VarTemplate->getInstantiatedFromMemberTemplate();
     }
 
-    assert((!VarTemplate->getTemplatedDecl() ||
-            !isTemplateInstantiation(getTemplateSpecializationKind())) &&
-           "couldn't find pattern for variable instantiation");
-
-    return VarTemplate->getTemplatedDecl();
+    return getDefinitionOrSelf(VarTemplate->getTemplatedDecl());
   }
   return nullptr;
 }
@@ -2510,7 +2509,7 @@ bool FunctionDecl::isVariadic() const {
 
 bool FunctionDecl::hasBody(const FunctionDecl *&Definition) const {
   for (auto I : redecls()) {
-    if (I->Body || I->IsLateTemplateParsed) {
+    if (I->doesThisDeclarationHaveABody()) {
       Definition = I;
       return true;
     }
@@ -2535,9 +2534,8 @@ bool FunctionDecl::hasTrivialBody() const
 
 bool FunctionDecl::isDefined(const FunctionDecl *&Definition) const {
   for (auto I : redecls()) {
-    if (I->IsDeleted || I->IsDefaulted || I->Body || I->IsLateTemplateParsed ||
-        I->hasDefiningAttr()) {
-      Definition = I->IsDeleted ? I->getCanonicalDecl() : I;
+    if (I->isThisDeclarationADefinition()) {
+      Definition = I;
       return true;
     }
   }
@@ -3005,9 +3003,7 @@ SourceRange FunctionDecl::getExceptionSpecSourceRange() const {
 const Attr *FunctionDecl::getUnusedResultAttr() const {
   QualType RetType = getReturnType();
   if (RetType->isRecordType()) {
-    const CXXRecordDecl *Ret = RetType->getAsCXXRecordDecl();
-    const auto *MD = dyn_cast<CXXMethodDecl>(this);
-    if (Ret && !(MD && MD->getCorrespondingMethodInClass(Ret, true))) {
+    if (const CXXRecordDecl *Ret = RetType->getAsCXXRecordDecl()) {
       if (const auto *R = Ret->getAttr<WarnUnusedResultAttr>())
         return R;
     }
@@ -3202,9 +3198,12 @@ bool FunctionDecl::isTemplateInstantiation() const {
    
 FunctionDecl *FunctionDecl::getTemplateInstantiationPattern() const {
   // Handle class scope explicit specialization special case.
-  if (getTemplateSpecializationKind() == TSK_ExplicitSpecialization)
-    return getClassScopeSpecializationPattern();
-  
+  if (getTemplateSpecializationKind() == TSK_ExplicitSpecialization) {
+    if (auto *Spec = getClassScopeSpecializationPattern())
+      return getDefinitionOrSelf(Spec);
+    return nullptr;
+  }
+
   // If this is a generic lambda call operator specialization, its 
   // instantiation pattern is always its primary template's pattern
   // even if its primary template was instantiated from another 
@@ -3216,16 +3215,10 @@ FunctionDecl *FunctionDecl::getTemplateInstantiationPattern() const {
 
   if (isGenericLambdaCallOperatorSpecialization(
           dyn_cast<CXXMethodDecl>(this))) {
-    assert(getPrimaryTemplate() && "A generic lambda specialization must be "
-                                   "generated from a primary call operator "
-                                   "template");
-    assert(getPrimaryTemplate()->getTemplatedDecl()->getBody() &&
-           "A generic lambda call operator template must always have a body - "
-           "even if instantiated from a prototype (i.e. as written) member "
-           "template");
-    return getPrimaryTemplate()->getTemplatedDecl();
+    assert(getPrimaryTemplate() && "not a generic lambda call operator?");
+    return getDefinitionOrSelf(getPrimaryTemplate()->getTemplatedDecl());
   }
-  
+
   if (FunctionTemplateDecl *Primary = getPrimaryTemplate()) {
     while (Primary->getInstantiatedFromMemberTemplate()) {
       // If we have hit a point where the user provided a specialization of
@@ -3234,11 +3227,14 @@ FunctionDecl *FunctionDecl::getTemplateInstantiationPattern() const {
         break;
       Primary = Primary->getInstantiatedFromMemberTemplate();
     }
-    
-    return Primary->getTemplatedDecl();
+
+    return getDefinitionOrSelf(Primary->getTemplatedDecl());
   } 
-    
-  return getInstantiatedFromMemberFunction();
+
+  if (auto *MFD = getInstantiatedFromMemberFunction())
+    return getDefinitionOrSelf(MFD);
+
+  return nullptr;
 }
 
 FunctionTemplateDecl *FunctionDecl::getPrimaryTemplate() const {
@@ -3744,6 +3740,20 @@ void EnumDecl::completeDefinition(QualType NewType,
   TagDecl::completeDefinition();
 }
 
+bool EnumDecl::isClosed() const {
+  if (const auto *A = getAttr<EnumExtensibilityAttr>())
+    return A->getExtensibility() == EnumExtensibilityAttr::Closed;
+  return true;
+}
+
+bool EnumDecl::isClosedFlag() const {
+  return isClosed() && hasAttr<FlagEnumAttr>();
+}
+
+bool EnumDecl::isClosedNonFlag() const {
+  return isClosed() && !hasAttr<FlagEnumAttr>();
+}
+
 TemplateSpecializationKind EnumDecl::getTemplateSpecializationKind() const {
   if (MemberSpecializationInfo *MSI = getMemberSpecializationInfo())
     return MSI->getTemplateSpecializationKind();
@@ -3768,7 +3778,7 @@ EnumDecl *EnumDecl::getTemplateInstantiationPattern() const {
       EnumDecl *ED = getInstantiatedFromMemberEnum();
       while (auto *NewED = ED->getInstantiatedFromMemberEnum())
         ED = NewED;
-      return ED;
+      return getDefinitionOrSelf(ED);
     }
   }
 
@@ -4096,15 +4106,19 @@ void ImplicitParamDecl::anchor() { }
 
 ImplicitParamDecl *ImplicitParamDecl::Create(ASTContext &C, DeclContext *DC,
                                              SourceLocation IdLoc,
-                                             IdentifierInfo *Id,
-                                             QualType Type) {
-  return new (C, DC) ImplicitParamDecl(C, DC, IdLoc, Id, Type);
+                                             IdentifierInfo *Id, QualType Type,
+                                             ImplicitParamKind ParamKind) {
+  return new (C, DC) ImplicitParamDecl(C, DC, IdLoc, Id, Type, ParamKind);
+}
+
+ImplicitParamDecl *ImplicitParamDecl::Create(ASTContext &C, QualType Type,
+                                             ImplicitParamKind ParamKind) {
+  return new (C, nullptr) ImplicitParamDecl(C, Type, ParamKind);
 }
 
 ImplicitParamDecl *ImplicitParamDecl::CreateDeserialized(ASTContext &C,
                                                          unsigned ID) {
-  return new (C, ID) ImplicitParamDecl(C, nullptr, SourceLocation(), nullptr,
-                                       QualType());
+  return new (C, ID) ImplicitParamDecl(C, QualType(), ImplicitParamKind::Other);
 }
 
 FunctionDecl *FunctionDecl::Create(ASTContext &C, DeclContext *DC,
@@ -4228,6 +4242,30 @@ TagDecl *TypedefNameDecl::getAnonDeclWithTypedefName(bool AnyRedecl) const {
   }
 
   return nullptr;
+}
+
+bool TypedefNameDecl::isTransparentTagSlow() const {
+  auto determineIsTransparent = [&]() {
+    if (auto *TT = getUnderlyingType()->getAs<TagType>()) {
+      if (auto *TD = TT->getDecl()) {
+        if (TD->getName() != getName())
+          return false;
+        SourceLocation TTLoc = getLocation();
+        SourceLocation TDLoc = TD->getLocation();
+        if (!TTLoc.isMacroID() || !TDLoc.isMacroID())
+          return false;
+        SourceManager &SM = getASTContext().getSourceManager();
+        return SM.getSpellingLoc(TTLoc) == SM.getSpellingLoc(TDLoc);
+      }
+    }
+    return false;
+  };
+
+  bool isTransparent = determineIsTransparent();
+  CacheIsTransparentTag = 1;
+  if (isTransparent)
+    CacheIsTransparentTag |= 0x2;
+  return isTransparent;
 }
 
 TypedefDecl *TypedefDecl::CreateDeserialized(ASTContext &C, unsigned ID) {

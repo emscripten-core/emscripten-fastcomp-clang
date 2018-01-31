@@ -703,31 +703,30 @@ private:
     ObjCMethodSummaries[ObjCSummaryKey(ClsII, S)]  = Summ;
   }
 
+  template <typename... Keywords>
   void addMethodSummary(IdentifierInfo *ClsII, ObjCMethodSummariesTy &Summaries,
-                        const RetainSummary *Summ, va_list argp) {
-    Selector S = getKeywordSelector(Ctx, argp);
+                        const RetainSummary *Summ, Keywords *... Kws) {
+    Selector S = getKeywordSelector(Ctx, Kws...);
     Summaries[ObjCSummaryKey(ClsII, S)] = Summ;
   }
 
-  void addInstMethSummary(const char* Cls, const RetainSummary * Summ, ...) {
-    va_list argp;
-    va_start(argp, Summ);
-    addMethodSummary(&Ctx.Idents.get(Cls), ObjCMethodSummaries, Summ, argp);
-    va_end(argp);
+  template <typename... Keywords>
+  void addInstMethSummary(const char *Cls, const RetainSummary *Summ,
+                          Keywords *... Kws) {
+    addMethodSummary(&Ctx.Idents.get(Cls), ObjCMethodSummaries, Summ, Kws...);
   }
 
-  void addClsMethSummary(const char* Cls, const RetainSummary * Summ, ...) {
-    va_list argp;
-    va_start(argp, Summ);
-    addMethodSummary(&Ctx.Idents.get(Cls),ObjCClassMethodSummaries, Summ, argp);
-    va_end(argp);
+  template <typename... Keywords>
+  void addClsMethSummary(const char *Cls, const RetainSummary *Summ,
+                         Keywords *... Kws) {
+    addMethodSummary(&Ctx.Idents.get(Cls), ObjCClassMethodSummaries, Summ,
+                     Kws...);
   }
 
-  void addClsMethSummary(IdentifierInfo *II, const RetainSummary * Summ, ...) {
-    va_list argp;
-    va_start(argp, Summ);
-    addMethodSummary(II, ObjCClassMethodSummaries, Summ, argp);
-    va_end(argp);
+  template <typename... Keywords>
+  void addClsMethSummary(IdentifierInfo *II, const RetainSummary *Summ,
+                         Keywords *... Kws) {
+    addMethodSummary(II, ObjCClassMethodSummaries, Summ, Kws...);
   }
 
 public:
@@ -1640,20 +1639,16 @@ void RetainSummaryManager::InitializeMethodSummaries() {
   addClassMethSummary("NSAutoreleasePool", "new", NoTrackYet);
 
   // Create summaries QCRenderer/QCView -createSnapShotImageOfType:
-  addInstMethSummary("QCRenderer", AllocSumm,
-                     "createSnapshotImageOfType", nullptr);
-  addInstMethSummary("QCView", AllocSumm,
-                     "createSnapshotImageOfType", nullptr);
+  addInstMethSummary("QCRenderer", AllocSumm, "createSnapshotImageOfType");
+  addInstMethSummary("QCView", AllocSumm, "createSnapshotImageOfType");
 
   // Create summaries for CIContext, 'createCGImage' and
   // 'createCGLayerWithSize'.  These objects are CF objects, and are not
   // automatically garbage collected.
-  addInstMethSummary("CIContext", CFAllocSumm,
-                     "createCGImage", "fromRect", nullptr);
+  addInstMethSummary("CIContext", CFAllocSumm, "createCGImage", "fromRect");
   addInstMethSummary("CIContext", CFAllocSumm, "createCGImage", "fromRect",
-                     "format", "colorSpace", nullptr);
-  addInstMethSummary("CIContext", CFAllocSumm, "createCGLayerWithSize", "info",
-                     nullptr);
+                     "format", "colorSpace");
+  addInstMethSummary("CIContext", CFAllocSumm, "createCGLayerWithSize", "info");
 }
 
 //===----------------------------------------------------------------------===//
@@ -2661,6 +2656,7 @@ public:
                      const InvalidatedSymbols *invalidated,
                      ArrayRef<const MemRegion *> ExplicitRegions,
                      ArrayRef<const MemRegion *> Regions,
+                     const LocationContext* LCtx,
                      const CallEvent *Call) const;
 
   void checkPreStmt(const ReturnStmt *S, CheckerContext &C) const;
@@ -3647,7 +3643,7 @@ void RetainCountChecker::checkBind(SVal loc, SVal val, const Stmt *S,
       // same state.
       SVal StoredVal = state->getSVal(regionLoc->getRegion());
       if (StoredVal != val)
-        escapes = (state == (state->bindLoc(*regionLoc, val)));
+        escapes = (state == (state->bindLoc(*regionLoc, val, C.getLocationContext())));
     }
     if (!escapes) {
       // Case 4: We do not currently model what happens when a symbol is
@@ -3714,10 +3710,11 @@ ProgramStateRef RetainCountChecker::evalAssume(ProgramStateRef state,
 
 ProgramStateRef
 RetainCountChecker::checkRegionChanges(ProgramStateRef state,
-                                    const InvalidatedSymbols *invalidated,
-                                    ArrayRef<const MemRegion *> ExplicitRegions,
-                                    ArrayRef<const MemRegion *> Regions,
-                                    const CallEvent *Call) const {
+                                       const InvalidatedSymbols *invalidated,
+                                       ArrayRef<const MemRegion *> ExplicitRegions,
+                                       ArrayRef<const MemRegion *> Regions,
+                                       const LocationContext *LCtx,
+                                       const CallEvent *Call) const {
   if (!invalidated)
     return state;
 

@@ -85,7 +85,8 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
   case PrintDeclContext:       return llvm::make_unique<DeclContextPrintAction>();
   case PrintPreamble:          return llvm::make_unique<PrintPreambleAction>();
   case PrintPreprocessedInput: {
-    if (CI.getPreprocessorOutputOpts().RewriteIncludes)
+    if (CI.getPreprocessorOutputOpts().RewriteIncludes ||
+        CI.getPreprocessorOutputOpts().RewriteImports)
       return llvm::make_unique<RewriteIncludesAction>();
     return llvm::make_unique<PrintPreprocessedAction>();
   }
@@ -174,7 +175,7 @@ CreateFrontendAction(CompilerInstance &CI) {
 bool clang::ExecuteCompilerInvocation(CompilerInstance *Clang) {
   // Honor -help.
   if (Clang->getFrontendOpts().ShowHelp) {
-    std::unique_ptr<OptTable> Opts(driver::createDriverOptTable());
+    std::unique_ptr<OptTable> Opts = driver::createDriverOptTable();
     Opts->PrintHelp(llvm::outs(), "clang -cc1",
                     "LLVM 'Clang' Compiler: http://clang.llvm.org",
                     /*Include=*/ driver::options::CC1Option, /*Exclude=*/ 0);
