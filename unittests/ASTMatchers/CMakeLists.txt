@@ -23,6 +23,7 @@ if (MSVC)
 endif()
 
 target_link_libraries(ASTMatchersTests
+  PRIVATE
   clangAST
   clangASTMatchers
   clangBasic

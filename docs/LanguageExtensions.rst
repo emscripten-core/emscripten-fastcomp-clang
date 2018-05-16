@@ -139,6 +139,35 @@ and following ``__`` (double underscore) to avoid interference from a macro with
 the same name.  For instance, ``gnu::__const__`` can be used instead of
 ``gnu::const``.
 
+``__has_c_attribute``
+---------------------
+
+This function-like macro takes a single argument that is the name of an
+attribute exposed with the double square-bracket syntax in C mode. The argument
+can either be a single identifier or a scoped identifier. If the attribute is
+supported, a nonzero value is returned. If the attribute is not supported by the
+current compilation target, this macro evaluates to 0. It can be used like this:
+
+.. code-block:: c
+
+  #ifndef __has_c_attribute         // Optional of course.
+    #define __has_c_attribute(x) 0  // Compatibility with non-clang compilers.
+  #endif
+
+  ...
+  #if __has_c_attribute(fallthrough)
+    #define FALLTHROUGH [[fallthrough]]
+  #else
+    #define FALLTHROUGH
+  #endif
+  ...
+
+The attribute identifier (but not scope) can also be specified with a preceding
+and following ``__`` (double underscore) to avoid interference from a macro with
+the same name.  For instance, ``gnu::__const__`` can be used instead of
+``gnu::const``.
+
+
 ``__has_attribute``
 -------------------
 
@@ -435,6 +464,49 @@ const_cast                       no      no      no      no
 ============================== ======= ======= ======= =======
 
 See also :ref:`langext-__builtin_shufflevector`, :ref:`langext-__builtin_convertvector`.
+
+Half-Precision Floating Point
+=============================
+
+Clang supports two half-precision (16-bit) floating point types: ``__fp16`` and
+``_Float16``. ``__fp16`` is defined in the ARM C Language Extensions (`ACLE
+<http://infocenter.arm.com/help/topic/com.arm.doc.ihi0053d/IHI0053D_acle_2_1.pdf>`_)
+and ``_Float16`` in ISO/IEC TS 18661-3:2015.
+
+``__fp16`` is a storage and interchange format only. This means that values of
+``__fp16`` promote to (at least) float when used in arithmetic operations.
+There are two ``__fp16`` formats. Clang supports the IEEE 754-2008 format and
+not the ARM alternative format.
+
+ISO/IEC TS 18661-3:2015 defines C support for additional floating point types.
+``_FloatN`` is defined as a binary floating type, where the N suffix denotes
+the number of bits and is 16, 32, 64, or greater and equal to 128 and a
+multiple of 32. Clang supports ``_Float16``. The difference from ``__fp16`` is
+that arithmetic on ``_Float16`` is performed in half-precision, thus it is not
+a storage-only format. ``_Float16`` is available as a source language type in
+both C and C++ mode.
+
+It is recommended that portable code use the ``_Float16`` type because
+``__fp16`` is an ARM C-Language Extension (ACLE), whereas ``_Float16`` is
+defined by the C standards committee, so using ``_Float16`` will not prevent
+code from being ported to architectures other than Arm.  Also, ``_Float16``
+arithmetic and operations will directly map on half-precision instructions when
+they are available (e.g. Armv8.2-A), avoiding conversions to/from
+single-precision, and thus will result in more performant code. If
+half-precision instructions are unavailable, values will be promoted to
+single-precision, similar to the semantics of ``__fp16`` except that the
+results will be stored in single-precision.
+
+In an arithmetic operation where one operand is of ``__fp16`` type and the
+other is of ``_Float16`` type, the ``_Float16`` type is first converted to
+``__fp16`` type and then the operation is completed as if both operands were of
+``__fp16`` type.
+
+To define a ``_Float16`` literal, suffix ``f16`` can be appended to the compile-time
+constant declaration. There is no default argument promotion for ``_Float16``; this
+applies to the standard floating types only. As a consequence, for example, an
+explicit cast is required for printing a ``_Float16`` value (there is no string
+format specifier for ``_Float16``).
 
 Messages on ``deprecated`` and ``unavailable`` Attributes
 =========================================================
@@ -1271,6 +1343,87 @@ Further examples of these attributes are available in the static analyzer's `lis
 Query for these features with ``__has_attribute(ns_consumed)``,
 ``__has_attribute(ns_returns_retained)``, etc.
 
+Objective-C @available
+----------------------
+
+It is possible to use the newest SDK but still build a program that can run on
+older versions of macOS and iOS by passing ``-mmacosx-version-min=`` /
+``-miphoneos-version-min=``.
+
+Before LLVM 5.0, when calling a function that exists only in the OS that's
+newer than the target OS (as determined by the minimum deployment version),
+programmers had to carefully check if the function exists at runtime, using
+null checks for weakly-linked C functions, ``+class`` for Objective-C classes,
+and ``-respondsToSelector:`` or ``+instancesRespondToSelector:`` for
+Objective-C methods.  If such a check was missed, the program would compile
+fine, run fine on newer systems, but crash on older systems.
+
+As of LLVM 5.0, ``-Wunguarded-availability`` uses the `availability attributes
+<http://clang.llvm.org/docs/AttributeReference.html#availability>`_ together
+with the new ``@available()`` keyword to assist with this issue.
+When a method that's introduced in the OS newer than the target OS is called, a
+-Wunguarded-availability warning is emitted if that call is not guarded:
+
+.. code-block:: objc
+
+  void my_fun(NSSomeClass* var) {
+    // If fancyNewMethod was added in e.g. macOS 10.12, but the code is
+    // built with -mmacosx-version-min=10.11, then this unconditional call
+    // will emit a -Wunguarded-availability warning:
+    [var fancyNewMethod];
+  }
+
+To fix the warning and to avoid the crash on macOS 10.11, wrap it in
+``if(@available())``:
+
+.. code-block:: objc
+
+  void my_fun(NSSomeClass* var) {
+    if (@available(macOS 10.12, *)) {
+      [var fancyNewMethod];
+    } else {
+      // Put fallback behavior for old macOS versions (and for non-mac
+      // platforms) here.
+    }
+  }
+
+The ``*`` is required and means that platforms not explicitly listed will take
+the true branch, and the compiler will emit ``-Wunguarded-availability``
+warnings for unlisted platforms based on those platform's deployment target.
+More than one platform can be listed in ``@available()``:
+
+.. code-block:: objc
+
+  void my_fun(NSSomeClass* var) {
+    if (@available(macOS 10.12, iOS 10, *)) {
+      [var fancyNewMethod];
+    }
+  }
+
+If the caller of ``my_fun()`` already checks that ``my_fun()`` is only called
+on 10.12, then add an `availability attribute
+<http://clang.llvm.org/docs/AttributeReference.html#availability>`_ to it,
+which will also suppress the warning and require that calls to my_fun() are
+checked:
+
+.. code-block:: objc
+
+  API_AVAILABLE(macos(10.12)) void my_fun(NSSomeClass* var) {
+    [var fancyNewMethod];  // Now ok.
+  }
+
+``@available()`` is only available in Objective-C code.  To use the feature
+in C and C++ code, use the ``__builtin_available()`` spelling instead.
+
+If existing code uses null checks or ``-respondsToSelector:``, it should
+be changed to use ``@available()`` (or ``__builtin_available``) instead.
+
+``-Wunguarded-availability`` is disabled by default, but
+``-Wunguarded-availability-new``, which only emits this warning for APIs
+that have been introduced in macOS >= 10.13, iOS >= 11, watchOS >= 4 and
+tvOS >= 11, is enabled by default.
+
+.. _langext-overloading:
 
 Objective-C++ ABI: protocol-qualifier mangling of parameters
 ------------------------------------------------------------
@@ -1286,8 +1439,6 @@ parameters of protocol-qualified type.
 
 Query the presence of this new mangling with
 ``__has_feature(objc_protocol_qualifier_mangling)``.
-
-.. _langext-overloading:
 
 Initializer lists for complex numbers in C
 ==========================================
@@ -1850,7 +2001,13 @@ provided, with values corresponding to the enumerators of C11's
 ``memory_order`` enumeration.
 
 (Note that Clang additionally provides GCC-compatible ``__atomic_*``
-builtins)
+builtins and OpenCL 2.0 ``__opencl_atomic_*`` builtins. The OpenCL 2.0
+atomic builtins are an explicit form of the corresponding OpenCL 2.0
+builtin function, and are named with a ``__opencl_`` prefix. The macros
+``__OPENCL_MEMORY_SCOPE_WORK_ITEM``, ``__OPENCL_MEMORY_SCOPE_WORK_GROUP``,
+``__OPENCL_MEMORY_SCOPE_DEVICE``, ``__OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES``,
+and ``__OPENCL_MEMORY_SCOPE_SUB_GROUP`` are provided, with values
+corresponding to the enumerators of OpenCL's ``memory_scope`` enumeration.)
 
 Low-level ARM exclusive memory builtins
 ---------------------------------------

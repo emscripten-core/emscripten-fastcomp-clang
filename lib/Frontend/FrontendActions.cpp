@@ -80,9 +80,12 @@ DeclContextPrintAction::CreateASTConsumer(CompilerInstance &CI,
 std::unique_ptr<ASTConsumer>
 GeneratePCHAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   std::string Sysroot;
+  if (!ComputeASTConsumerArguments(CI, /*ref*/ Sysroot))
+    return nullptr;
+
   std::string OutputFile;
   std::unique_ptr<raw_pwrite_stream> OS =
-      ComputeASTConsumerArguments(CI, InFile, Sysroot, OutputFile);
+      CreateOutputFile(CI, InFile, /*ref*/ OutputFile);
   if (!OS)
     return nullptr;
 
@@ -103,17 +106,20 @@ GeneratePCHAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   return llvm::make_unique<MultiplexConsumer>(std::move(Consumers));
 }
 
-std::unique_ptr<raw_pwrite_stream>
-GeneratePCHAction::ComputeASTConsumerArguments(CompilerInstance &CI,
-                                               StringRef InFile,
-                                               std::string &Sysroot,
-                                               std::string &OutputFile) {
+bool GeneratePCHAction::ComputeASTConsumerArguments(CompilerInstance &CI,
+                                                    std::string &Sysroot) {
   Sysroot = CI.getHeaderSearchOpts().Sysroot;
   if (CI.getFrontendOpts().RelocatablePCH && Sysroot.empty()) {
     CI.getDiagnostics().Report(diag::err_relocatable_without_isysroot);
-    return nullptr;
+    return false;
   }
 
+  return true;
+}
+
+std::unique_ptr<llvm::raw_pwrite_stream>
+GeneratePCHAction::CreateOutputFile(CompilerInstance &CI, StringRef InFile,
+                                    std::string &OutputFile) {
   // We use createOutputFile here because this is exposed via libclang, and we
   // must disable the RemoveFileOnSignal behavior.
   // We use a temporary to avoid race conditions.
@@ -163,6 +169,16 @@ GenerateModuleAction::CreateASTConsumer(CompilerInstance &CI,
   return llvm::make_unique<MultiplexConsumer>(std::move(Consumers));
 }
 
+bool GenerateModuleFromModuleMapAction::BeginSourceFileAction(
+    CompilerInstance &CI) {
+  if (!CI.getLangOpts().Modules) {
+    CI.getDiagnostics().Report(diag::err_module_build_requires_fmodules);
+    return false;
+  }
+
+  return GenerateModuleAction::BeginSourceFileAction(CI);
+}
+
 std::unique_ptr<raw_pwrite_stream>
 GenerateModuleFromModuleMapAction::CreateOutputFile(CompilerInstance &CI,
                                                     StringRef InFile) {
@@ -175,8 +191,8 @@ GenerateModuleFromModuleMapAction::CreateOutputFile(CompilerInstance &CI,
 
     HeaderSearch &HS = CI.getPreprocessor().getHeaderSearchInfo();
     CI.getFrontendOpts().OutputFile =
-        HS.getModuleFileName(CI.getLangOpts().CurrentModule, ModuleMapFile,
-                             /*UsePrebuiltPath=*/false);
+        HS.getCachedModuleFileName(CI.getLangOpts().CurrentModule,
+                                   ModuleMapFile);
   }
 
   // We use createOutputFile here because this is exposed via libclang, and we
@@ -230,7 +246,7 @@ void VerifyPCHAction::ExecuteAction() {
   bool Preamble = CI.getPreprocessorOpts().PrecompiledPreambleBytes.first != 0;
   const std::string &Sysroot = CI.getHeaderSearchOpts().Sysroot;
   std::unique_ptr<ASTReader> Reader(new ASTReader(
-      CI.getPreprocessor(), CI.getASTContext(), CI.getPCHContainerReader(),
+      CI.getPreprocessor(), &CI.getASTContext(), CI.getPCHContainerReader(),
       CI.getFrontendOpts().ModuleFileExtensions,
       Sysroot.empty() ? "" : Sysroot.c_str(),
       /*DisableValidation*/ false,
@@ -581,7 +597,7 @@ void PrintPreambleAction::ExecuteAction() {
   auto Buffer = CI.getFileManager().getBufferForFile(getCurrentFile());
   if (Buffer) {
     unsigned Preamble =
-        Lexer::ComputePreamble((*Buffer)->getBuffer(), CI.getLangOpts()).first;
+        Lexer::ComputePreamble((*Buffer)->getBuffer(), CI.getLangOpts()).Size;
     llvm::outs().write((*Buffer)->getBufferStart(), Preamble);
   }
 }

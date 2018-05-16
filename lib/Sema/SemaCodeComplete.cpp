@@ -10,10 +10,11 @@
 //  This file defines the code-completion semantic actions.
 //
 //===----------------------------------------------------------------------===//
-#include "clang/Sema/SemaInternal.h"
+#include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/QualTypeNames.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/MacroInfo.h"
@@ -23,6 +24,7 @@
 #include "clang/Sema/Overload.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
+#include "clang/Sema/SemaInternal.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -46,7 +48,7 @@ namespace {
     /// the result set (when it returns true) and which declarations should be
     /// filtered out (returns false).
     typedef bool (ResultBuilder::*LookupFilter)(const NamedDecl *) const;
-    
+
     typedef CodeCompletionResult Result;
     
   private:
@@ -741,8 +743,18 @@ unsigned ResultBuilder::getBasePriority(const NamedDecl *ND) {
   }
 
   const DeclContext *DC = ND->getDeclContext()->getRedeclContext();
-  if (DC->isRecord() || isa<ObjCContainerDecl>(DC))
+  if (DC->isRecord() || isa<ObjCContainerDecl>(DC)) {
+    // Explicit destructor calls are very rare.
+    if (isa<CXXDestructorDecl>(ND))
+      return CCP_Unlikely;
+    // Explicit operator and conversion function calls are also very rare.
+    auto DeclNameKind = ND->getDeclName().getNameKind();
+    if (DeclNameKind == DeclarationName::CXXOperatorName ||
+        DeclNameKind == DeclarationName::CXXLiteralOperatorName ||
+        DeclNameKind == DeclarationName::CXXConversionFunctionName)
+      return CCP_Unlikely;
     return CCP_MemberDeclaration;
+  }
 
   // Content-based decisions.
   if (isa<EnumConstantDecl>(ND))
@@ -1070,9 +1082,16 @@ bool ResultBuilder::IsOrdinaryName(const NamedDecl *ND) const {
 /// ordinary name lookup but is not a type name.
 bool ResultBuilder::IsOrdinaryNonTypeName(const NamedDecl *ND) const {
   ND = cast<NamedDecl>(ND->getUnderlyingDecl());
-  if (isa<TypeDecl>(ND) || isa<ObjCInterfaceDecl>(ND))
+  if (isa<TypeDecl>(ND))
     return false;
-  
+  // Objective-C interfaces names are not filtered by this method because they
+  // can be used in a class property expression. We can still filter out
+  // @class declarations though.
+  if (const auto *ID = dyn_cast<ObjCInterfaceDecl>(ND)) {
+    if (!ID->getDefinition())
+      return false;
+  }
+
   unsigned IDNS = Decl::IDNS_Ordinary | Decl::IDNS_LocalExtern;
   if (SemaRef.getLangOpts().CPlusPlus)
     IDNS |= Decl::IDNS_Tag | Decl::IDNS_Namespace | Decl::IDNS_Member;
@@ -1401,7 +1420,7 @@ static void AddFunctionSpecifiers(Sema::ParserCompletionContext CCC,
       Results.AddResult(Result("mutable"));
       Results.AddResult(Result("virtual"));
     }    
-    // Fall through
+    LLVM_FALLTHROUGH;
 
   case Sema::PCC_ObjCInterface:
   case Sema::PCC_ObjCImplementation:
@@ -1484,6 +1503,7 @@ static PrintingPolicy getCompletionPrintingPolicy(const ASTContext &Context,
   Policy.AnonymousTagLocations = false;
   Policy.SuppressStrongLifetime = true;
   Policy.SuppressUnwrittenScope = true;
+  Policy.SuppressScope = true;
   return Policy;
 }
 
@@ -1618,7 +1638,7 @@ static void AddOrdinaryNameResults(Sema::ParserCompletionContext CCC,
       AddObjCTopLevelResults(Results, true);
       
     AddTypedefResult(Results);
-    // Fall through
+    LLVM_FALLTHROUGH;
 
   case Sema::PCC_Class:
     if (SemaRef.getLangOpts().CPlusPlus) {
@@ -1647,26 +1667,28 @@ static void AddOrdinaryNameResults(Sema::ParserCompletionContext CCC,
       if (CCC == Sema::PCC_Class) {
         AddTypedefResult(Results);
 
+        bool IsNotInheritanceScope =
+            !(S->getFlags() & Scope::ClassInheritanceScope);
         // public:
         Builder.AddTypedTextChunk("public");
-        if (Results.includeCodePatterns())
+        if (IsNotInheritanceScope && Results.includeCodePatterns())
           Builder.AddChunk(CodeCompletionString::CK_Colon);
         Results.AddResult(Result(Builder.TakeString()));
 
         // protected:
         Builder.AddTypedTextChunk("protected");
-        if (Results.includeCodePatterns())
+        if (IsNotInheritanceScope && Results.includeCodePatterns())
           Builder.AddChunk(CodeCompletionString::CK_Colon);
         Results.AddResult(Result(Builder.TakeString()));
 
         // private:
         Builder.AddTypedTextChunk("private");
-        if (Results.includeCodePatterns())
+        if (IsNotInheritanceScope && Results.includeCodePatterns())
           Builder.AddChunk(CodeCompletionString::CK_Colon);
         Results.AddResult(Result(Builder.TakeString()));
       }
     }
-    // Fall through
+    LLVM_FALLTHROUGH;
 
   case Sema::PCC_Template:
   case Sema::PCC_MemberTemplate:
@@ -2126,9 +2148,10 @@ static void AddResultTypeChunk(ASTContext &Context,
       T = Method->getSendResultType(BaseType);
     else
       T = Method->getReturnType();
-  } else if (const EnumConstantDecl *Enumerator = dyn_cast<EnumConstantDecl>(ND))
+  } else if (const EnumConstantDecl *Enumerator = dyn_cast<EnumConstantDecl>(ND)) {
     T = Context.getTypeDeclType(cast<TypeDecl>(Enumerator->getDeclContext()));
-  else if (isa<UnresolvedUsingValueDecl>(ND)) {
+    T = clang::TypeName::getFullyQualifiedType(T, Context);
+  } else if (isa<UnresolvedUsingValueDecl>(ND)) {
     /* Do nothing: ignore unresolved using declarations*/
   } else if (const ObjCIvarDecl *Ivar = dyn_cast<ObjCIvarDecl>(ND)) {
     if (!BaseType.isNull())
@@ -2398,6 +2421,34 @@ formatBlockPlaceholder(const PrintingPolicy &Policy, const NamedDecl *BlockDecl,
   return Result;
 }
 
+static std::string GetDefaultValueString(const ParmVarDecl *Param,
+                                         const SourceManager &SM,
+                                         const LangOptions &LangOpts) {
+  const SourceRange SrcRange = Param->getDefaultArgRange();
+  CharSourceRange CharSrcRange = CharSourceRange::getTokenRange(SrcRange);
+  bool Invalid = CharSrcRange.isInvalid();
+  if (Invalid)
+    return "";
+  StringRef srcText = Lexer::getSourceText(CharSrcRange, SM, LangOpts, &Invalid);
+  if (Invalid)
+    return "";
+
+  if (srcText.empty() || srcText == "=") {
+    // Lexer can't determine the value.
+    // This happens if the code is incorrect (for example class is forward declared).
+    return "";
+  }
+  std::string DefValue(srcText.str());
+  // FIXME: remove this check if the Lexer::getSourceText value is fixed and
+  // this value always has (or always does not have) '=' in front of it
+  if (DefValue.at(0) != '=') {
+    // If we don't have '=' in front of value.
+    // Lexer returns built-in types values without '=' and user-defined types values with it.
+    return " = " + DefValue;
+  }
+  return " " + DefValue;
+}
+
 /// \brief Add function parameter chunks to the given code completion string.
 static void AddFunctionParameterChunks(Preprocessor &PP,
                                        const PrintingPolicy &Policy,
@@ -2431,6 +2482,8 @@ static void AddFunctionParameterChunks(Preprocessor &PP,
     
     // Format the placeholder string.
     std::string PlaceholderStr = FormatFunctionParameter(Policy, Param);
+    if (Param->hasDefaultArg())
+      PlaceholderStr += GetDefaultValueString(Param, PP.getSourceManager(), PP.getLangOpts());
 
     if (Function->isVariadic() && P == N - 1)
       PlaceholderStr += ", ...";
@@ -2738,7 +2791,7 @@ CodeCompletionResult::CreateCodeCompletionString(ASTContext &Ctx,
     
     // Format a function-like macro with placeholders for the arguments.
     Result.AddChunk(CodeCompletionString::CK_LeftParen);
-    MacroInfo::arg_iterator A = MI->arg_begin(), AEnd = MI->arg_end();
+    MacroInfo::param_iterator A = MI->param_begin(), AEnd = MI->param_end();
     
     // C99 variadic macros add __VA_ARGS__ at the end. Skip it.
     if (MI->isC99Varargs()) {
@@ -2749,8 +2802,8 @@ CodeCompletionResult::CreateCodeCompletionString(ASTContext &Ctx,
       }
     }
     
-    for (MacroInfo::arg_iterator A = MI->arg_begin(); A != AEnd; ++A) {
-      if (A != MI->arg_begin())
+    for (MacroInfo::param_iterator A = MI->param_begin(); A != AEnd; ++A) {
+      if (A != MI->param_begin())
         Result.AddChunk(CodeCompletionString::CK_Comma);
 
       if (MI->isVariadic() && (A+1) == AEnd) {
@@ -3012,10 +3065,14 @@ static void AddOverloadParameterChunks(ASTContext &Context,
 
     // Format the placeholder string.
     std::string Placeholder;
-    if (Function)
-      Placeholder = FormatFunctionParameter(Policy, Function->getParamDecl(P));
-    else
+    if (Function) {
+      const ParmVarDecl *Param = Function->getParamDecl(P);
+      Placeholder = FormatFunctionParameter(Policy, Param);
+      if (Param->hasDefaultArg())
+        Placeholder += GetDefaultValueString(Param, Context.getSourceManager(), Context.getLangOpts());
+    } else {
       Placeholder = Prototype->getParamType(P).getAsString(Policy);
+    }
 
     if (P == CurrentArg)
       Result.AddCurrentParameterChunk(
@@ -3321,12 +3378,9 @@ static void MaybeAddOverrideCalls(Sema &S, DeclContext *InContext,
       return;
 
   PrintingPolicy Policy = getCompletionPrintingPolicy(S);
-  for (CXXMethodDecl::method_iterator M = Method->begin_overridden_methods(),
-                                   MEnd = Method->end_overridden_methods();
-       M != MEnd; ++M) {
+  for (const CXXMethodDecl *Overridden : Method->overridden_methods()) {
     CodeCompletionBuilder Builder(Results.getAllocator(),
                                   Results.getCodeCompletionTUInfo());
-    const CXXMethodDecl *Overridden = *M;
     if (Overridden->getCanonicalDecl() == Method->getCanonicalDecl())
       continue;
         
@@ -4117,8 +4171,8 @@ void Sema::CodeCompleteFunctionQualifiers(DeclSpec &DS, Declarator &D,
   AddTypeQualifierResults(DS, Results, LangOpts);
   if (LangOpts.CPlusPlus11) {
     Results.AddResult("noexcept");
-    if (D.getContext() == Declarator::MemberContext && !D.isCtorOrDtor() &&
-        !D.isStaticMember()) {
+    if (D.getContext() == DeclaratorContext::MemberContext &&
+        !D.isCtorOrDtor() && !D.isStaticMember()) {
       if (!VS || !VS->isFinalSpecified())
         Results.AddResult("final");
       if (!VS || !VS->isOverrideSpecified())
@@ -4248,13 +4302,17 @@ static void mergeCandidatesWithResults(Sema &SemaRef,
     std::stable_sort(
         CandidateSet.begin(), CandidateSet.end(),
         [&](const OverloadCandidate &X, const OverloadCandidate &Y) {
-          return isBetterOverloadCandidate(SemaRef, X, Y, Loc);
+          return isBetterOverloadCandidate(SemaRef, X, Y, Loc,
+                                           CandidateSet.getKind());
         });
 
     // Add the remaining viable overload candidates as code-completion results.
-    for (auto &Candidate : CandidateSet)
+    for (auto &Candidate : CandidateSet) {
+      if (Candidate.Function && Candidate.Function->isDeleted())
+        continue;
       if (Candidate.Viable)
         Results.push_back(ResultCandidate(Candidate.Function));
+    }
   }
 }
 
@@ -4345,9 +4403,11 @@ void Sema::CodeCompleteCall(Scope *S, Expr *Fn, ArrayRef<Expr *> Args) {
     ArgExprs.append(Args.begin(), Args.end());
     UnresolvedSet<8> Decls;
     Decls.append(UME->decls_begin(), UME->decls_end());
+    const bool FirstArgumentIsBase = !UME->isImplicitAccess() && UME->getBase();
     AddFunctionCandidates(Decls, ArgExprs, CandidateSet, TemplateArgs,
                           /*SuppressUsedConversions=*/false,
-                          /*PartialOverloading=*/true);
+                          /*PartialOverloading=*/true,
+                          FirstArgumentIsBase);
   } else {
     FunctionDecl *FD = nullptr;
     if (auto MCE = dyn_cast<MemberExpr>(NakedFn))
@@ -4540,9 +4600,19 @@ void Sema::CodeCompleteAssignmentRHS(Scope *S, Expr *LHS) {
 
 void Sema::CodeCompleteQualifiedId(Scope *S, CXXScopeSpec &SS,
                                    bool EnteringContext) {
-  if (!SS.getScopeRep() || !CodeCompleter)
+  if (SS.isEmpty() || !CodeCompleter)
     return;
 
+  // We want to keep the scope specifier even if it's invalid (e.g. the scope
+  // "a::b::" is not corresponding to any context/namespace in the AST), since
+  // it can be useful for global code completion which have information about
+  // contexts/symbols that are not in the AST.
+  if (SS.isInvalid()) {
+    CodeCompletionContext CC(CodeCompletionContext::CCC_Name);
+    CC.setCXXScopeSpecifier(SS);
+    HandleCodeCompleteResults(this, CodeCompleter, CC, nullptr, 0);
+    return;
+  }
   // Always pretend to enter a context to ensure that a dependent type
   // resolves to a dependent record.
   DeclContext *Ctx = computeDeclContext(SS, /*EnteringContext=*/true);
@@ -4558,7 +4628,7 @@ void Sema::CodeCompleteQualifiedId(Scope *S, CXXScopeSpec &SS,
                         CodeCompleter->getCodeCompletionTUInfo(),
                         CodeCompletionContext::CCC_Name);
   Results.EnterNewScope();
-  
+
   // The "template" keyword can follow "::" in the grammar, but only
   // put it into the grammar if the nested-name-specifier is dependent.
   NestedNameSpecifier *NNS = SS.getScopeRep();
@@ -4572,16 +4642,21 @@ void Sema::CodeCompleteQualifiedId(Scope *S, CXXScopeSpec &SS,
   // qualified-id completions.
   if (!EnteringContext)
     MaybeAddOverrideCalls(*this, Ctx, Results);
-  Results.ExitScope();  
-  
-  CodeCompletionDeclConsumer Consumer(Results, CurContext);
-  LookupVisibleDecls(Ctx, LookupOrdinaryName, Consumer,
-                     /*IncludeGlobalScope=*/true,
-                     /*IncludeDependentBases=*/true);
+  Results.ExitScope();
 
-  HandleCodeCompleteResults(this, CodeCompleter, 
-                            Results.getCompletionContext(),
-                            Results.data(),Results.size());
+  if (CodeCompleter->includeNamespaceLevelDecls() ||
+      (!Ctx->isNamespace() && !Ctx->isTranslationUnit())) {
+    CodeCompletionDeclConsumer Consumer(Results, CurContext);
+    LookupVisibleDecls(Ctx, LookupOrdinaryName, Consumer,
+                       /*IncludeGlobalScope=*/true,
+                       /*IncludeDependentBases=*/true);
+  }
+
+  auto CC = Results.getCompletionContext();
+  CC.setCXXScopeSpecifier(SS);
+
+  HandleCodeCompleteResults(this, CodeCompleter, CC, Results.data(),
+                            Results.size());
 }
 
 void Sema::CodeCompleteUsing(Scope *S) {
@@ -6596,7 +6671,7 @@ typedef llvm::DenseMap<
 /// indexed by selector so they can be easily found.
 static void FindImplementableMethods(ASTContext &Context,
                                      ObjCContainerDecl *Container,
-                                     bool WantInstanceMethods,
+                                     Optional<bool> WantInstanceMethods,
                                      QualType ReturnType,
                                      KnownMethodsMap &KnownMethods,
                                      bool InOriginalClass = true) {
@@ -6667,7 +6742,7 @@ static void FindImplementableMethods(ASTContext &Context,
   // we want the methods from this container to override any methods
   // we've previously seen with the same selector.
   for (auto *M : Container->methods()) {
-    if (M->isInstanceMethod() == WantInstanceMethods) {
+    if (!WantInstanceMethods || M->isInstanceMethod() == *WantInstanceMethods) {
       if (!ReturnType.isNull() &&
           !Context.hasSameUnqualifiedType(ReturnType, M->getReturnType()))
         continue;
@@ -7339,8 +7414,7 @@ static void AddObjCKeyValueCompletions(ObjCPropertyDecl *Property,
   }
 }
 
-void Sema::CodeCompleteObjCMethodDecl(Scope *S, 
-                                      bool IsInstanceMethod,
+void Sema::CodeCompleteObjCMethodDecl(Scope *S, Optional<bool> IsInstanceMethod,
                                       ParsedType ReturnTy) {
   // Determine the return type of the method we're declaring, if
   // provided.
@@ -7395,7 +7469,13 @@ void Sema::CodeCompleteObjCMethodDecl(Scope *S,
     ObjCMethodDecl *Method = M->second.getPointer();
     CodeCompletionBuilder Builder(Results.getAllocator(),
                                   Results.getCodeCompletionTUInfo());
-    
+
+    // Add the '-'/'+' prefix if it wasn't provided yet.
+    if (!IsInstanceMethod) {
+      Builder.AddTextChunk(Method->isInstanceMethod() ? "-" : "+");
+      Builder.AddChunk(CodeCompletionString::CK_HorizontalSpace);
+    }
+
     // If the result type was not already provided, add it to the
     // pattern as (type).
     if (ReturnType.isNull()) {
@@ -7497,11 +7577,13 @@ void Sema::CodeCompleteObjCMethodDecl(Scope *S,
     if (IFace)
       for (auto *Cat : IFace->visible_categories())
         Containers.push_back(Cat);
-    
-    for (unsigned I = 0, N = Containers.size(); I != N; ++I)
-      for (auto *P : Containers[I]->instance_properties())
-        AddObjCKeyValueCompletions(P, IsInstanceMethod, ReturnType, Context, 
-                                   KnownSelectors, Results);
+
+    if (IsInstanceMethod) {
+      for (unsigned I = 0, N = Containers.size(); I != N; ++I)
+        for (auto *P : Containers[I]->instance_properties())
+          AddObjCKeyValueCompletions(P, *IsInstanceMethod, ReturnType, Context,
+                                     KnownSelectors, Results);
+    }
   }
   
   Results.ExitScope();

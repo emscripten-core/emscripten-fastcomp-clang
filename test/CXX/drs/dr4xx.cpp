@@ -1,7 +1,7 @@
 // RUN: env ASAN_OPTIONS=detect_stack_use_after_return=0 %clang_cc1 -std=c++98 %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
 // RUN: env ASAN_OPTIONS=detect_stack_use_after_return=0 %clang_cc1 -std=c++11 %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
 // RUN: env ASAN_OPTIONS=detect_stack_use_after_return=0 %clang_cc1 -std=c++14 %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
-// RUN: env ASAN_OPTIONS=detect_stack_use_after_return=0 %clang_cc1 -std=c++1z %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
+// RUN: env ASAN_OPTIONS=detect_stack_use_after_return=0 %clang_cc1 -std=c++17 %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
 
 // FIXME: __SIZE_TYPE__ expands to 'long long' on some targets.
 __extension__ typedef __SIZE_TYPE__ size_t;
@@ -22,6 +22,9 @@ namespace dr401 { // dr401: yes
   class B {
   protected:
     typedef int type; // expected-note {{protected}}
+#if __cplusplus == 199711L
+    // expected-note@-2 {{protected}}
+#endif
   };
 
   class C {
@@ -507,16 +510,16 @@ namespace dr437 { // dr437: sup 1308
   struct S {
     void f() throw(S);
 #if __cplusplus > 201402L
-    // expected-error@-2 {{ISO C++1z does not allow}} expected-note@-2 {{use 'noexcept}}
+    // expected-error@-2 {{ISO C++17 does not allow}} expected-note@-2 {{use 'noexcept}}
 #endif
     void g() throw(T<S>);
 #if __cplusplus > 201402L
-    // expected-error@-2 {{ISO C++1z does not allow}} expected-note@-2 {{use 'noexcept}}
+    // expected-error@-2 {{ISO C++17 does not allow}} expected-note@-2 {{use 'noexcept}}
 #endif
     struct U;
     void h() throw(U);
 #if __cplusplus > 201402L
-    // expected-error@-2 {{ISO C++1z does not allow}} expected-note@-2 {{use 'noexcept}}
+    // expected-error@-2 {{ISO C++17 does not allow}} expected-note@-2 {{use 'noexcept}}
 #endif
     struct U {};
   };
@@ -593,10 +596,10 @@ namespace dr447 { // dr447: yes
     U<__builtin_offsetof(A, n)>::type a;
     U<__builtin_offsetof(T, n)>::type b; // expected-error +{{}} expected-warning 0+{{}}
     // as an extension, we allow the member-designator to include array indices
-    g(__builtin_offsetof(A, a[0])).h<int>(); // expected-error {{extension}}
-    g(__builtin_offsetof(A, a[N])).h<int>(); // expected-error {{extension}}
-    U<__builtin_offsetof(A, a[0])>::type c; // expected-error {{extension}}
-    U<__builtin_offsetof(A, a[N])>::type d; // expected-error {{extension}} expected-error +{{}} expected-warning 0+{{}}
+    g(__builtin_offsetof(A, a[0])).h<int>();
+    g(__builtin_offsetof(A, a[N])).h<int>();
+    U<__builtin_offsetof(A, a[0])>::type c;
+    U<__builtin_offsetof(A, a[N])>::type d; // expected-error +{{}} expected-warning 0+{{}}
   }
 }
 
@@ -1202,7 +1205,7 @@ namespace dr495 { // dr495: 3.5
   long n2 = s2;
 }
 
-namespace dr496 { // dr496: sup dr2094
+namespace dr496 { // dr496: sup 2094
   struct A { int n; };
   struct B { volatile int n; };
   int check1[ __is_trivially_copyable(const int) ? 1 : -1];

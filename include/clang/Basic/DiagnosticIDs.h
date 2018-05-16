@@ -18,6 +18,7 @@
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/StringRef.h"
+#include <vector>
 
 namespace clang {
   class DiagnosticsEngine;
@@ -25,19 +26,36 @@ namespace clang {
 
   // Import the diagnostic enums themselves.
   namespace diag {
+    // Size of each of the diagnostic categories.
+    enum {
+      DIAG_SIZE_COMMON        =  300,
+      DIAG_SIZE_DRIVER        =  200,
+      DIAG_SIZE_FRONTEND      =  100,
+      DIAG_SIZE_SERIALIZATION =  120,
+      DIAG_SIZE_LEX           =  400,
+      DIAG_SIZE_PARSE         =  500,
+      DIAG_SIZE_AST           =  150,
+      DIAG_SIZE_COMMENT       =  100,
+      DIAG_SIZE_CROSSTU       =  100,
+      DIAG_SIZE_SEMA          = 3500,
+      DIAG_SIZE_ANALYSIS      =  100,
+      DIAG_SIZE_REFACTORING   = 1000,
+    };
     // Start position for diagnostics.
     enum {
-      DIAG_START_COMMON        =                                 0,
-      DIAG_START_DRIVER        = DIAG_START_COMMON          +  300,
-      DIAG_START_FRONTEND      = DIAG_START_DRIVER          +  200,
-      DIAG_START_SERIALIZATION = DIAG_START_FRONTEND        +  100,
-      DIAG_START_LEX           = DIAG_START_SERIALIZATION   +  120,
-      DIAG_START_PARSE         = DIAG_START_LEX             +  400,
-      DIAG_START_AST           = DIAG_START_PARSE           +  500,
-      DIAG_START_COMMENT       = DIAG_START_AST             +  110,
-      DIAG_START_SEMA          = DIAG_START_COMMENT         +  100,
-      DIAG_START_ANALYSIS      = DIAG_START_SEMA            + 3500,
-      DIAG_UPPER_LIMIT         = DIAG_START_ANALYSIS        +  100
+      DIAG_START_COMMON        =                          0,
+      DIAG_START_DRIVER        = DIAG_START_COMMON        + DIAG_SIZE_COMMON,
+      DIAG_START_FRONTEND      = DIAG_START_DRIVER        + DIAG_SIZE_DRIVER,
+      DIAG_START_SERIALIZATION = DIAG_START_FRONTEND      + DIAG_SIZE_FRONTEND,
+      DIAG_START_LEX           = DIAG_START_SERIALIZATION + DIAG_SIZE_SERIALIZATION,
+      DIAG_START_PARSE         = DIAG_START_LEX           + DIAG_SIZE_LEX,
+      DIAG_START_AST           = DIAG_START_PARSE         + DIAG_SIZE_PARSE,
+      DIAG_START_COMMENT       = DIAG_START_AST           + DIAG_SIZE_AST,
+      DIAG_START_CROSSTU       = DIAG_START_COMMENT       + DIAG_SIZE_CROSSTU,
+      DIAG_START_SEMA          = DIAG_START_CROSSTU       + DIAG_SIZE_COMMENT,
+      DIAG_START_ANALYSIS      = DIAG_START_SEMA          + DIAG_SIZE_SEMA,
+      DIAG_START_REFACTORING   = DIAG_START_ANALYSIS      + DIAG_SIZE_ANALYSIS,
+      DIAG_UPPER_LIMIT         = DIAG_START_REFACTORING   + DIAG_SIZE_REFACTORING
     };
 
     class CustomDiagInfo;
@@ -263,6 +281,13 @@ public:
   /// are not SFINAE errors.
   static SFINAEResponse getDiagnosticSFINAEResponse(unsigned DiagID);
 
+  /// \brief Get the string of all diagnostic flags.
+  ///
+  /// \returns A list of all diagnostics flags as they would be written in a
+  /// command line invocation including their `no-` variants. For example:
+  /// `{"-Wempty-body", "-Wno-empty-body", ...}`
+  static std::vector<std::string> getDiagnosticFlags();
+
   /// \brief Get the set of all diagnostic IDs in the group with the given name.
   ///
   /// \param[out] Diags - On return, the diagnostics in the group.
@@ -271,8 +296,8 @@ public:
                              SmallVectorImpl<diag::kind> &Diags) const;
 
   /// \brief Get the set of all diagnostic IDs.
-  void getAllDiagnostics(diag::Flavor Flavor,
-                         SmallVectorImpl<diag::kind> &Diags) const;
+  static void getAllDiagnostics(diag::Flavor Flavor,
+                                std::vector<diag::kind> &Diags);
 
   /// \brief Get the diagnostic option with the closest edit distance to the
   /// given group name.

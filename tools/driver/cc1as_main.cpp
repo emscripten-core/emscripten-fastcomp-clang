@@ -202,9 +202,22 @@ bool AssemblerInvocation::CreateFromArgs(AssemblerInvocation &Opts,
   Opts.SaveTemporaryLabels = Args.hasArg(OPT_msave_temp_labels);
   // Any DebugInfoKind implies GenDwarfForAssembly.
   Opts.GenDwarfForAssembly = Args.hasArg(OPT_debug_info_kind_EQ);
-  // TODO: base this on -gz instead
-  if (Args.hasArg(OPT_compress_debug_sections))
-    Opts.CompressDebugSections = llvm::DebugCompressionType::GNU;
+
+  if (const Arg *A = Args.getLastArg(OPT_compress_debug_sections,
+                                     OPT_compress_debug_sections_EQ)) {
+    if (A->getOption().getID() == OPT_compress_debug_sections) {
+      // TODO: be more clever about the compression type auto-detection
+      Opts.CompressDebugSections = llvm::DebugCompressionType::GNU;
+    } else {
+      Opts.CompressDebugSections =
+          llvm::StringSwitch<llvm::DebugCompressionType>(A->getValue())
+              .Case("none", llvm::DebugCompressionType::None)
+              .Case("zlib", llvm::DebugCompressionType::Z)
+              .Case("zlib-gnu", llvm::DebugCompressionType::GNU)
+              .Default(llvm::DebugCompressionType::None);
+    }
+  }
+
   Opts.RelaxELFRelocations = Args.hasArg(OPT_mrelax_relocations);
   Opts.DwarfVersion = getLastArgIntValue(Args, OPT_dwarf_version_EQ, 2, Diags);
   Opts.DwarfDebugFlags = Args.getLastArgValue(OPT_dwarf_debug_flags);
@@ -343,7 +356,7 @@ static bool ExecuteAssembler(AssemblerInvocation &Opts,
     PIC = false;
   }
 
-  MOFI->InitMCObjectFileInfo(Triple(Opts.Triple), PIC, CodeModel::Default, Ctx);
+  MOFI->InitMCObjectFileInfo(Triple(Opts.Triple), PIC, Ctx);
   if (Opts.SaveTemporaryLabels)
     Ctx.setAllowTemporaryLabels(false);
   if (Opts.GenDwarfForAssembly)
@@ -384,7 +397,7 @@ static bool ExecuteAssembler(AssemblerInvocation &Opts,
     if (Opts.ShowEncoding) {
       CE = TheTarget->createMCCodeEmitter(*MCII, *MRI, Ctx);
       MCTargetOptions Options;
-      MAB = TheTarget->createMCAsmBackend(*MRI, Opts.Triple, Opts.CPU, Options);
+      MAB = TheTarget->createMCAsmBackend(*STI, *MRI, Options);
     }
     auto FOut = llvm::make_unique<formatted_raw_ostream>(*Out);
     Str.reset(TheTarget->createAsmStreamer(
@@ -402,12 +415,11 @@ static bool ExecuteAssembler(AssemblerInvocation &Opts,
 
     MCCodeEmitter *CE = TheTarget->createMCCodeEmitter(*MCII, *MRI, Ctx);
     MCTargetOptions Options;
-    MCAsmBackend *MAB = TheTarget->createMCAsmBackend(*MRI, Opts.Triple,
-                                                      Opts.CPU, Options);
+    MCAsmBackend *MAB = TheTarget->createMCAsmBackend(*STI, *MRI, Options);
     Triple T(Opts.Triple);
     Str.reset(TheTarget->createMCObjectStreamer(
-        T, Ctx, *MAB, *Out, CE, *STI, Opts.RelaxAll,
-        Opts.IncrementalLinkerCompatible,
+                T, Ctx, std::unique_ptr<MCAsmBackend>(MAB), *Out, std::unique_ptr<MCCodeEmitter>(CE), *STI,
+        Opts.RelaxAll, Opts.IncrementalLinkerCompatible,
         /*DWARFMustBeAtTheEnd*/ true));
     Str.get()->InitSections(Opts.NoExecStack);
   }
@@ -491,7 +503,8 @@ int cc1as_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   if (Asm.ShowHelp) {
     std::unique_ptr<OptTable> Opts(driver::createDriverOptTable());
     Opts->PrintHelp(llvm::outs(), "clang -cc1as", "Clang Integrated Assembler",
-                    /*Include=*/driver::options::CC1AsOption, /*Exclude=*/0);
+                    /*Include=*/driver::options::CC1AsOption, /*Exclude=*/0,
+                    /*ShowAllAliases=*/false);
     return 0;
   }
 

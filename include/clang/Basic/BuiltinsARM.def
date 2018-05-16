@@ -36,6 +36,7 @@ BUILTIN(__builtin_arm_smulwt, "iii", "nc")
 // Saturating arithmetic
 BUILTIN(__builtin_arm_qadd, "iii", "nc")
 BUILTIN(__builtin_arm_qsub, "iii", "nc")
+BUILTIN(__builtin_arm_qdbl, "ii", "nc")
 BUILTIN(__builtin_arm_ssat, "iiUi", "nc")
 BUILTIN(__builtin_arm_usat, "UiiUi", "nc")
 
@@ -215,10 +216,10 @@ LANGBUILTIN(_MoveFromCoprocessor2, "UiIUiIUiIUiIUiIUi", "", ALL_MS_LANGUAGES)
 LANGBUILTIN(_MoveToCoprocessor, "vUiIUiIUiIUiIUiIUi", "", ALL_MS_LANGUAGES)
 LANGBUILTIN(_MoveToCoprocessor2, "vUiIUiIUiIUiIUiIUi", "", ALL_MS_LANGUAGES)
 
-TARGET_HEADER_BUILTIN(_BitScanForward, "UcULi*ULi", "nh", "intrin.h", ALL_MS_LANGUAGES, "")
-TARGET_HEADER_BUILTIN(_BitScanReverse, "UcULi*ULi", "nh", "intrin.h", ALL_MS_LANGUAGES, "")
-TARGET_HEADER_BUILTIN(_BitScanForward64, "UcULi*ULLi", "nh", "intrin.h", ALL_MS_LANGUAGES, "")
-TARGET_HEADER_BUILTIN(_BitScanReverse64, "UcULi*ULLi", "nh", "intrin.h", ALL_MS_LANGUAGES, "")
+TARGET_HEADER_BUILTIN(_BitScanForward, "UcUNi*UNi", "nh", "intrin.h", ALL_MS_LANGUAGES, "")
+TARGET_HEADER_BUILTIN(_BitScanReverse, "UcUNi*UNi", "nh", "intrin.h", ALL_MS_LANGUAGES, "")
+TARGET_HEADER_BUILTIN(_BitScanForward64, "UcUNi*ULLi", "nh", "intrin.h", ALL_MS_LANGUAGES, "")
+TARGET_HEADER_BUILTIN(_BitScanReverse64, "UcUNi*ULLi", "nh", "intrin.h", ALL_MS_LANGUAGES, "")
 
 TARGET_HEADER_BUILTIN(_InterlockedAnd64,         "LLiLLiD*LLi", "nh", "intrin.h", ALL_MS_LANGUAGES, "")
 TARGET_HEADER_BUILTIN(_InterlockedDecrement64,   "LLiLLiD*",    "nh", "intrin.h", ALL_MS_LANGUAGES, "")

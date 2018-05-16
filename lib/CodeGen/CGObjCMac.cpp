@@ -1678,7 +1678,10 @@ struct NullReturnState {
 
   /// Complete the null-return operation.  It is valid to call this
   /// regardless of whether 'init' has been called.
-  RValue complete(CodeGenFunction &CGF, RValue result, QualType resultType,
+  RValue complete(CodeGenFunction &CGF,
+                  ReturnValueSlot returnSlot,
+                  RValue result,
+                  QualType resultType,
                   const CallArgList &CallArgs,
                   const ObjCMethodDecl *Method) {
     // If we never had to do a null-check, just use the raw result.
@@ -1745,7 +1748,8 @@ struct NullReturnState {
     // memory or (2) agg values in registers.
     if (result.isAggregate()) {
       assert(result.isAggregate() && "null init of non-aggregate result?");
-      CGF.EmitNullInitialization(result.getAggregateAddress(), resultType);
+      if (!returnSlot.isUnused())
+        CGF.EmitNullInitialization(result.getAggregateAddress(), resultType);
       if (contBB) CGF.EmitBlock(contBB);
       return result;
     }
@@ -2117,11 +2121,11 @@ CGObjCCommonMac::EmitMessageSend(CodeGen::CodeGenFunction &CGF,
     }
   }
 
-  NullReturnState nullReturn;
+  bool RequiresNullCheck = false;
 
   llvm::Constant *Fn = nullptr;
   if (CGM.ReturnSlotInterferesWithArgs(MSI.CallInfo)) {
-    if (ReceiverCanBeNull) nullReturn.init(CGF, Arg0);
+    if (ReceiverCanBeNull) RequiresNullCheck = true;
     Fn = (ObjCABI == 2) ?  ObjCTypes.getSendStretFn2(IsSuper)
       : ObjCTypes.getSendStretFn(IsSuper);
   } else if (CGM.ReturnTypeUsesFPRet(ResultType)) {
@@ -2134,22 +2138,29 @@ CGObjCCommonMac::EmitMessageSend(CodeGen::CodeGenFunction &CGF,
     // arm64 uses objc_msgSend for stret methods and yet null receiver check
     // must be made for it.
     if (ReceiverCanBeNull && CGM.ReturnTypeUsesSRet(MSI.CallInfo))
-      nullReturn.init(CGF, Arg0);
+      RequiresNullCheck = true;
     Fn = (ObjCABI == 2) ? ObjCTypes.getSendFn2(IsSuper)
       : ObjCTypes.getSendFn(IsSuper);
   }
 
+  // We don't need to emit a null check to zero out an indirect result if the
+  // result is ignored.
+  if (Return.isUnused())
+    RequiresNullCheck = false;
+
   // Emit a null-check if there's a consumed argument other than the receiver.
-  bool RequiresNullCheck = false;
-  if (ReceiverCanBeNull && CGM.getLangOpts().ObjCAutoRefCount && Method) {
+  if (!RequiresNullCheck && CGM.getLangOpts().ObjCAutoRefCount && Method) {
     for (const auto *ParamDecl : Method->parameters()) {
       if (ParamDecl->hasAttr<NSConsumedAttr>()) {
-        if (!nullReturn.NullBB)
-          nullReturn.init(CGF, Arg0);
         RequiresNullCheck = true;
         break;
       }
     }
+  }
+
+  NullReturnState nullReturn;
+  if (RequiresNullCheck) {
+    nullReturn.init(CGF, Arg0);
   }
   
   llvm::Instruction *CallSite;
@@ -2164,7 +2175,7 @@ CGObjCCommonMac::EmitMessageSend(CodeGen::CodeGenFunction &CGF,
     llvm::CallSite(CallSite).setDoesNotReturn();
   }
 
-  return nullReturn.complete(CGF, rvalue, ResultType, CallArgs,
+  return nullReturn.complete(CGF, Return, rvalue, ResultType, CallArgs,
                              RequiresNullCheck ? Method : nullptr);
 }
 
@@ -4874,10 +4885,7 @@ void CGObjCCommonMac::EmitImageInfo() {
   }
 
   // Indicate whether we're compiling this to run on a simulator.
-  const llvm::Triple &Triple = CGM.getTarget().getTriple();
-  if ((Triple.isiOS() || Triple.isWatchOS()) &&
-      (Triple.getArch() == llvm::Triple::x86 ||
-       Triple.getArch() == llvm::Triple::x86_64))
+  if (CGM.getTarget().getTriple().isSimulatorEnvironment())
     Mod.addModuleFlag(llvm::Module::Error, "Objective-C Is Simulated",
                       eImageInfo_ImageIsSimulated);
 
@@ -5073,6 +5081,11 @@ void IvarLayoutBuilder::visitField(const FieldDecl *field,
 
   // Drill down into arrays.
   uint64_t numElts = 1;
+  if (auto arrayType = CGM.getContext().getAsIncompleteArrayType(fieldType)) {
+    numElts = 0;
+    fieldType = arrayType->getElementType();
+  }
+  // Unlike incomplete arrays, constant arrays can be nested.
   while (auto arrayType = CGM.getContext().getAsConstantArrayType(fieldType)) {
     numElts *= arrayType->getSize().getZExtValue();
     fieldType = arrayType->getElementType();
@@ -6381,16 +6394,15 @@ llvm::Value *CGObjCNonFragileABIMac::GenerateProtocolRef(CodeGenFunction &CGF,
   llvm::GlobalVariable *PTGV = CGM.getModule().getGlobalVariable(ProtocolName);
   if (PTGV)
     return CGF.Builder.CreateAlignedLoad(PTGV, Align);
-  PTGV = new llvm::GlobalVariable(
-    CGM.getModule(),
-    Init->getType(), false,
-    llvm::GlobalValue::WeakAnyLinkage,
-    Init,
-    ProtocolName);
+  PTGV = new llvm::GlobalVariable(CGM.getModule(), Init->getType(), false,
+                                  llvm::GlobalValue::WeakAnyLinkage, Init,
+                                  ProtocolName);
   PTGV->setSection(GetSectionName("__objc_protorefs",
                                   "coalesced,no_dead_strip"));
   PTGV->setVisibility(llvm::GlobalValue::HiddenVisibility);
   PTGV->setAlignment(Align.getQuantity());
+  if (!CGM.getTriple().isOSBinFormatMachO())
+    PTGV->setComdat(CGM.getModule().getOrInsertComdat(ProtocolName));
   CGM.addCompilerUsedGlobal(PTGV);
   return CGF.Builder.CreateAlignedLoad(PTGV, Align);
 }
@@ -6605,10 +6617,14 @@ CGObjCNonFragileABIMac::ObjCIvarOffsetVariable(const ObjCInterfaceDecl *ID,
           Ivar->getAccessControl() == ObjCIvarDecl::Private ||
           Ivar->getAccessControl() == ObjCIvarDecl::Package;
 
-      if (ID->hasAttr<DLLExportAttr>() && !IsPrivateOrPackage)
-        IvarOffsetGV->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
-      else if (ID->hasAttr<DLLImportAttr>())
-        IvarOffsetGV->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+      const ObjCInterfaceDecl *ContainingID = Ivar->getContainingInterface();
+
+      if (ContainingID->hasAttr<DLLImportAttr>())
+        IvarOffsetGV
+            ->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+      else if (ContainingID->hasAttr<DLLExportAttr>() && !IsPrivateOrPackage)
+        IvarOffsetGV
+            ->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
     }
   }
   return IvarOffsetGV;
@@ -7074,7 +7090,7 @@ CGObjCNonFragileABIMac::EmitVTableMessageSend(CodeGenFunction &CGF,
   CGCallee callee(CGCalleeInfo(), calleePtr);
 
   RValue result = CGF.EmitCall(MSI.CallInfo, callee, returnSlot, args);
-  return nullReturn.complete(CGF, result, resultType, formalArgs,
+  return nullReturn.complete(CGF, returnSlot, result, resultType, formalArgs,
                              requiresnullCheck ? method : nullptr);
 }
 
@@ -7539,8 +7555,9 @@ CGObjCNonFragileABIMac::GetInterfaceEHType(const ObjCInterfaceDecl *ID,
   llvm::Value *VTableIdx = llvm::ConstantInt::get(CGM.Int32Ty, 2);
   ConstantInitBuilder builder(CGM);
   auto values = builder.beginStruct(ObjCTypes.EHTypeTy);
-  values.add(llvm::ConstantExpr::getGetElementPtr(VTableGV->getValueType(),
-                                                  VTableGV, VTableIdx));
+  values.add(
+    llvm::ConstantExpr::getInBoundsGetElementPtr(VTableGV->getValueType(),
+                                                 VTableGV, VTableIdx));
   values.add(GetClassName(ClassName));
   values.add(GetClassGlobal(ID, /*metaclass*/ false, NotForDefinition));
 

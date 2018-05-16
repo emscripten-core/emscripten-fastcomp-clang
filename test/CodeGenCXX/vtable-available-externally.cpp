@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 %s -I%S -triple=x86_64-apple-darwin10 -emit-llvm -o %t
-// RUN: %clang_cc1 %s -I%S -triple=x86_64-apple-darwin10 -O2 -disable-llvm-passes -emit-llvm -o %t.opt
+// RUN: %clang_cc1 %s -I%S -triple=x86_64-apple-darwin10 -std=c++98 -emit-llvm -o %t
+// RUN: %clang_cc1 %s -I%S -triple=x86_64-apple-darwin10 -std=c++98 -O2 -disable-llvm-passes -emit-llvm -o %t.opt
 // RUN: FileCheck --check-prefix=CHECK-TEST1 %s < %t
 // RUN: FileCheck --check-prefix=CHECK-TEST2 %s < %t
 // RUN: FileCheck --check-prefix=CHECK-TEST5 %s < %t
@@ -275,9 +275,8 @@ struct C {
   virtual D& operator=(const D&);
 };
 
-// Cannot emit D's vtable available_externally, because we cannot create
-// a reference to the inline virtual D::operator= function.
-// CHECK-TEST11: @_ZTVN6Test111DE = external unnamed_addr constant
+// Can emit D's vtable available_externally.
+// CHECK-TEST11: @_ZTVN6Test111DE = available_externally unnamed_addr constant
 struct D : C {
   virtual void key();
 };

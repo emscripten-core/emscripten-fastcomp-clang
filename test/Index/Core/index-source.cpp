@@ -134,6 +134,9 @@ class PseudoOverridesInSpecializations {
 
   template<typename U> struct InnerTemplate { };
   template<typename U> struct InnerTemplate <U*> { };
+
+  template<typename U>
+  class InnerClass { };
 };
 
 template<>
@@ -195,7 +198,21 @@ class PseudoOverridesInSpecializations<double, int> {
 // CHECK-NEXT: RelChild
 // CHECK-NEXT: RelSpecialization | InnerTemplate | c:@ST>2#T#T@PseudoOverridesInSpecializations@ST>1#T@InnerTemplate
   template<typename U> struct InnerTemplate <U*> { };
+
+  template<typename U>
+  class InnerClass;
+// CHECK: [[@LINE-1]]:9 | class(Gen)/C++ | InnerClass | c:@S@PseudoOverridesInSpecializations>#d#I@ST>1#T@InnerClass | <no-cgname> | Decl,RelChild,RelSpecialization | rel: 2
+// CHECK-NEXT: RelChild
+// CHECK-NEXT: RelSpecialization | InnerClass | c:@ST>2#T#T@PseudoOverridesInSpecializations@ST>1#T@InnerClass
 };
+
+template<typename U>
+class PseudoOverridesInSpecializations<double, int>::InnerClass {
+};
+// CHECK: [[@LINE-2]]:54 | class(Gen)/C++ | InnerClass | c:@S@PseudoOverridesInSpecializations>#d#I@ST>1#T@InnerClass | <no-cgname> | Def,RelChild | rel: 1
+// CHECK-NEXT: RelChild
+// CHECK: [[@LINE-4]]:7 | class(Gen)/C++ | PseudoOverridesInSpecializations | c:@ST>2#T#T@PseudoOverridesInSpecializations | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont
 
 template<typename S>
 class PseudoOverridesInSpecializations<float, S> {
@@ -257,7 +274,7 @@ void ContainsSpecializedMemberFunction::memberSpecialization<int>() {
 
 template<typename T>
 class SpecializationDecl;
-// CHECK: [[@LINE-1]]:7 | class(Gen)/C++ | SpecializationDecl | c:@ST>1#T@SpecializationDecl | <no-cgname> | Ref | rel: 0
+// CHECK: [[@LINE-1]]:7 | class(Gen)/C++ | SpecializationDecl | c:@ST>1#T@SpecializationDecl | <no-cgname> | Decl | rel: 0
 
 template<typename T>
 class SpecializationDecl { };
@@ -265,7 +282,9 @@ class SpecializationDecl { };
 
 template<>
 class SpecializationDecl<int>;
-// CHECK: [[@LINE-1]]:7 | class(Gen)/C++ | SpecializationDecl | c:@ST>1#T@SpecializationDecl | <no-cgname> | Ref | rel: 0
+// CHECK: [[@LINE-1]]:7 | class(Gen,TS)/C++ | SpecializationDecl | c:@S@SpecializationDecl>#I | <no-cgname> | Decl,RelSpecialization | rel: 1
+// CHECK-NEXT: RelSpecialization | SpecializationDecl | c:@ST>1#T@SpecializationDecl
+// CHECK: [[@LINE-3]]:7 | class(Gen)/C++ | SpecializationDecl | c:@ST>1#T@SpecializationDecl | <no-cgname> | Ref | rel: 0
 
 template<>
 class SpecializationDecl<int> { };
@@ -275,8 +294,10 @@ class SpecializationDecl<int> { };
 
 template<typename T>
 class PartialSpecilizationClass<Cls, T>;
-// CHECK: [[@LINE-1]]:7 | class(Gen)/C++ | PartialSpecilizationClass | c:@ST>2#T#T@PartialSpecilizationClass | <no-cgname> | Ref | rel: 0
-// CHECK-NEXT: [[@LINE-2]]:33 | class/C++ | Cls | c:@S@Cls | <no-cgname> | Ref | rel: 0
+// CHECK: [[@LINE-1]]:7 | class(Gen,TPS)/C++ | PartialSpecilizationClass | c:@SP>1#T@PartialSpecilizationClass>#$@S@Cls#t0.0 | <no-cgname> | Decl,RelSpecialization | rel: 1
+// CHECK-NEXT: RelSpecialization | PartialSpecilizationClass | c:@ST>2#T#T@PartialSpecilizationClass
+// CHECK: [[@LINE-3]]:7 | class(Gen)/C++ | PartialSpecilizationClass | c:@ST>2#T#T@PartialSpecilizationClass | <no-cgname> | Ref | rel: 0
+// CHECK-NEXT: [[@LINE-4]]:33 | class/C++ | Cls | c:@S@Cls | <no-cgname> | Ref | rel: 0
 
 template<>
 class PartialSpecilizationClass<Cls, Cls> : Cls { };
@@ -473,5 +494,67 @@ void localStructuredBindingAndRef() {
 // CHECK-NEXT: RelCont | localStructuredBindingAndRef | c:@N@cpp17structuredBinding@F@localStructuredBindingAndRef#
 // CHECK-NOT: localBinding
 }
+
+}
+
+template<typename T>
+struct Guided { T t; };
+// CHECK: [[@LINE-1]]:8 | struct(Gen)/C++ | Guided | c:@ST>1#T@Guided | <no-cgname> | Def | rel: 0
+// CHECK-NEXT: [[@LINE-2]]:19 | field/C++ | t | c:@ST>1#T@Guided@FI@t | <no-cgname> | Def,RelChild | rel: 1
+// CHECK-NEXT: RelChild | Guided | c:@ST>1#T@Guided
+Guided(double) -> Guided<float>;
+// CHECK: [[@LINE-1]]:19 | struct(Gen)/C++ | Guided | c:@ST>1#T@Guided | <no-cgname> | Ref | rel: 0
+// CHECK-NEXT: [[@LINE-2]]:1 | struct(Gen)/C++ | Guided | c:@ST>1#T@Guided | <no-cgname> | Ref | rel: 0
+auto guided = Guided{1.0};
+// CHECK: [[@LINE-1]]:6 | variable/C | guided | c:@guided | _guided | Def | rel: 0
+// CHECK-NEXT: [[@LINE-2]]:15 | struct(Gen)/C++ | Guided | c:@ST>1#T@Guided | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | guided | c:@guided
+
+namespace rd33122110 {
+
+struct Outer {
+    template<typename T>
+    struct Nested { };
+};
+
+}
+
+template<>
+struct rd33122110::Outer::Nested<int>;
+// CHECK: [[@LINE-1]]:8 | namespace/C++ | rd33122110 | c:@N@rd33122110 | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | Nested | c:@N@rd33122110@S@Outer@S@Nested>#I
+// CHECK: [[@LINE-3]]:20 | struct/C++ | Outer | c:@N@rd33122110@S@Outer | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | Nested | c:@N@rd33122110@S@Outer@S@Nested>#I
+
+namespace index_offsetof {
+
+struct Struct {
+  int field;
+};
+
+struct Struct2 {
+  Struct array[4][2];
+};
+
+void foo() {
+  __builtin_offsetof(Struct, field);
+// CHECK: [[@LINE-1]]:30 | field/C | field | c:@N@index_offsetof@S@Struct@FI@field | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | foo | c:@N@index_offsetof@F@foo#
+  __builtin_offsetof(Struct2, array[1][0].field);
+// CHECK: [[@LINE-1]]:31 | field/C | array | c:@N@index_offsetof@S@Struct2@FI@array | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | foo | c:@N@index_offsetof@F@foo#
+// CHECK: [[@LINE-3]]:43 | field/C | field | c:@N@index_offsetof@S@Struct@FI@field | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | foo | c:@N@index_offsetof@F@foo#
+}
+
+#define OFFSET_OF_(X, Y) __builtin_offsetof(X, Y)
+
+class SubclassOffsetof : public Struct {
+  void foo() {
+    OFFSET_OF_(SubclassOffsetof, field);
+// CHECK: [[@LINE-1]]:34 | field/C | field | c:@N@index_offsetof@S@Struct@FI@field | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | foo | c:@N@index_offsetof@S@SubclassOffsetof@F@foo#
+  }
+};
 
 }
