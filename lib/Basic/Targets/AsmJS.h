@@ -1,4 +1,4 @@
-//=== WebAssembly.h - Declare WebAssembly target feature support *- C++ -*-===//
+//=== AsmJS.h - Declare AsmJS target feature support *- C++ -*-------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,12 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file declares WebAssembly TargetInfo objects.
+// This file declares Emscripten/AsmJS TargetInfo objects.
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_LIB_BASIC_TARGETS_WEBASSEMBLY_H
-#define LLVM_CLANG_LIB_BASIC_TARGETS_WEBASSEMBLY_H
+#ifndef LLVM_CLANG_LIB_BASIC_TARGETS_ASM_JS_H
+#define LLVM_CLANG_LIB_BASIC_TARGETS_ASM_JS_H
 
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
@@ -76,8 +76,48 @@ public:
     return false;
   }
 };
+
+// Emscripten target
+template <typename Target>
+class EmscriptenTargetInfo : public OSTargetInfo<Target> {
+protected:
+  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                    MacroBuilder &Builder) const override {
+    // A macro for the platform.
+    Builder.defineMacro("__EMSCRIPTEN__");
+    // Earlier versions of Emscripten defined this, so we continue to define it
+    // for compatibility, for now. Users should ideally prefer __EMSCRIPTEN__.
+    Builder.defineMacro("EMSCRIPTEN");
+    // A common platform macro.
+    if (Opts.POSIXThreads)
+      Builder.defineMacro("_REENTRANT");
+    // Follow g++ convention and predefine _GNU_SOURCE for C++.
+    if (Opts.CPlusPlus)
+      Builder.defineMacro("_GNU_SOURCE");
+
+    // Emscripten's software environment and the asm.js runtime aren't really
+    // Unix per se, but they're perhaps more Unix-like than what software
+    // expects when "unix" is *not* defined.
+    DefineStd(Builder, "unix", Opts);
+  }
+
+public:
+  explicit EmscriptenTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+      : OSTargetInfo<Target>(Triple, Opts) {
+    // XXX  set UserLabelPrefix to ""?
+    this->MaxAtomicPromoteWidth = this->MaxAtomicInlineWidth = 32;
+
+    // Emscripten uses the Itanium ABI mostly, but it uses ARM-style pointers
+    // to member functions so that it can avoid having to align function
+    // addresses.
+    this->TheCXXABI.set(TargetCXXABI::Emscripten);
+  }
+  ArrayRef<Builtin::Info> getTargetBuiltins() const override {
+    return None;
+  }
+};
 // @LOCALMOD-END Emscripten
 
 } // namespace targets
 } // namespace clang
-#endif // LLVM_CLANG_LIB_BASIC_TARGETS_WEBASSEMBLY_H
+#endif // LLVM_CLANG_LIB_BASIC_TARGETS_ASM_JS_H

@@ -17,6 +17,7 @@
 #include "Targets/AArch64.h"
 #include "Targets/AMDGPU.h"
 #include "Targets/ARM.h"
+#include "Targets/AsmJS.h"
 #include "Targets/AVR.h"
 #include "Targets/BPF.h"
 #include "Targets/Hexagon.h"
