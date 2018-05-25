@@ -37,9 +37,6 @@ public:
   bool isPIEDefault() const override { return false; }
   bool isPICDefaultForced() const override { return false; }
   bool SupportsProfiling() const override { return false; }
-  bool SupportsObjCGC() const override { return false; }
-  std::string getThreadModel() const override;
-  bool isThreadModelSupported(const StringRef Model) const override;
 
   RuntimeLibType GetDefaultRuntimeLibType() const override {
     return ToolChain::RLT_CompilerRT;
@@ -54,7 +51,8 @@ public:
   void AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                                  llvm::opt::ArgStringList &CC1Args) const override;
   void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
-                             llvm::opt::ArgStringList &CC1Args) const override;
+                             llvm::opt::ArgStringList &CC1Args,
+                             Action::OffloadKind DeviceOffloadKind) const override;
   std::string findLibCxxIncludePath(ToolChain::CXXStdlibType LibType) const;
   void AddClangCXXStdlibIncludeArgs(
       const llvm::opt::ArgList &DriverArgs,

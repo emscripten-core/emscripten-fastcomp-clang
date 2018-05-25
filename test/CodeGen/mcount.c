@@ -8,6 +8,10 @@
 // RUN: %clang_cc1 -pg -triple arm-netbsd-eabi -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
 // RUN: %clang_cc1 -pg -triple aarch64-netbsd -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
 // RUN: %clang_cc1 -pg -triple mips-netbsd -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
+// RUN: %clang_cc1 -pg -triple mips-unknown-gnu-linux -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
+// RUN: %clang_cc1 -pg -triple mipsel-unknown-gnu-linux -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
+// RUN: %clang_cc1 -pg -triple mips64-unknown-gnu-linux -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
+// RUN: %clang_cc1 -pg -triple mips64el-unknown-gnu-linux -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
 // RUN: %clang_cc1 -pg -triple powerpc-netbsd -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
 // RUN: %clang_cc1 -pg -triple powerpc64-netbsd -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
 // RUN: %clang_cc1 -pg -triple powerpc64le-netbsd -emit-llvm -o - %s | FileCheck -check-prefixes=CHECK-PREFIXED,NO-MCOUNT1 %s
@@ -31,9 +35,9 @@ int main(void) {
   return no_instrument();
 }
 
-// CHECK: attributes #0 = { {{.*}}"counting-function"="mcount"{{.*}} }
+// CHECK: attributes #0 = { {{.*}}"instrument-function-entry-inlined"="mcount"{{.*}} }
 // CHECK: attributes #1 = { {{.*}} }
-// CHECK-PREFIXED: attributes #0 = { {{.*}}"counting-function"="_mcount"{{.*}} }
+// CHECK-PREFIXED: attributes #0 = { {{.*}}"instrument-function-entry-inlined"="_mcount"{{.*}} }
 // CHECK-PREFIXED: attributes #1 = { {{.*}} }
-// NO-MCOUNT-NOT: attributes #{{[0-9]}} = { {{.*}}"counting-function"={{.*}} }
-// NO-MCOUNT1-NOT: attributes #1 = { {{.*}}"counting-function"={{.*}} }
+// NO-MCOUNT-NOT: attributes #{{[0-9]}} = { {{.*}}"instrument-function-entry-inlined"={{.*}} }
+// NO-MCOUNT1-NOT: attributes #1 = { {{.*}}"instrument-function-entry-inlined"={{.*}} }

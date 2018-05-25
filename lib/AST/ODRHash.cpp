@@ -82,25 +82,13 @@ void ODRHash::AddDeclarationName(DeclarationName Name) {
 }
 
 void ODRHash::AddNestedNameSpecifier(const NestedNameSpecifier *NNS) {
-  // Unlike the other pointer handling functions, allow null pointers here.
-  if (!NNS) {
-    AddBoolean(false);
-    return;
+  assert(NNS && "Expecting non-null pointer.");
+  const auto *Prefix = NNS->getPrefix();
+  AddBoolean(Prefix);
+  if (Prefix) {
+    AddNestedNameSpecifier(Prefix);
   }
-
-  // Skip inlined namespaces.
   auto Kind = NNS->getKind();
-  if (Kind == NestedNameSpecifier::Namespace) {
-    if (NNS->getAsNamespace()->isInline()) {
-      return AddNestedNameSpecifier(NNS->getPrefix());
-    }
-  }
-
-  AddBoolean(true);
-
-  // Process prefix
-  AddNestedNameSpecifier(NNS->getPrefix());
-
   ID.AddInteger(Kind);
   switch (Kind) {
   case NestedNameSpecifier::Identifier:
@@ -146,7 +134,10 @@ void ODRHash::AddTemplateArgument(TemplateArgument TA) {
 
   switch (Kind) {
     case TemplateArgument::Null:
+      llvm_unreachable("Expected valid TemplateArgument");
     case TemplateArgument::Type:
+      AddQualType(TA.getAsType());
+      break;
     case TemplateArgument::Declaration:
     case TemplateArgument::NullPtr:
     case TemplateArgument::Integral:
@@ -167,7 +158,14 @@ void ODRHash::AddTemplateArgument(TemplateArgument TA) {
   }
 }
 
-void ODRHash::AddTemplateParameterList(const TemplateParameterList *TPL) {}
+void ODRHash::AddTemplateParameterList(const TemplateParameterList *TPL) {
+  assert(TPL && "Expecting non-null pointer.");
+
+  ID.AddInteger(TPL->size());
+  for (auto *ND : TPL->asArray()) {
+    AddSubDecl(ND);
+  }
+}
 
 void ODRHash::clear() {
   DeclMap.clear();
@@ -208,6 +206,7 @@ unsigned ODRHash::CalculateHash() {
   return ID.ComputeHash();
 }
 
+namespace {
 // Process a Decl pointer.  Add* methods call back into ODRHash while Visit*
 // methods process the relevant parts of the Decl.
 class ODRDeclVisitor : public ConstDeclVisitor<ODRDeclVisitor> {
@@ -237,6 +236,17 @@ public:
     Hash.AddQualType(T);
   }
 
+  void AddDecl(const Decl *D) {
+    Hash.AddBoolean(D);
+    if (D) {
+      Hash.AddDecl(D);
+    }
+  }
+
+  void AddTemplateArgument(TemplateArgument TA) {
+    Hash.AddTemplateArgument(TA);
+  }
+
   void Visit(const Decl *D) {
     ID.AddInteger(D->getKind());
     Inherited::Visit(D);
@@ -248,7 +258,9 @@ public:
   }
 
   void VisitValueDecl(const ValueDecl *D) {
-    AddQualType(D->getType());
+    if (!isa<FunctionDecl>(D)) {
+      AddQualType(D->getType());
+    }
     Inherited::VisitValueDecl(D);
   }
 
@@ -307,6 +319,8 @@ public:
       Hash.AddSubDecl(Param);
     }
 
+    AddQualType(D->getReturnType());
+
     Inherited::VisitFunctionDecl(D);
   }
 
@@ -330,7 +344,54 @@ public:
   void VisitTypeAliasDecl(const TypeAliasDecl *D) {
     Inherited::VisitTypeAliasDecl(D);
   }
+
+  void VisitFriendDecl(const FriendDecl *D) {
+    TypeSourceInfo *TSI = D->getFriendType();
+    Hash.AddBoolean(TSI);
+    if (TSI) {
+      AddQualType(TSI->getType());
+    } else {
+      AddDecl(D->getFriendDecl());
+    }
+  }
+
+  void VisitTemplateTypeParmDecl(const TemplateTypeParmDecl *D) {
+    // Only care about default arguments as part of the definition.
+    const bool hasDefaultArgument =
+        D->hasDefaultArgument() && !D->defaultArgumentWasInherited();
+    Hash.AddBoolean(hasDefaultArgument);
+    if (hasDefaultArgument) {
+      AddTemplateArgument(D->getDefaultArgument());
+    }
+
+    Inherited::VisitTemplateTypeParmDecl(D);
+  }
+
+  void VisitNonTypeTemplateParmDecl(const NonTypeTemplateParmDecl *D) {
+    // Only care about default arguments as part of the definition.
+    const bool hasDefaultArgument =
+        D->hasDefaultArgument() && !D->defaultArgumentWasInherited();
+    Hash.AddBoolean(hasDefaultArgument);
+    if (hasDefaultArgument) {
+      AddStmt(D->getDefaultArgument());
+    }
+
+    Inherited::VisitNonTypeTemplateParmDecl(D);
+  }
+
+  void VisitTemplateTemplateParmDecl(const TemplateTemplateParmDecl *D) {
+    // Only care about default arguments as part of the definition.
+    const bool hasDefaultArgument =
+        D->hasDefaultArgument() && !D->defaultArgumentWasInherited();
+    Hash.AddBoolean(hasDefaultArgument);
+    if (hasDefaultArgument) {
+      AddTemplateArgument(D->getDefaultArgument().getArgument());
+    }
+
+    Inherited::VisitTemplateTemplateParmDecl(D);
+  }
 };
+} // namespace
 
 // Only allow a small portion of Decl's to be processed.  Remove this once
 // all Decl's can be handled.
@@ -342,8 +403,11 @@ bool ODRHash::isWhitelistedDecl(const Decl *D, const CXXRecordDecl *Parent) {
     default:
       return false;
     case Decl::AccessSpec:
+    case Decl::CXXConstructor:
+    case Decl::CXXDestructor:
     case Decl::CXXMethod:
     case Decl::Field:
+    case Decl::Friend:
     case Decl::StaticAssert:
     case Decl::TypeAlias:
     case Decl::Typedef:
@@ -363,8 +427,12 @@ void ODRHash::AddCXXRecordDecl(const CXXRecordDecl *Record) {
   assert(Record && Record->hasDefinition() &&
          "Expected non-null record to be a definition.");
 
-  if (isa<ClassTemplateSpecializationDecl>(Record)) {
-    return;
+  const DeclContext *DC = Record;
+  while (DC) {
+    if (isa<ClassTemplateSpecializationDecl>(DC)) {
+      return;
+    }
+    DC = DC->getParent();
   }
 
   AddDecl(Record);
@@ -382,10 +450,60 @@ void ODRHash::AddCXXRecordDecl(const CXXRecordDecl *Record) {
   for (auto SubDecl : Decls) {
     AddSubDecl(SubDecl);
   }
+
+  const ClassTemplateDecl *TD = Record->getDescribedClassTemplate();
+  AddBoolean(TD);
+  if (TD) {
+    AddTemplateParameterList(TD->getTemplateParameters());
+  }
+
+  ID.AddInteger(Record->getNumBases());
+  auto Bases = Record->bases();
+  for (auto Base : Bases) {
+    AddQualType(Base.getType());
+    ID.AddInteger(Base.isVirtual());
+    ID.AddInteger(Base.getAccessSpecifierAsWritten());
+  }
+}
+
+void ODRHash::AddFunctionDecl(const FunctionDecl *Function) {
+  assert(Function && "Expecting non-null pointer.");
+
+  // Skip hashing these kinds of function.
+  if (Function->isImplicit()) return;
+  if (Function->isDefaulted()) return;
+  if (Function->isDeleted()) return;
+  if (!Function->hasBody()) return;
+  if (!Function->getBody()) return;
+
+  // TODO: Fix hashing for class methods.
+  if (isa<CXXMethodDecl>(Function)) return;
+  // And friend functions.
+  if (Function->getFriendObjectKind()) return;
+
+  // Skip functions that are specializations or in specialization context.
+  const DeclContext *DC = Function;
+  while (DC) {
+    if (isa<ClassTemplateSpecializationDecl>(DC)) return;
+    if (auto *F = dyn_cast<FunctionDecl>(DC))
+      if (F->isFunctionTemplateSpecialization()) return;
+    DC = DC->getParent();
+  }
+
+  AddDecl(Function);
+
+  AddQualType(Function->getReturnType());
+
+  ID.AddInteger(Function->param_size());
+  for (auto Param : Function->parameters())
+    AddSubDecl(Param);
+
+  AddStmt(Function->getBody());
 }
 
 void ODRHash::AddDecl(const Decl *D) {
   assert(D && "Expecting non-null pointer.");
+  D = D->getCanonicalDecl();
   auto Result = DeclMap.insert(std::make_pair(D, DeclMap.size()));
   ID.AddInteger(Result.first->second);
   // On first encounter of a Decl pointer, process it.  Every time afterwards,
@@ -401,6 +519,7 @@ void ODRHash::AddDecl(const Decl *D) {
   }
 }
 
+namespace {
 // Process a Type pointer.  Add* methods call back into ODRHash while Visit*
 // methods process the relevant parts of the Type.
 class ODRTypeVisitor : public TypeVisitor<ODRTypeVisitor> {
@@ -430,8 +549,18 @@ public:
     Hash.AddQualType(T);
   }
 
+  void AddType(const Type *T) {
+    Hash.AddBoolean(T);
+    if (T) {
+      Hash.AddType(T);
+    }
+  }
+
   void AddNestedNameSpecifier(const NestedNameSpecifier *NNS) {
-    Hash.AddNestedNameSpecifier(NNS);
+    Hash.AddBoolean(NNS);
+    if (NNS) {
+      Hash.AddNestedNameSpecifier(NNS);
+    }
   }
 
   void AddIdentifierInfo(const IdentifierInfo *II) {
@@ -517,7 +646,13 @@ public:
 
   void VisitTypedefType(const TypedefType *T) {
     AddDecl(T->getDecl());
-    AddQualType(T->getDecl()->getUnderlyingType().getCanonicalType());
+    QualType UnderlyingType = T->getDecl()->getUnderlyingType();
+    VisitQualifiers(UnderlyingType.getQualifiers());
+    while (const TypedefType *Underlying =
+               dyn_cast<TypedefType>(UnderlyingType.getTypePtr())) {
+      UnderlyingType = Underlying->getDecl()->getUnderlyingType();
+    }
+    AddType(UnderlyingType.getTypePtr());
     VisitType(T);
   }
 
@@ -573,6 +708,7 @@ public:
     AddDecl(T->getDecl());
   }
 };
+} // namespace
 
 void ODRHash::AddType(const Type *T) {
   assert(T && "Expecting non-null pointer.");

@@ -423,11 +423,13 @@ bool CXIndexDataConsumer::isFunctionLocalDecl(const Decl *D) {
   if (const NamedDecl *ND = dyn_cast<NamedDecl>(D)) {
     switch (ND->getFormalLinkage()) {
     case NoLinkage:
-    case VisibleNoLinkage:
     case InternalLinkage:
       return true;
+    case VisibleNoLinkage:
+    case ModuleInternalLinkage:
     case UniqueExternalLinkage:
       llvm_unreachable("Not a sema linkage");
+    case ModuleLinkage:
     case ExternalLinkage:
       return false;
     }
@@ -1256,6 +1258,7 @@ static CXIdxEntityKind getEntityKindFromSymbolKind(SymbolKind K, SymbolLanguage 
   case SymbolKind::Module:
   case SymbolKind::Macro:
   case SymbolKind::ClassProperty:
+  case SymbolKind::Using:
     return CXIdxEntity_Unexposed;
 
   case SymbolKind::Enum: return CXIdxEntity_Enum;
@@ -1301,11 +1304,11 @@ static CXIdxEntityKind getEntityKindFromSymbolKind(SymbolKind K, SymbolLanguage 
 
 static CXIdxEntityCXXTemplateKind
 getEntityKindFromSymbolProperties(SymbolPropertySet K) {
-  if (K & (unsigned)SymbolProperty::TemplatePartialSpecialization)
+  if (K & (SymbolPropertySet)SymbolProperty::TemplatePartialSpecialization)
     return CXIdxEntity_TemplatePartialSpecialization;
-  if (K & (unsigned)SymbolProperty::TemplateSpecialization)
+  if (K & (SymbolPropertySet)SymbolProperty::TemplateSpecialization)
     return CXIdxEntity_TemplateSpecialization;
-  if (K & (unsigned)SymbolProperty::Generic)
+  if (K & (SymbolPropertySet)SymbolProperty::Generic)
     return CXIdxEntity_Template;
   return CXIdxEntity_NonTemplate;
 }

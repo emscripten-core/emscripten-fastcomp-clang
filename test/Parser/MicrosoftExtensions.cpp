@@ -51,7 +51,7 @@ struct __declspec(uuid("0000000-0000-0000-Z234-000000000047")) uuid_attr_bad4 { 
 struct __declspec(uuid("000000000000-0000-1234-000000000047")) uuid_attr_bad5 { };// expected-error {{uuid attribute contains a malformed GUID}}
 [uuid("000000000000-0000-1234-000000000047")] struct uuid_attr_bad6 { };// expected-error {{uuid attribute contains a malformed GUID}}
 
-__declspec(uuid("000000A0-0000-0000-C000-000000000046")) int i; // expected-warning {{'uuid' attribute only applies to classes}}
+__declspec(uuid("000000A0-0000-0000-C000-000000000046")) int i; // expected-warning {{'uuid' attribute only applies to structs, unions, classes, and enums}}
 
 struct __declspec(uuid("000000A0-0000-0000-C000-000000000046"))
 struct_with_uuid { };
@@ -69,7 +69,7 @@ enum __declspec(uuid("000000A0-0000-0000-C000-000000000046"))
 enum_with_uuid { };
 enum enum_without_uuid { };
 
-int __declspec(uuid("000000A0-0000-0000-C000-000000000046")) inappropriate_uuid; // expected-warning {{'uuid' attribute only applies to classes and enumerations}}
+int __declspec(uuid("000000A0-0000-0000-C000-000000000046")) inappropriate_uuid; // expected-warning {{'uuid' attribute only applies to}}
 
 int uuid_sema_test()
 {
@@ -261,9 +261,7 @@ int __identifier(else} = __identifier(for); // expected-error {{missing ')' afte
 #define identifier_weird(x) __identifier(x
 int k = identifier_weird(if)); // expected-error {{use of undeclared identifier 'if'}}
 
-// This is a bit weird, but the alternative tokens aren't keywords, and this
-// behavior matches MSVC. FIXME: Consider supporting this anyway.
-extern int __identifier(and) r; // expected-error {{cannot convert '&&' token to an identifier}}
+extern int __identifier(and);
 
 void f() {
   __identifier(() // expected-error {{cannot convert '(' token to an identifier}}

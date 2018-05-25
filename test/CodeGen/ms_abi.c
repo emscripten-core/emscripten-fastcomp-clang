@@ -15,20 +15,20 @@ void f3(void) {
   // FREEBSD-LABEL: define void @f3()
   // WIN64-LABEL: define void @f3()
   f1();
-  // FREEBSD: call x86_64_win64cc void @f1()
+  // FREEBSD: call win64cc void @f1()
   // WIN64: call void @f1()
   f2();
   // FREEBSD: call void @f2()
   // WIN64: call x86_64_sysvcc void @f2()
 }
-// FREEBSD: declare x86_64_win64cc void @f1()
+// FREEBSD: declare win64cc void @f1()
 // FREEBSD: declare void @f2()
 // WIN64: declare void @f1()
 // WIN64: declare x86_64_sysvcc void @f2()
 
 // Win64 ABI varargs
 void __attribute__((ms_abi)) f4(int a, ...) {
-  // FREEBSD-LABEL: define x86_64_win64cc void @f4
+  // FREEBSD-LABEL: define win64cc void @f4
   // WIN64-LABEL: define void @f4
   __builtin_ms_va_list ap;
   __builtin_ms_va_start(ap, a);
@@ -145,4 +145,17 @@ void __attribute__((sysv_abi)) f6(__builtin_ms_va_list ap) {
   // FREEBSD-NEXT: store i8* %[[AP_VAL]], i8** %[[AP2:.*]]
   // WIN64: %[[AP_VAL:.*]] = load i8*, i8** %[[AP]]
   // WIN64-NEXT: store i8* %[[AP_VAL]], i8** %[[AP2:.*]]
+}
+
+// This test checks if structs are passed according to Win64 calling convention
+// when it's enforced by __attribute((ms_abi)).
+struct i128 {
+  unsigned long long a;
+  unsigned long long b;
+};
+
+__attribute__((ms_abi)) struct i128 f7(struct i128 a) {
+  // WIN64: define void @f7(%struct.i128* noalias sret %agg.result, %struct.i128* %a)
+  // FREEBSD: define win64cc void @f7(%struct.i128* noalias sret %agg.result, %struct.i128* %a)
+  return a;
 }

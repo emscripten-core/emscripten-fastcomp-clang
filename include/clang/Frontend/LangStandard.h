@@ -22,15 +22,17 @@ enum LangFeatures {
   LineComment = (1 << 0),
   C99 = (1 << 1),
   C11 = (1 << 2),
-  CPlusPlus = (1 << 3),
-  CPlusPlus11 = (1 << 4),
-  CPlusPlus14 = (1 << 5),
-  CPlusPlus1z = (1 << 6),
-  Digraphs = (1 << 7),
-  GNUMode = (1 << 8),
-  HexFloat = (1 << 9),
-  ImplicitInt = (1 << 10),
-  OpenCL = (1 << 11)
+  C17 = (1 << 3),
+  CPlusPlus = (1 << 4),
+  CPlusPlus11 = (1 << 5),
+  CPlusPlus14 = (1 << 6),
+  CPlusPlus17 = (1 << 7),
+  CPlusPlus2a = (1 << 8),
+  Digraphs = (1 << 9),
+  GNUMode = (1 << 10),
+  HexFloat = (1 << 11),
+  ImplicitInt = (1 << 12),
+  OpenCL = (1 << 13)
 };
 
 }
@@ -69,6 +71,9 @@ public:
   /// isC11 - Language is a superset of C11.
   bool isC11() const { return Flags & frontend::C11; }
 
+  /// isC17 - Language is a superset of C17.
+  bool isC17() const { return Flags & frontend::C17; }
+
   /// isCPlusPlus - Language is a C++ variant.
   bool isCPlusPlus() const { return Flags & frontend::CPlusPlus; }
 
@@ -78,8 +83,12 @@ public:
   /// isCPlusPlus14 - Language is a C++14 variant (or later).
   bool isCPlusPlus14() const { return Flags & frontend::CPlusPlus14; }
 
-  /// isCPlusPlus1z - Language is a C++17 variant (or later).
-  bool isCPlusPlus1z() const { return Flags & frontend::CPlusPlus1z; }
+  /// isCPlusPlus17 - Language is a C++17 variant (or later).
+  bool isCPlusPlus17() const { return Flags & frontend::CPlusPlus17; }
+
+  /// isCPlusPlus2a - Language is a post-C++17 variant (or later).
+  bool isCPlusPlus2a() const { return Flags & frontend::CPlusPlus2a; }
+
 
   /// hasDigraphs - Language supports digraphs.
   bool hasDigraphs() const { return Flags & frontend::Digraphs; }

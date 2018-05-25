@@ -1,5 +1,7 @@
 // RUN: %clang_cc1 -verify -fopenmp %s
 
+// RUN: %clang_cc1 -verify -fopenmp-simd %s
+
 int foo();
 
 int main() {
@@ -63,5 +65,7 @@ int foo() {
     foo();
   }
 
+#pragma omp taskgroup init // expected-warning {{extra tokens at the end of '#pragma omp taskgroup' are ignored}}
+  ;
   return 0;
 }

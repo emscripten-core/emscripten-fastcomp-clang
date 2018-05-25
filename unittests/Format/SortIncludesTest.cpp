@@ -77,6 +77,28 @@ TEST_F(SortIncludesTest, NoReplacementsForValidIncludes) {
   EXPECT_TRUE(sortIncludes(Style, Code, GetCodeRange(Code), "a.cc").empty());
 }
 
+TEST_F(SortIncludesTest, SortedIncludesInMultipleBlocksAreMerged) {
+  Style.IncludeBlocks = FormatStyle::IBS_Merge;
+  EXPECT_EQ("#include \"a.h\"\n"
+            "#include \"b.h\"\n"
+            "#include \"c.h\"\n",
+            sort("#include \"a.h\"\n"
+                 "#include \"c.h\"\n"
+                 "\n"
+                 "\n"
+                 "#include \"b.h\"\n"));
+
+  Style.IncludeBlocks = FormatStyle::IBS_Regroup;
+  EXPECT_EQ("#include \"a.h\"\n"
+            "#include \"b.h\"\n"
+            "#include \"c.h\"\n",
+            sort("#include \"a.h\"\n"
+                 "#include \"c.h\"\n"
+                 "\n"
+                 "\n"
+                 "#include \"b.h\"\n"));
+}
+
 TEST_F(SortIncludesTest, SupportClangFormatOff) {
   EXPECT_EQ("#include <a>\n"
             "#include <b>\n"
@@ -159,6 +181,48 @@ TEST_F(SortIncludesTest, SortsLocallyInEachBlock) {
                  "#include \"b.h\"\n"));
 }
 
+TEST_F(SortIncludesTest, SortsAllBlocksWhenMerging) {
+  Style.IncludeBlocks = FormatStyle::IBS_Merge;
+  EXPECT_EQ("#include \"a.h\"\n"
+            "#include \"b.h\"\n"
+            "#include \"c.h\"\n",
+            sort("#include \"a.h\"\n"
+                 "#include \"c.h\"\n"
+                 "\n"
+                 "#include \"b.h\"\n"));
+}
+
+TEST_F(SortIncludesTest, CommentsAlwaysSeparateGroups) {
+  EXPECT_EQ("#include \"a.h\"\n"
+            "#include \"c.h\"\n"
+            "// comment\n"
+            "#include \"b.h\"\n",
+            sort("#include \"c.h\"\n"
+                 "#include \"a.h\"\n"
+                 "// comment\n"
+                 "#include \"b.h\"\n"));
+
+  Style.IncludeBlocks = FormatStyle::IBS_Merge;
+  EXPECT_EQ("#include \"a.h\"\n"
+            "#include \"c.h\"\n"
+            "// comment\n"
+            "#include \"b.h\"\n",
+            sort("#include \"c.h\"\n"
+                 "#include \"a.h\"\n"
+                 "// comment\n"
+                 "#include \"b.h\"\n"));
+
+  Style.IncludeBlocks = FormatStyle::IBS_Regroup;
+  EXPECT_EQ("#include \"a.h\"\n"
+            "#include \"c.h\"\n"
+            "// comment\n"
+            "#include \"b.h\"\n",
+            sort("#include \"c.h\"\n"
+                 "#include \"a.h\"\n"
+                 "// comment\n"
+                 "#include \"b.h\"\n"));
+}
+
 TEST_F(SortIncludesTest, HandlesAngledIncludesAsSeparateBlocks) {
   EXPECT_EQ("#include \"a.h\"\n"
             "#include \"c.h\"\n"
@@ -174,6 +238,19 @@ TEST_F(SortIncludesTest, HandlesAngledIncludesAsSeparateBlocks) {
             "#include <d.h>\n"
             "#include \"a.h\"\n"
             "#include \"c.h\"\n",
+            sort("#include <d.h>\n"
+                 "#include <b.h>\n"
+                 "#include \"c.h\"\n"
+                 "#include \"a.h\"\n"));
+}
+
+TEST_F(SortIncludesTest, RegroupsAngledIncludesInSeparateBlocks) {
+  Style.IncludeBlocks = FormatStyle::IBS_Regroup;
+  EXPECT_EQ("#include \"a.h\"\n"
+            "#include \"c.h\"\n"
+            "\n"
+            "#include <b.h>\n"
+            "#include <d.h>\n",
             sort("#include <d.h>\n"
                  "#include <b.h>\n"
                  "#include \"c.h\"\n"
@@ -266,6 +343,58 @@ TEST_F(SortIncludesTest, LeavesMainHeaderFirst) {
                  "a.cc"));
 }
 
+TEST_F(SortIncludesTest, RecognizeMainHeaderInAllGroups) {
+  Style.IncludeIsMainRegex = "([-_](test|unittest))?$";
+  Style.IncludeBlocks = FormatStyle::IBS_Merge;
+
+  EXPECT_EQ("#include \"c.h\"\n"
+            "#include \"a.h\"\n"
+            "#include \"b.h\"\n",
+            sort("#include \"b.h\"\n"
+                 "\n"
+                 "#include \"a.h\"\n"
+                 "#include \"c.h\"\n",
+                 "c.cc"));
+}
+
+TEST_F(SortIncludesTest, MainHeaderIsSeparatedWhenRegroupping) {
+  Style.IncludeIsMainRegex = "([-_](test|unittest))?$";
+  Style.IncludeBlocks = FormatStyle::IBS_Regroup;
+
+  EXPECT_EQ("#include \"a.h\"\n"
+            "\n"
+            "#include \"b.h\"\n"
+            "#include \"c.h\"\n",
+            sort("#include \"b.h\"\n"
+                 "\n"
+                 "#include \"a.h\"\n"
+                 "#include \"c.h\"\n",
+                 "a.cc"));
+}
+
+TEST_F(SortIncludesTest, SupportCaseInsensitiveMatching) {
+  // Setup an regex for main includes so we can cover those as well.
+  Style.IncludeIsMainRegex = "([-_](test|unittest))?$";
+
+  // Ensure both main header detection and grouping work in a case insensitive
+  // manner.
+  EXPECT_EQ("#include \"llvm/A.h\"\n"
+            "#include \"b.h\"\n"
+            "#include \"c.h\"\n"
+            "#include \"LLVM/z.h\"\n"
+            "#include \"llvm/X.h\"\n"
+            "#include \"GTest/GTest.h\"\n"
+            "#include \"gmock/gmock.h\"\n",
+            sort("#include \"c.h\"\n"
+                 "#include \"b.h\"\n"
+                 "#include \"GTest/GTest.h\"\n"
+                 "#include \"llvm/A.h\"\n"
+                 "#include \"gmock/gmock.h\"\n"
+                 "#include \"llvm/X.h\"\n"
+                 "#include \"LLVM/z.h\"\n",
+                 "a_TEST.cc"));
+}
+
 TEST_F(SortIncludesTest, NegativePriorities) {
   Style.IncludeCategories = {{".*important_os_header.*", -1}, {".*", 1}};
   EXPECT_EQ("#include \"important_os_header.h\"\n"
@@ -282,6 +411,34 @@ TEST_F(SortIncludesTest, NegativePriorities) {
             "#include \"a_other.h\"\n",
             sort("#include \"important_os_header.h\"\n"
                  "#include \"c_main.h\"\n"
+                 "#include \"a_other.h\"\n",
+                 "c_main.cc"));
+}
+
+TEST_F(SortIncludesTest, PriorityGroupsAreSeparatedWhenRegroupping) {
+  Style.IncludeCategories = {{".*important_os_header.*", -1}, {".*", 1}};
+  Style.IncludeBlocks = FormatStyle::IBS_Regroup;
+
+  EXPECT_EQ("#include \"important_os_header.h\"\n"
+            "\n"
+            "#include \"c_main.h\"\n"
+            "\n"
+            "#include \"a_other.h\"\n",
+            sort("#include \"c_main.h\"\n"
+                 "#include \"a_other.h\"\n"
+                 "#include \"important_os_header.h\"\n",
+                 "c_main.cc"));
+
+  // check stable when re-run
+  EXPECT_EQ("#include \"important_os_header.h\"\n"
+            "\n"
+            "#include \"c_main.h\"\n"
+            "\n"
+            "#include \"a_other.h\"\n",
+            sort("#include \"important_os_header.h\"\n"
+                 "\n"
+                 "#include \"c_main.h\"\n"
+                 "\n"
                  "#include \"a_other.h\"\n",
                  "c_main.cc"));
 }
@@ -309,6 +466,30 @@ TEST_F(SortIncludesTest, DeduplicateIncludes) {
                  "#include <b>\n"
                  "#include <b>\n"
                  "#include <c>\n"));
+
+  Style.IncludeBlocks = FormatStyle::IBS_Merge;
+  EXPECT_EQ("#include <a>\n"
+            "#include <b>\n"
+            "#include <c>\n",
+            sort("#include <a>\n"
+                 "#include <b>\n"
+                 "\n"
+                 "#include <b>\n"
+                 "\n"
+                 "#include <b>\n"
+                 "#include <c>\n"));
+
+  Style.IncludeBlocks = FormatStyle::IBS_Regroup;
+  EXPECT_EQ("#include <a>\n"
+            "#include <b>\n"
+            "#include <c>\n",
+            sort("#include <a>\n"
+                 "#include <b>\n"
+                 "\n"
+                 "#include <b>\n"
+                 "\n"
+                 "#include <b>\n"
+                 "#include <c>\n"));
 }
 
 TEST_F(SortIncludesTest, SortAndDeduplicateIncludes) {
@@ -319,6 +500,30 @@ TEST_F(SortIncludesTest, SortAndDeduplicateIncludes) {
                  "#include <a>\n"
                  "#include <b>\n"
                  "#include <b>\n"
+                 "#include <c>\n"
+                 "#include <b>\n"));
+
+  Style.IncludeBlocks = FormatStyle::IBS_Merge;
+  EXPECT_EQ("#include <a>\n"
+            "#include <b>\n"
+            "#include <c>\n",
+            sort("#include <b>\n"
+                 "#include <a>\n"
+                 "\n"
+                 "#include <b>\n"
+                 "\n"
+                 "#include <c>\n"
+                 "#include <b>\n"));
+
+  Style.IncludeBlocks = FormatStyle::IBS_Regroup;
+  EXPECT_EQ("#include <a>\n"
+            "#include <b>\n"
+            "#include <c>\n",
+            sort("#include <b>\n"
+                 "#include <a>\n"
+                 "\n"
+                 "#include <b>\n"
+                 "\n"
                  "#include <c>\n"
                  "#include <b>\n"));
 }
@@ -373,6 +578,17 @@ TEST_F(SortIncludesTest, ValidAffactedRangesAfterDeduplicatingIncludes) {
   EXPECT_EQ(1u, Ranges.size());
   EXPECT_EQ(0u, Ranges[0].getOffset());
   EXPECT_EQ(26u, Ranges[0].getLength());
+}
+
+TEST_F(SortIncludesTest, DoNotSortLikelyXml) {
+  EXPECT_EQ("<!--;\n"
+            "#include <b>\n"
+            "#include <a>\n"
+            "-->",
+            sort("<!--;\n"
+                 "#include <b>\n"
+                 "#include <a>\n"
+                 "-->"));
 }
 
 } // end namespace
