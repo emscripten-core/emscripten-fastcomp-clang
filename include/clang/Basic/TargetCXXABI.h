@@ -279,12 +279,12 @@ public:
     case GenericARM:
     case iOS64:
     case WebAssembly:
+    case Emscripten: // @LOCALMOD Emscripten
     case WatchOS:
       return false;
 
     case GenericAArch64:
     case GenericItanium:
-    case Emscripten: // @LOCALMOD Emscripten
     case iOS:   // old iOS compilers did not follow this rule
     case Microsoft:
     case GenericMIPS:
@@ -332,7 +332,6 @@ public:
     case GenericItanium:
     case GenericAArch64:
     case GenericARM:
-    case Emscripten: // @LOCALMOD Emscripten
     case iOS:
     case GenericMIPS:
       return UseTailPaddingUnlessPOD03;
@@ -341,6 +340,7 @@ public:
     // the Itanium exception about classes with over-large bitfields.
     case iOS64:
     case WebAssembly:
+    case Emscripten: // @LOCALMOD Emscripten
     case WatchOS:
       return UseTailPaddingUnlessPOD11;
 

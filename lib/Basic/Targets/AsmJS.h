@@ -33,9 +33,14 @@ public:
     IntMaxType = Int64Type = TargetInfo::SignedLongLong;
     DoubleAlign = 64;
     LongDoubleWidth = LongDoubleAlign = 64;
-    SizeType = TargetInfo::UnsignedInt;
-    PtrDiffType = TargetInfo::SignedInt;
-    IntPtrType = TargetInfo::SignedInt;
+    SizeType = TargetInfo::UnsignedLong;
+    PtrDiffType = TargetInfo::SignedLong;
+    IntPtrType = TargetInfo::SignedLong;
+    SuitableAlign = 128;
+    LargeArrayMinWidth = 128;
+    LargeArrayAlign = 128;
+    SimdDefaultAlign = 128;
+    SigAtomicType = SignedLong;
     RegParmMax = 0; // Disallow regparm
 
     // Set the native integer widths set to just i32, since that's currently the
@@ -74,6 +79,17 @@ public:
     // we'll get Math.clz32, which is to be defined to do the right thing:
     // http://esdiscuss.org/topic/rename-number-prototype-clz-to-math-clz#content-36
     return false;
+  }
+  IntType getIntTypeByWidth(unsigned BitWidth,
+                            bool IsSigned) const final {
+    return BitWidth == 64 ? (IsSigned ? SignedLongLong : UnsignedLongLong)
+                          : TargetInfo::getIntTypeByWidth(BitWidth, IsSigned);
+  }
+  IntType getLeastIntTypeByWidth(unsigned BitWidth,
+                                 bool IsSigned) const final {
+    return BitWidth == 64
+               ? (IsSigned ? SignedLongLong : UnsignedLongLong)
+               : TargetInfo::getLeastIntTypeByWidth(BitWidth, IsSigned);
   }
 };
 
