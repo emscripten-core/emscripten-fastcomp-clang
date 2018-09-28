@@ -63,10 +63,10 @@ public:
     // Reuse PNaCl's va_list lowering.
     return TargetInfo::PNaClABIBuiltinVaList;
   }
-  ArrayRef<const char *> getGCCRegNames() const {
+  ArrayRef<const char *> getGCCRegNames() const override {
     return None;
   }
-  ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const {
+  ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
     return None;
   }
   bool validateAsmConstraint(const char *&Name,
