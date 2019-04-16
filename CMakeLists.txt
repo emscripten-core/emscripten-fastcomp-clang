@@ -309,6 +309,9 @@ endif()
 # Unlike PACKAGE_VERSION, CLANG_VERSION does not include LLVM_VERSION_SUFFIX.
 set(CLANG_VERSION "${CLANG_VERSION_MAJOR}.${CLANG_VERSION_MINOR}.${CLANG_VERSION_PATCHLEVEL}")
 message(STATUS "Clang version: ${CLANG_VERSION}")
+if(DEFINED LLVM_EXTERNAL_CLANG_SOURCE_DIR)
+  add_definitions(-DLLVM_EXTERNAL_CLANG_SOURCE_DIR)
+endif()
 
 # Configure the Version.inc file.
 configure_file(
