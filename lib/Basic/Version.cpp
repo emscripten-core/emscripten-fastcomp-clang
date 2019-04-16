@@ -135,7 +135,7 @@ std::string getClangToolFullVersion(StringRef ToolName) {
 
   // XXX EMSCRIPTEN: show our versions
   // If the clang source is separate from LLVM, don't try to find it.
-  // Just asume the version numbers match
+  // Just assume the version numbers match
   OS <<  " (emscripten "
 #ifdef LLVM_EXTERNAL_CLANG_SOURCE_DIR
   #include "../../emscripten-version.txt"
