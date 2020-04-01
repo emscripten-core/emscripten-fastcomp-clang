@@ -9,7 +9,8 @@ add_clang_subdirectory(clang-fuzzer)
 add_clang_subdirectory(clang-import-test)
 add_clang_subdirectory(clang-offload-bundler)
 
-add_clang_subdirectory(c-index-test)
+# Disable c-index-test to avoid its dependency on libXML
+# add_clang_subdirectory(c-index-test)
 
 add_clang_subdirectory(clang-rename)
 add_clang_subdirectory(clang-refactor)
